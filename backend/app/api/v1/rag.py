@@ -479,6 +479,7 @@ _DRIVE_MIME_BY_EXT = {
     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "doc": "application/msword",
     "txt": "text/plain",
+    "md": "text/markdown",
 }
 
 

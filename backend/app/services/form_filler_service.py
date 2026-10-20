@@ -7,6 +7,7 @@ from uuid import UUID
 from langchain_core.language_models import BaseChatModel
 
 from app.core.sync_db import _get_sync_factory, fetch_user_profile_text
+from app.services.browser_control_service import BrowserAutomationRetired
 from app.services.browser_control_service import (
     run_browser_task_with_captcha_retry as run_browser_task,
 )
@@ -207,6 +208,14 @@ IMPORTANT:
             return {"status": "failed", "message": "Browser outcome could not be verified"}
         status = "applied" if submit else "ready_for_review"
         return {"status": status, "message": result or "Form prepared for review"}
+    except BrowserAutomationRetired:
+        return {
+            "status": "requires_manual",
+            "message": (
+                "Server-side form filling has moved to the browser extension. "
+                "Open the job in the paired extension to fill it, then review and submit yourself."
+            ),
+        }
     except Exception as exc:
         logger.error("Form filling failed for %s: %s", job_url, exc)
         return {"status": "failed", "message": "Form filling failed"}

@@ -27,8 +27,8 @@ class JobSearchTrigger(BaseModel):
     search_query: str
     location: str
     max_results: int
-    titles: list[str] = Field(default_factory=list)
-    locations: list[str] = Field(default_factory=list)
+    titles: list[str] = Field(default_factory=list, max_length=5)
+    locations: list[str] = Field(default_factory=list, max_length=5)
     live_browser: bool = False
     work_mode: str = ""
     platforms: list[str] = Field(default_factory=list)

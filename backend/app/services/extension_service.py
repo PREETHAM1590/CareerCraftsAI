@@ -24,7 +24,7 @@ import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.applications.answer_resolver import resolve_fields
@@ -94,21 +94,35 @@ async def authenticate(db: AsyncSession, token: str) -> ExtensionDevice | None:
     if device is not None:
         from app.api.v1.deps import require_eligible_owner
 
-        # PostgreSQL NO KEY UPDATE: permits child FK checks, fences erasure.
+        # Persist activity first: read-only device routes never commit.
+        device.last_seen_at = datetime.now(UTC)
+        await db.commit()
+        # Fence erasure for the rest of the request. FOR KEY SHARE makes erasure's
+        # FOR UPDATE ... SKIP LOCKED pass this owner by, without blocking child FK
+        # checks, ordinary users-row updates or memory_access's NO KEY UPDATE.
         owner = (
             await db.execute(
                 select(User)
                 .where(User.id == device.user_id)
-                .with_for_update(key_share=True)
+                .with_for_update(read=True, key_share=True)
                 .execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()
         if owner is None:
             return None
         require_eligible_owner(owner)
-        device.last_seen_at = datetime.now(UTC)
-        await db.flush()
     return device
+
+
+async def revoke_device(db: AsyncSession, device: ExtensionDevice) -> None:
+    """Revoke and return the device's unacknowledged claims to the pending pool."""
+    device.revoked_at = datetime.now(UTC)
+    await db.execute(
+        update(ExtensionTask)
+        .where(ExtensionTask.device_id == device.id, ExtensionTask.status == "claimed")
+        .values(status="pending", device_id=None, claimed_at=None)
+    )
+    await db.commit()
 
 
 async def has_active_device(db: AsyncSession, user_id: uuid.UUID) -> bool:
@@ -147,6 +161,11 @@ async def claim_next_task(db: AsyncSession, device: ExtensionDevice) -> Extensio
     The persisted claim is the retry record: every retry re-signals the workflow.
     A lost signal or HTTP response therefore cannot strand the task.
     """
+    # Serialize this device's claims so a locked claimed row can't be skipped
+    # in favour of a second pending task.
+    await db.execute(
+        select(ExtensionDevice.id).where(ExtensionDevice.id == device.id).with_for_update()
+    )
     task = (
         await db.execute(
             select(ExtensionTask)
@@ -164,6 +183,9 @@ async def claim_next_task(db: AsyncSession, device: ExtensionDevice) -> Extensio
     ).scalar_one_or_none()
     if task is None:
         return None
+    # Status only moves past "claimed" on the first progress event, so a task still
+    # "claimed" here was never acknowledged; the route re-signals but skips the event.
+    task.redelivered = task.status == "claimed"
     task.status = "claimed"
     task.device_id = device.id
     task.claimed_at = task.claimed_at or datetime.now(UTC)

@@ -2,6 +2,7 @@ import logging
 
 from fastapi import Request
 from slowapi import Limiter
+from slowapi.middleware import SlowAPIASGIMiddleware, _ASGIMiddlewareResponder
 from slowapi.util import get_remote_address
 
 from app.core.config import settings
@@ -49,3 +50,23 @@ limiter = Limiter(
 # Stricter limits for sensitive endpoints (use as decorator):
 # @limiter.limit("5/minute")  — for API key submission
 # @limiter.limit("10/minute") — for auth endpoints
+
+
+class _StreamingSafeResponder(_ASGIMiddlewareResponder):
+    """slowapi 0.1.10 re-sends ``http.response.start`` before every body chunk,
+    which aborts streamed responses (SSE) on their second chunk. Send it once."""
+
+    async def send_wrapper(self, message) -> None:
+        if message["type"] == "http.response.body" and self.initial_message is None:
+            await self.send(message)
+            return
+        await super().send_wrapper(message)
+        if message["type"] == "http.response.body":
+            self.initial_message = None
+
+
+class StreamingSafeSlowAPIMiddleware(SlowAPIASGIMiddleware):
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        await _StreamingSafeResponder(self.app)(scope, receive, send)

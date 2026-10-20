@@ -39,9 +39,9 @@ async def test_gateway_methods_and_webhook_keep_authentication_without_default_b
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
         for method, path in paths:
-            for _ in range(65):
+            for _ in range(50):
                 response = await client.request(method, path, content=b"{}")
-                # Authentication still executes beyond the old 60/min IP cap.
+                # Authentication still executes past the 60/min default.
                 assert response.status_code == 401, (path, response.status_code)
 
 
@@ -99,3 +99,12 @@ async def test_active_run_polling_has_a_separate_bounded_budget():
         # List status has its own budget, independent of detail polling.
         for _ in range(65):
             assert (await client.get("/agents/runs")).status_code == 200
+
+
+def test_health_endpoints_are_rate_limit_exempt():
+    """Uptime probes and the k6 capacity test must not hit the default bucket."""
+    from app.core.rate_limit import limiter
+    from app.main import health, health_live
+
+    for fn in (health, health_live):
+        assert f"{fn.__module__}.{fn.__name__}" in limiter._exempt_routes

@@ -5,6 +5,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
+from slowapi.util import get_remote_address
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import get_current_user, get_db
@@ -259,12 +260,26 @@ async def revoke_connection(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+_MAX_WEBHOOK_BYTES = 1_000_000
+
+
 @router.post("/webhooks/nango", include_in_schema=False)
-@limiter.exempt
+@limiter.limit("300/minute", key_func=get_remote_address)
 async def nango_webhook(request: Request, db: AsyncSession = Depends(get_db)) -> dict[str, str]:
     if not settings.NANGO_ENABLED:
         raise HTTPException(status_code=503, detail="Integrations are currently disabled")
-    body = await request.body()
+    # Unauthenticated until the HMAC check below: cap size before buffering.
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > _MAX_WEBHOOK_BYTES:
+        raise HTTPException(status_code=413, detail="Webhook payload too large")
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > _MAX_WEBHOOK_BYTES:
+            raise HTTPException(status_code=413, detail="Webhook payload too large")
+        chunks.append(chunk)
+    body = b"".join(chunks)
     if not verify_nango_webhook(
         body=body,
         signature=request.headers.get("X-Nango-Hmac-Sha256"),

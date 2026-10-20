@@ -10,7 +10,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from slowapi.middleware import SlowAPIASGIMiddleware
 
 from app.api.v1 import (
     agent_memory,
@@ -39,7 +38,7 @@ from app.api.v1 import (
 from app.api.v1.copilot_chat import mount_copilot_chat
 from app.core.config import settings
 from app.core.llm_gateway import router as llm_gw
-from app.core.rate_limit import limiter
+from app.core.rate_limit import StreamingSafeSlowAPIMiddleware, limiter
 from app.core.request_middleware import ApiRequestMiddleware
 
 logger = logging.getLogger(__name__)
@@ -172,7 +171,7 @@ async def _generic_handler(request: Request, exc: Exception) -> JSONResponse:
 # an expired token from a dead network.
 # Execution order: CORS → ApiRequestMiddleware (request ID, security headers,
 # JWT) → route. One pure ASGI layer; see app/core/request_middleware.py.
-app.add_middleware(SlowAPIASGIMiddleware)
+app.add_middleware(StreamingSafeSlowAPIMiddleware)
 app.add_middleware(ApiRequestMiddleware)
 app.add_middleware(
     CORSMiddleware,

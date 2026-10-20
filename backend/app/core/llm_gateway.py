@@ -28,6 +28,7 @@ import time
 
 import redis.asyncio as aioredis
 from fastapi import APIRouter, HTTPException, Request, Response
+from slowapi.util import get_remote_address
 
 from app.core.config import settings
 from app.core.rate_limit import limiter
@@ -110,6 +111,14 @@ async def create_gateway_session(user_id: str, model_settings) -> dict:
         "gateway_url": _GATEWAY_BASE_URL,
         "model": model_settings.model_name,
     }
+
+
+def _gateway_key(request: Request) -> str:
+    """Rate-limit bucket per gateway session token (hashed), else per IP."""
+    auth = request.headers.get("authorization", "")
+    if auth.startswith("Bearer ") and auth[7:].strip():
+        return "gw:" + hashlib.sha256(auth[7:].strip().encode()).hexdigest()[:16]
+    return get_remote_address(request)
 
 
 async def _get_session(token: str) -> dict | None:
@@ -237,7 +246,7 @@ def _validated_messages(raw_messages: list[dict], *, allow_tools: bool) -> list:
 
 @router.post("/v1/{path:path}", operation_id="proxy_llm_request_post")
 @router.get("/v1/{path:path}", operation_id="proxy_llm_request_get")
-@limiter.exempt
+@limiter.limit("120/minute", key_func=_gateway_key)
 async def proxy_llm_request(path: str, request: Request) -> Response:
     """Proxy LLM requests — inject real API key at transport layer.
 

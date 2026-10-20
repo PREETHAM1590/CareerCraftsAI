@@ -105,7 +105,33 @@ async def test_semantic_preparation_is_ephemeral_and_persistence_has_no_provider
     monkeypatch.setattr(MemoryEmbedder, "embed", forbid)
     # Every summary/memory lookup is now resolved in memory; the manager cannot
     # fall back to network if a text was omitted from preparation.
-    for text in [prepared.episode.summary] + [m.content for m in prepared.memories]:
-        assert await prepared.embeddings.embed(text) == [0.0] * 1536
+    provider_hits = []
+    saved = []
+
+    class FakeManager:
+        redis = MagicMock()
+
+        def set_session(self, *args):
+            pass
+
+        async def save_episode(self, episode):
+            saved.append(await self.embedder.embed(episode.summary))
+
+        async def save_learning(self, learning):
+            pass
+
+        async def save_memory(self, memory):
+            saved.append(await self.embedder.embed(memory.content))
+
+        async def close(self):
+            pass
+
+    mgr = FakeManager()
+    mgr.embedder = prepared.embeddings
+    monkeypatch.setattr(bridge, "_manager", lambda embeddings: mgr)
+    monkeypatch.setattr(MemoryEmbedder, "embed", lambda *a: provider_hits.append(a))
+    await bridge.save_prepared(prepared)
+    assert saved and all(v == [0.0] * 1536 for v in saved)
+    assert not provider_hits
     with pytest.raises(KeyError):
         await prepared.embeddings.embed("not prepared")

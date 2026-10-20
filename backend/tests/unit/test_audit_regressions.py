@@ -152,11 +152,14 @@ async def test_memory_cache_erasure_is_owner_scoped_and_batched(monkeypatch):
     from app.services.memory_lifecycle import delete_memory_cache
 
     seen = []
+    yielded = []
 
     async def scan_iter(*, match, count):
         seen.append(match)
         for i in range(205):
-            yield match.replace("*", str(i))
+            key = match.replace("*", str(i))
+            yielded.append(key)
+            yield key
 
     redis = MagicMock()
     redis.scan_iter = scan_iter
@@ -166,6 +169,8 @@ async def test_memory_cache_erasure_is_owner_scoped_and_batched(monkeypatch):
     assert seen == ["session:owner:*", "memory-emb:owner:*"]
     assert len(redis.delete.await_args_list) == 6
     assert all(len(call.args) <= 100 for call in redis.delete.await_args_list)
+    deleted = [k for call in redis.delete.await_args_list for k in call.args]
+    assert deleted == yielded
 
 
 def test_memory_hints_are_bounded():

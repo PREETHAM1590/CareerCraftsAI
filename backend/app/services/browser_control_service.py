@@ -67,6 +67,10 @@ async def run_browser_task_with_captcha_retry(
     return result
 
 
+class BrowserAutomationRetired(RuntimeError):
+    """Server-side browser automation was replaced by the paired extension."""
+
+
 async def run_browser_task(
     llm: BaseChatModel,
     task: str,
@@ -76,7 +80,7 @@ async def run_browser_task(
     run_id: str | None = None,
 ) -> str:
     """Server browser execution is retired; never bypass the paired extension."""
-    raise RuntimeError("Use a public job connector or the paired browser extension")
+    raise BrowserAutomationRetired("Use a public job connector or the paired browser extension")
 
 
 async def apply_to_job(

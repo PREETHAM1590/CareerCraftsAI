@@ -261,7 +261,9 @@ def test_token_tracking_callback_accumulates():
     # Reset accumulator first
     get_and_reset_tokens()
 
-    cb.on_llm_end(result)
+    with patch("app.services.token_budget_service.record_tokens_sync") as record:
+        cb.on_llm_end(result)
+    record.assert_called_once_with("usr_test", 150)
 
     total = get_and_reset_tokens()
     assert total == 150

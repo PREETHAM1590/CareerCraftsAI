@@ -4,16 +4,15 @@ import asyncio
 import hashlib
 import json
 import logging
-import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 logger = logging.getLogger(__name__)
-_ADAPTER_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="job-source")
-# Searches can run on different event loops. Keep capacity until the actual
-# synchronous worker finishes, even when its caller times out or closes its loop.
-_ADAPTER_SLOTS = threading.BoundedSemaphore(4)
+# Process-wide bound on live adapter threads. A timed-out synchronous worker keeps
+# its thread until it finishes, so this (not the caller's timeout) caps the threads.
+# Sized for several concurrent users: JobSpy alone holds a thread for ~40-75s.
+_ADAPTER_EXECUTOR = ThreadPoolExecutor(max_workers=16, thread_name_prefix="job-source")
 
 
 # Per-platform budget: no single source may stall a run.
@@ -270,19 +269,11 @@ async def search_all_platforms(
         timeout = _ADAPTER_TIMEOUT_SEC.get(name, PLATFORM_TIMEOUT_SEC)
 
         async def compute():
-            # Waiting for process-wide capacity uses only the overall search
-            # budget; the source's own timeout starts once a slot is available.
-            while not _ADAPTER_SLOTS.acquire(blocking=False):
-                await asyncio.sleep(0.01)
-            slots = _ADAPTER_SLOTS
-            try:
-                worker = _ADAPTER_EXECUTOR.submit(adapter, q, location, fetch_n)
-            except BaseException:
-                slots.release()
-                raise
-            worker.add_done_callback(lambda _future: slots.release())
+            # Queue time in the bounded executor counts toward the source timeout.
             raw = await asyncio.wait_for(
-                asyncio.wrap_future(worker),
+                asyncio.get_running_loop().run_in_executor(
+                    _ADAPTER_EXECUTOR, adapter, q, location, fetch_n
+                ),
                 timeout=timeout,
             )
             jobs = [_normalize(job, name) for job in (raw or [])]
@@ -298,7 +289,7 @@ async def search_all_platforms(
                 # Public demo input never populates the shared cache.
                 return (await compute())[0], False
             jobs, cached = await search_cache.get_or_compute(
-                "live", key, search_cache.LIVE_TTL, compute, wait_s=timeout
+                "live", key, search_cache.LIVE_TTL, compute, wait_s=max(timeout, timeout_s)
             )
             return (json.loads(cached), True) if cached is not None else (jobs, False)
         except Exception as exc:

@@ -226,6 +226,7 @@ class Settings(BaseSettings):
     # ── RAG configuration ──────────────────────────────────────────────
     RAG_CHUNK_SIZE: int = Field(default=500, ge=50, le=10000)
     RAG_CHUNK_OVERLAP: int = Field(default=50, ge=0)
+    # Default k for retrieve() callers that pass no k; agents set their own.
     RAG_TOP_K: int = Field(default=5, ge=1, le=50)
     EMBEDDING_PROVIDER: str = ""
     # Used only when EMBEDDING_PROVIDER stands in for a chat provider that has

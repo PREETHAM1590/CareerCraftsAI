@@ -432,7 +432,7 @@ async def test_gateway_serializes_normalized_provider_tool_calls(monkeypatch):
             }
         ).encode()
     )
-    response = await gw.proxy_llm_request("chat/completions", request)
+    response = await gw.proxy_llm_request.__wrapped__("chat/completions", request)
     choice = json.loads(response.body)["choices"][0]
     assert choice["finish_reason"] == "tool_calls"
     assert json.loads(choice["message"]["tool_calls"][0]["function"]["arguments"]) == {

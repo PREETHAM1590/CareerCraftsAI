@@ -744,7 +744,7 @@ async def search_jobs(
     titles = [t.strip() for t in (payload.titles or []) if t.strip()]
     structured_locations = [loc.strip() for loc in (payload.locations or []) if loc.strip()]
     if titles:
-        search_query = " OR ".join(titles)
+        search_query = " ".join(titles)
     if structured_locations:
         location = structured_locations[0]
     # Leave unset so job_search_service uses DEFAULT_PLATFORMS
