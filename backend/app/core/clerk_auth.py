@@ -15,7 +15,11 @@ collecting the test suite).
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import logging
+import time
+from collections import OrderedDict
 from typing import Any
 from urllib.parse import quote
 
@@ -105,6 +109,38 @@ def verify_token(token: str) -> dict[str, Any]:
 
 
 verify_auth_jwt = verify_token
+
+
+# ── Verified-token cache ─────────────────────────────────────────
+# A browser reuses one Clerk session token (~60s lifetime) for every request
+# it makes, and the app polls every 5-30s, so most requests carry a token
+# this process already verified. Re-checking its RS256 signature each time is
+# pure CPU. Only successful verifications are cached, keyed by a hash of the
+# whole token, and an entry is never served past the token's own `exp` (no
+# leeway), so the cache can only ever reject sooner than verify_token would.
+_TOKEN_CACHE_MAX = 10_000
+_token_cache: OrderedDict[str, tuple[float, dict[str, Any]]] = OrderedDict()
+
+
+async def verify_token_cached(token: str) -> dict[str, Any]:
+    """verify_token, skipping the signature check for a token seen recently."""
+    key = hashlib.sha256(token.encode()).hexdigest()
+    hit = _token_cache.get(key)
+    if hit is not None:
+        if time.time() < hit[0]:
+            _token_cache.move_to_end(key)
+            return hit[1]
+        del _token_cache[key]
+    # verify_token can block on a synchronous JWKS HTTP fetch on cache miss
+    # (jwt.PyJWKClient uses urllib internally) — run it off the event loop
+    # so one slow/cold JWKS fetch can't stall every other in-flight request.
+    payload = await asyncio.to_thread(verify_token, token)
+    expires = payload.get("exp")
+    if isinstance(expires, (int, float)):
+        _token_cache[key] = (float(expires), payload)
+        if len(_token_cache) > _TOKEN_CACHE_MAX:
+            _token_cache.popitem(last=False)
+    return payload
 
 
 async def get_verified_primary_email(

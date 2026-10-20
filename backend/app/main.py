@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import sys
-import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -38,10 +36,10 @@ from app.api.v1 import (
     users,
 )
 from app.api.v1.copilot_chat import mount_copilot_chat
-from app.core.clerk_auth import verify_token
 from app.core.config import settings
 from app.core.llm_gateway import router as llm_gw
 from app.core.rate_limit import limiter
+from app.core.request_middleware import ApiRequestMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -88,99 +86,6 @@ _cors_raw = settings.CORS_ORIGINS or settings.ALLOWED_ORIGINS or settings.FRONTE
 _allowed_origins = _build_cors_origins(_cors_raw, settings.APP_ENV)
 
 
-# ── Request ID middleware (uuid4) ────────────────────────────────
-async def _request_id_middleware(request: Request, call_next):
-    rid = request.headers.get("X-Request-ID") or str(uuid.uuid4())
-    request.state.request_id = rid
-    response = await call_next(request)
-    response.headers["X-Request-ID"] = rid
-    return response
-
-
-# ── Security headers (defence-in-depth; no CSP-sensitive inline scripts here) ──
-_SECURITY_HEADERS = {
-    "X-Content-Type-Options": "nosniff",
-    "X-Frame-Options": "DENY",
-    "Referrer-Policy": "strict-origin-when-cross-origin",
-}
-_API_CSP = "default-src 'none'; frame-ancestors 'none'"
-# Swagger UI / ReDoc (non-production only) load scripts and styles from a CDN.
-_DOCS_PATHS = ("/docs", "/redoc")
-
-
-async def _security_headers_middleware(request: Request, call_next):
-    response = await call_next(request)
-    response.headers.update(_SECURITY_HEADERS)
-    if not request.url.path.startswith(_DOCS_PATHS):
-        response.headers["Content-Security-Policy"] = _API_CSP
-    if request.url.scheme == "https":
-        response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
-    return response
-
-
-# ── JWT middleware (skip public paths) ───────────────────────────
-_PUBLIC_PATHS = {
-    "/health",
-    "/health/live",
-    "/docs",
-    "/redoc",
-    "/openapi.json",
-    "/api/v1/integrations/webhooks/nango",
-    # Public marketing-site demo: intentionally unauthenticated, gated
-    # instead by a per-IP lifetime search cap (see app/api/v1/demo.py).
-    "/api/v1/demo/job-search",
-    "/api/v1/demo/job-search/quota",
-}
-
-
-async def _jwt_middleware(request: Request, call_next):
-    path = request.url.path
-    if path in _PUBLIC_PATHS:
-        return await call_next(request)
-    # The browser extension authenticates with its own device token, checked
-    # by the extension router's get_device dependency.
-    if path.startswith("/api/v1/extension/device/"):
-        return await call_next(request)
-    # The open-tracking pixel is fetched by the recipient's mail app. Its
-    # token is unguessable and it only ever records "opened".
-    if path.startswith("/api/v1/outreach/open/"):
-        return await call_next(request)
-    # Internal LLM calls use short-lived Redis sessions, validated by the
-    # gateway itself. They are not Clerk browser session JWTs.
-    if path.startswith("/llm-gateway/v1/"):
-        return await call_next(request)
-    if request.method == "OPTIONS":
-        return await call_next(request)
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
-        return JSONResponse(
-            status_code=401,
-            content={"detail": "Missing or invalid Authorization header"},
-        )
-    try:
-        token = auth_header.split(" ", 1)[1]
-        # verify_token can block on a synchronous JWKS HTTP fetch on cache miss
-        # (jwt.PyJWKClient uses urllib internally) — run it off the event loop
-        # so one slow/cold JWKS fetch can't stall every other in-flight request.
-        payload = await asyncio.to_thread(verify_token, token)
-        request.state.user = payload
-        # Graph nodes (e.g. the AG-UI chat copilot) have no route dependency to
-        # receive the user through — they read this instead.
-        from app.core.request_context import reset_current_user_id, set_current_user_id
-
-        identity_token = set_current_user_id(str(payload.get("sub") or "") or None)
-    except Exception:
-        return JSONResponse(
-            status_code=401,
-            content={"detail": "Invalid or expired token"},
-        )
-    try:
-        return await call_next(request)
-    finally:
-        reset_current_user_id(identity_token)
-
-
-# ── Lifespan ─────────────────────────────────────────────────────
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
     _check_env_vars()
@@ -260,14 +165,13 @@ async def _generic_handler(request: Request, exc: Exception) -> JSONResponse:
 
 
 # Starlette builds the stack so the LAST-registered middleware is OUTERMOST.
-# CORS must therefore be registered last: a 401 returned by _jwt_middleware has
+# CORS must therefore be registered last: a 401 returned by ApiRequestMiddleware has
 # to travel back out through CORSMiddleware to pick up Access-Control-Allow-Origin,
 # otherwise the browser reports an opaque CORS failure and the frontend can't tell
 # an expired token from a dead network.
-# Execution order: CORS → security headers → request ID → JWT → route.
-app.middleware("http")(_jwt_middleware)
-app.middleware("http")(_request_id_middleware)
-app.middleware("http")(_security_headers_middleware)
+# Execution order: CORS → ApiRequestMiddleware (request ID, security headers,
+# JWT) → route. One pure ASGI layer; see app/core/request_middleware.py.
+app.add_middleware(ApiRequestMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,

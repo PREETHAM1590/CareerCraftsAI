@@ -12,7 +12,7 @@ async def test_download_route_returns_the_extension_zip(monkeypatch):
     from app.main import app
     from app.models.db import User
 
-    monkeypatch.setattr("app.main.verify_token", lambda token: {"sub": "user-1"})
+    monkeypatch.setattr("app.core.clerk_auth.verify_token", lambda token: {"sub": "user-1"})
     app.dependency_overrides[get_current_user] = lambda: User(email="a@b.com")
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:

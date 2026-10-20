@@ -24,9 +24,9 @@ def transport(monkeypatch):
     monkeypatch.setattr(gateway, "decrypt_api_key", lambda *args: "private-key")
     app = FastAPI()
     app.include_router(gateway.router)
-    from app.main import _jwt_middleware
+    from app.core.request_middleware import ApiRequestMiddleware
 
-    app.middleware("http")(_jwt_middleware)
+    app.add_middleware(ApiRequestMiddleware)
     return httpx.ASGITransport(app=app)
 
 
