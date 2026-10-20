@@ -146,11 +146,9 @@ services:
     cpus: 1.0
     restart: unless-stopped
     healthcheck:
-      # pg_isready only needs the server to accept the connection and respond
-      # (even with an auth challenge) to report healthy -- it doesn't need a
-      # real role, so no POSTGRES_USER (postgres.env, gitignored) is needed here.
-      # Without -U, pg_isready runs as OS user root and Postgres logs
-      # FATAL: role "root" does not exist on every probe.
+      # pg_isready reports healthy for any role, but without -U it connects as
+      # OS user root and Postgres logs FATAL: role "root" does not exist on
+      # every probe. POSTGRES_USER comes from the env_file above.
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 18132 -U \"$$POSTGRES_USER\" -d postgres"]
       interval: 5s
       timeout: 3s
