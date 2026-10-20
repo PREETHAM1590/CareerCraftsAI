@@ -970,7 +970,7 @@
    },
    "targets": [
     {
-     "expr": "sum by (service) (count_over_time({instance=\"infra-vm\",service=~\".+\"} | level=~\"error|critical|fatal\" [5m]))",
+     "expr": "sum by (service) (count_over_time({instance=\"infra-vm\",service=~\".+\"} | level=~\"error|critical|fatal\" !~ \"caller=scheduler_processor[.]go:[0-9]+ .*code = Canceled\" [5m]))",
      "legendFormat": "{{service}}",
      "refId": "A",
      "datasource": {
@@ -1006,7 +1006,7 @@
       "type": "loki",
       "uid": "loki"
      },
-     "expr": "{instance=\"infra-vm\",service=~\".+\"} | level=~\"error|critical|fatal\""
+     "expr": "{instance=\"infra-vm\",service=~\".+\"} | level=~\"error|critical|fatal\" !~ \"caller=scheduler_processor[.]go:[0-9]+ .*code = Canceled\""
     }
    ]
   }
