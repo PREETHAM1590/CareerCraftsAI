@@ -1102,6 +1102,24 @@
     "policy": "public API; stop on denial"
   },
   {
+    "id": "reed:uk",
+    "family": "reed",
+    "tenant": "",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "Reed official job API (UK); needs REED_API_KEY, inert without it",
+    "policy": "official API; stop on denial"
+  },
+  {
+    "id": "usajobs:us",
+    "family": "usajobs",
+    "tenant": "",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "USAJobs official search API (US federal); needs USAJOBS_API_KEY and USAJOBS_USER_AGENT, inert without them",
+    "policy": "official API; registered contact email in User-Agent; stop on denial"
+  },
+  {
     "id": "careerjet:in",
     "family": "careerjet",
     "tenant": "en_IN",

@@ -125,6 +125,11 @@ class Settings(BaseSettings):
     ]
     ADZUNA_APP_ID: str | None = None
     ADZUNA_APP_KEY: str | None = None
+    # Reed (UK) API key, sent as the basic-auth username. Free at reed.co.uk/developers.
+    REED_API_KEY: str | None = None
+    # USAJobs (US federal) key and the registered contact email sent as User-Agent.
+    USAJOBS_API_KEY: str | None = None
+    USAJOBS_USER_AGENT: str | None = None
     WORKABLE_API_TOKENS: dict[str, str] = {}
     JOB_SOURCE_OVERRIDES: list[dict] = []
 
@@ -133,8 +138,6 @@ class Settings(BaseSettings):
     BRAVE_API_KEY: str | None = None
     SERPAPI_API_KEY: str | None = None
     BING_SEARCH_API_KEY: str | None = None
-    GOOGLE_CSE_API_KEY: str | None = None
-    GOOGLE_CSE_ID: str | None = None
     DUCKDUCKGO_ENABLED: bool = True
     MOJEEK_ENABLED: bool = True
 
