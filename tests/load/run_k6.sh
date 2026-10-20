@@ -17,7 +17,8 @@ stamp=$(date +%Y%m%d-%H%M)
 
 export K6_PROMETHEUS_RW_SERVER_URL=https://grafana.careercraftsai.me/ingest/prometheus
 export K6_PROMETHEUS_RW_USERNAME=k6
-export K6_PROMETHEUS_RW_PASSWORD=${K6_INGEST_PASSWORD:?set K6_INGEST_PASSWORD}
+: "${K6_INGEST_PASSWORD:?set K6_INGEST_PASSWORD (see header)}"
+export K6_PROMETHEUS_RW_PASSWORD="$K6_INGEST_PASSWORD"
 export K6_PROMETHEUS_RW_TREND_STATS="p(50),p(90),p(95),p(99),min,max,avg"
 
 k6 run -o experimental-prometheus-rw \
