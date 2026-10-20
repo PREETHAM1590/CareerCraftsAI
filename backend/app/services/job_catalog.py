@@ -246,6 +246,10 @@ async def refresh_catalog() -> dict:
                 return 0, source.id + ": unavailable"
 
     results = await asyncio.gather(*(one(source) for source in sources()))
+    # New jobs are searchable now, not when cached searches expire.
+    from app.services import search_cache
+
+    await search_cache.bump_catalog_version()
     return {
         "sources": len(results),
         "healthy": sum(w is None for _, w in results),
@@ -347,6 +351,74 @@ async def search_catalog(query: dict, selected_sources=None, live_platforms=()):
     )
     if not public and not live_ids:
         return [], ["No public source matches the requested filters"]
+    source_ids = sorted({s.id for s in public} | set(live_ids))
+    days = query.get("posted_within_days", 30)
+
+    def relevant_of(rows):
+        return [job for job in dedupe(rows, days) if matches_query(job, query)]
+
+    # The result is the same for every member who runs this query, so it is
+    # cached as the ordered job ids; a hit re-reads just those rows by primary
+    # key instead of scanning the catalog (see app/services/search_cache.py).
+    from app.services import search_cache
+
+    key = (
+        f"{search_cache.PREFIX}:catalog:"
+        + search_cache.query_hash(
+            {
+                "terms": search_cache.terms_of(query),
+                "places": search_cache.places_of(query),
+                "remote": str(query.get("remote") or "any").lower(),
+                "days": days,
+                "need": int(query.get("max_results") or 10),
+                "sources": source_ids,
+            }
+        )
+        + f":{await search_cache.catalog_version()}"
+    )
+
+    async def compute():
+        relevant, warnings = await _search_catalog_db(query, public, live_ids, relevant_of)
+        # A source that failed during gap fill should be retried by the next
+        # search, not hidden behind a thin cached result.
+        ids = [job["job_id"] for job in relevant if job.get("job_id")]
+        payload = None if warnings else json.dumps({"ids": ids, "warnings": []})
+        return (relevant, warnings), payload
+
+    value, cached = await search_cache.get_or_compute(
+        "catalog", key, search_cache.CATALOG_TTL, compute, wait_s=20
+    )
+    if cached is None:
+        return value
+    hit = json.loads(cached)
+    return relevant_of(await _catalog_rows_by_id(hit["ids"], source_ids)), hit["warnings"]
+
+
+async def _catalog_rows_by_id(ids: list[str], source_ids: list[str]) -> list[dict]:
+    """The cached search's rows, in the cached order, shaped like the search query's."""
+    if not ids:
+        return []
+    async with AsyncSessionLocal() as db:
+        rows = (
+            (
+                await db.execute(
+                    text("""SELECT c.data || jsonb_build_object('occurrences',
+            jsonb_agg(jsonb_build_object('source_id',o.source_id,'url',c.url)),
+            'last_seen_at',c.last_seen_at) FROM job_catalog c
+            JOIN job_source_occurrences o ON o.job_id=c.job_id
+            WHERE c.job_id=ANY(:ids) AND o.source_id=ANY(:sources)
+            GROUP BY c.job_id"""),
+                    {"ids": ids, "sources": source_ids},
+                )
+            )
+            .scalars()
+            .all()
+        )
+    order = {job_id: i for i, job_id in enumerate(ids)}
+    return sorted(rows, key=lambda row: order.get(row.get("job_id"), len(order)))
+
+
+async def _search_catalog_db(query: dict, public, live_ids, relevant_of):
     terms = (
         (" ".join(query.get("titles") or []) or query.get("search_query") or "software engineer")
         .lower()
@@ -354,9 +426,6 @@ async def search_catalog(query: dict, selected_sources=None, live_platforms=()):
     )
     days = query.get("posted_within_days", 30)
     need = int(query.get("max_results") or 10)
-
-    def relevant_of(rows):
-        return [job for job in dedupe(rows, days) if matches_query(job, query)]
 
     async with AsyncSessionLocal() as db:
         rows = (
