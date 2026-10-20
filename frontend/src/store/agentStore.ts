@@ -38,6 +38,9 @@ interface AgentStore {
   setOwner: (owner: string | null) => void;
   runs: Record<string, AgentRun>;
   activeRunId: string | null;
+  // True while the active run's SSE stream is open; polling backs off then.
+  streamLive: boolean;
+  setStreamLive: (live: boolean) => void;
 
   setActiveRun: (runId: string | null) => void;
   initRun: (runId: string) => void;
@@ -67,6 +70,8 @@ export const useAgentStore = create<AgentStore>((set) => ({
   owner: null,
   runs: {},
   activeRunId: null,
+  streamLive: false,
+  setStreamLive: (streamLive) => set({ streamLive }),
   setOwner: (owner) => {
     activeOwner = owner;
     if (typeof window !== "undefined") localStorage.removeItem("cc_active_run_id");
@@ -219,3 +224,6 @@ export const useAgentStore = create<AgentStore>((set) => ({
       return { runs: rest };
     }),
 }));
+
+/** Poll interval: `fast` when no SSE stream is open (fallback), else the slow safety-net `slow`. */
+export const usePollMs = (fast: number, slow: number) => useAgentStore((s) => (s.streamLive ? slow : fast));

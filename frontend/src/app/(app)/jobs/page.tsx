@@ -36,7 +36,7 @@ import { LocationInput } from "@/components/ui/LocationInput";
 import { wakeExtension } from "@/lib/extension-bridge";
 import { cn } from "@/lib/utils";
 import { AgentStatusStream } from "@/components/agents/AgentStatusStream";
-import { useAgentStore } from "@/store/agentStore";
+import { useAgentStore, usePollMs } from "@/store/agentStore";
 import {
   Bezel,
   Chip,
@@ -1258,6 +1258,7 @@ export default function JobsPage() {
   const activeRunStatus = useAgentStore((s) =>
     activeRunId ? s.runs[activeRunId]?.status : undefined,
   );
+  const outcomePollMs = usePollMs(5000, 20_000);
   const { data: searchOutcome } = useQuery<{
     status: string;
     output?: { total_found?: number; saved_count?: number; warnings?: string[]; error?: string;
@@ -1266,7 +1267,7 @@ export default function JobsPage() {
     queryKey: ["job-search-outcome", activeRunId],
     enabled: !!activeRunId,
     queryFn: async () => (await apiClient.get(`/agents/runs/${activeRunId}`)).data,
-    refetchInterval: query => ["completed", "failed", "cancelled", "expired"].includes(query.state.data?.status ?? "") ? false : 5000,
+    refetchInterval: query => ["completed", "failed", "cancelled", "expired"].includes(query.state.data?.status ?? "") ? false : outcomePollMs,
   });
   useEffect(() => {
     if (!activeRunId || !searchOutcome) return;

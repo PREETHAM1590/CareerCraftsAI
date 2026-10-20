@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Bell, Search, CheckCircle, Briefcase, Mail, Menu, X } from "lucide-react";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
+import { usePollMs } from "@/store/agentStore";
 import { apiClient } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -58,10 +59,11 @@ export function AppTopbar({ onMenuClick }: { onMenuClick?: () => void }) {
   const notifRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
 
+  const notifPollMs = usePollMs(30_000, 120_000);
   const { data } = useQuery<NotificationListResponse>({
     queryKey: ["notifications"],
     queryFn: async () => (await apiClient.get("/notifications")).data,
-    refetchInterval: 30_000,
+    refetchInterval: notifPollMs,
   });
   const notifications = data?.notifications ?? [];
   const unreadCount = data?.unread_count ?? 0;
