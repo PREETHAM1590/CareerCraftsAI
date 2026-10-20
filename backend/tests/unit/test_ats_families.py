@@ -31,24 +31,44 @@ WD = "nvidia.wd5.myworkdayjobs.com|nvidia|NVIDIAExternalCareerSite"
 
 @pytest.mark.asyncio
 async def test_workday_posts_listing_and_pages_by_offset(monkeypatch):
-    calls = _capture(monkeypatch, {
-        "total": 45,
-        "jobPostings": [
-            {"title": f"Engineer {i}", "externalPath": f"/job/Santa-Clara/Eng-{i}_R{i}",
-             "locationsText": "US, CA, Santa Clara", "postedOn": "Posted 3 Days Ago"}
-            for i in range(20)
-        ],
-    })
+    calls = _capture(
+        monkeypatch,
+        {
+            "total": 45,
+            "jobPostings": [
+                {
+                    "title": f"Engineer {i}",
+                    "externalPath": f"/job/Santa-Clara/Eng-{i}_R{i}",
+                    "locationsText": "US, CA, Santa Clara",
+                    "postedOn": "Posted 3 Days Ago",
+                }
+                for i in range(20)
+            ],
+        },
+    )
     source = Source(id="workday:nvidia", family="workday", tenant=WD)
     page = await connectors.fetch_page(source, query="python")
-    assert calls[0]["url"] == "https://nvidia.wd5.myworkdayjobs.com/wday/cxs/nvidia/NVIDIAExternalCareerSite/jobs"
-    assert calls[0]["json_body"] == {"appliedFacets": {}, "limit": 20, "offset": 0, "searchText": "python"}
+    assert (
+        calls[0]["url"]
+        == "https://nvidia.wd5.myworkdayjobs.com/wday/cxs/nvidia/NVIDIAExternalCareerSite/jobs"
+    )
+    assert calls[0]["json_body"] == {
+        "appliedFacets": {},
+        "limit": 20,
+        "offset": 0,
+        "searchText": "python",
+    }
     assert page.next_cursor == "20"
     job = page.jobs[0]
-    assert job["url"] == "https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite/job/Santa-Clara/Eng-0_R0"
+    assert (
+        job["url"]
+        == "https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite/job/Santa-Clara/Eng-0_R0"
+    )
     assert job["company"] == "nvidia" and job["location"] == "US, CA, Santa Clara"
     assert job["description"] == ""
-    want = (datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=3)).isoformat()
+    want = (
+        datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=3)
+    ).isoformat()
     assert job["posted_at"] == want
     # last page: 45 total, offset 40 -> no further cursor
     last = await connectors.fetch_page(source, cursor="40")
@@ -88,7 +108,9 @@ async def test_personio_maps_positions_and_falls_back_to_english_feed(monkeypatc
     calls = _capture(monkeypatch, text=PERSONIO)
     page = await connectors.fetch_page(Source(id="personio:acme", family="personio", tenant="acme"))
     assert calls[0]["url"] == "https://acme.jobs.personio.com/xml"
-    assert calls[1]["url"] == "https://acme.jobs.personio.com/xml?language=en"  # position 13 had no body
+    assert (
+        calls[1]["url"] == "https://acme.jobs.personio.com/xml?language=en"
+    )  # position 13 had no body
     job = page.jobs[0]
     assert job["url"] == "https://acme.jobs.personio.com/job/12"
     assert job["title"] == "Backend Engineer" and job["location"] == "Berlin"
@@ -99,11 +121,20 @@ async def test_personio_maps_positions_and_falls_back_to_english_feed(monkeypatc
 
 @pytest.mark.asyncio
 async def test_bamboohr_lists_without_detail(monkeypatch):
-    calls = _capture(monkeypatch, {"result": [
-        {"id": "52", "jobOpeningName": "Designer", "isRemote": False,
-         "location": {"city": "Yerevan", "state": None}},
-        {"id": "53", "jobOpeningName": "Support", "locationType": "1"},
-    ]})
+    calls = _capture(
+        monkeypatch,
+        {
+            "result": [
+                {
+                    "id": "52",
+                    "jobOpeningName": "Designer",
+                    "isRemote": False,
+                    "location": {"city": "Yerevan", "state": None},
+                },
+                {"id": "53", "jobOpeningName": "Support", "locationType": "1"},
+            ]
+        },
+    )
     page = await connectors.fetch_page(Source(id="b", family="bamboohr", tenant="acme"))
     assert calls[0]["url"] == "https://acme.bamboohr.com/careers/list"
     assert page.jobs[0]["url"] == "https://acme.bamboohr.com/careers/52"
@@ -112,11 +143,18 @@ async def test_bamboohr_lists_without_detail(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_breezy_maps_list(monkeypatch):
-    calls = _capture(monkeypatch, [{
-        "id": "1", "name": "Engineer", "url": "https://acme.breezy.hr/p/1-engineer",
-        "location": {"city": "Yerevan", "country": {"name": "Armenia"}, "is_remote": False},
-        "published_date": "2025-01-14T00:20:37.073Z",
-    }])
+    calls = _capture(
+        monkeypatch,
+        [
+            {
+                "id": "1",
+                "name": "Engineer",
+                "url": "https://acme.breezy.hr/p/1-engineer",
+                "location": {"city": "Yerevan", "country": {"name": "Armenia"}, "is_remote": False},
+                "published_date": "2025-01-14T00:20:37.073Z",
+            }
+        ],
+    )
     page = await connectors.fetch_page(Source(id="b", family="breezy", tenant="acme"))
     assert calls[0]["url"] == "https://acme.breezy.hr/json"
     job = page.jobs[0]
@@ -125,11 +163,22 @@ async def test_breezy_maps_list(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_pinpoint_joins_description_sections(monkeypatch):
-    calls = _capture(monkeypatch, {"data": [{
-        "id": "9", "title": "Analyst", "url": "https://acme.pinpointhq.com/en/postings/9",
-        "description": "<p>About</p>", "key_responsibilities": "<p>Do</p>",
-        "workplace_type": "remote", "location": {"city": "Leeds", "province": "UK"},
-    }]})
+    calls = _capture(
+        monkeypatch,
+        {
+            "data": [
+                {
+                    "id": "9",
+                    "title": "Analyst",
+                    "url": "https://acme.pinpointhq.com/en/postings/9",
+                    "description": "<p>About</p>",
+                    "key_responsibilities": "<p>Do</p>",
+                    "workplace_type": "remote",
+                    "location": {"city": "Leeds", "province": "UK"},
+                }
+            ]
+        },
+    )
     page = await connectors.fetch_page(Source(id="p", family="pinpoint", tenant="acme"))
     assert calls[0]["url"] == "https://acme.pinpointhq.com/postings.json"
     job = page.jobs[0]
@@ -139,10 +188,17 @@ async def test_pinpoint_joins_description_sections(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_rippling_maps_board_jobs(monkeypatch):
-    calls = _capture(monkeypatch, [
-        {"uuid": "U1", "name": "SRE", "url": "https://ats.rippling.com/acme/jobs/U1",
-         "workLocation": {"label": "London, United Kingdom"}},
-    ])
+    calls = _capture(
+        monkeypatch,
+        [
+            {
+                "uuid": "U1",
+                "name": "SRE",
+                "url": "https://ats.rippling.com/acme/jobs/U1",
+                "workLocation": {"label": "London, United Kingdom"},
+            },
+        ],
+    )
     page = await connectors.fetch_page(Source(id="r", family="rippling", tenant="acme"))
     assert calls[0]["url"] == "https://ats.rippling.com/api/v1/board/acme/jobs"
     assert page.jobs[0]["location"] == "London, United Kingdom"
@@ -159,7 +215,9 @@ TT = """<?xml version="1.0"?><rss version="2.0" xmlns:tt="https://teamtailor.com
 @pytest.mark.asyncio
 async def test_teamtailor_rss_with_locations_and_paging(monkeypatch):
     calls = _capture(monkeypatch, text=TT)
-    page = await connectors.fetch_page(Source(id="t", family="teamtailor", tenant="acme"), cursor="2")
+    page = await connectors.fetch_page(
+        Source(id="t", family="teamtailor", tenant="acme"), cursor="2"
+    )
     assert calls[0]["url"] == "https://acme.teamtailor.com/jobs.rss?offset=100&per_page=100"
     job = page.jobs[0]
     assert job["title"] == "QA Lead" and job["location"] == "Kaunas" and job["remote"] == "remote"
@@ -169,15 +227,32 @@ async def test_teamtailor_rss_with_locations_and_paging(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_jobscore_feed(monkeypatch):
-    calls = _capture(monkeypatch, {"company_name": "Acme Inc", "jobs": [{
-        "id": "j1", "title": "Accountant", "detail_url": "https://careers.jobscore.com/careers/acme/jobs/j1",
-        "city": "Austin", "state": "TX", "remote": "Yes", "description": "<p>Count.</p>",
-        "opened_date": "2026-10-03",
-    }]})
+    calls = _capture(
+        monkeypatch,
+        {
+            "company_name": "Acme Inc",
+            "jobs": [
+                {
+                    "id": "j1",
+                    "title": "Accountant",
+                    "detail_url": "https://careers.jobscore.com/careers/acme/jobs/j1",
+                    "city": "Austin",
+                    "state": "TX",
+                    "remote": "Yes",
+                    "description": "<p>Count.</p>",
+                    "opened_date": "2026-10-03",
+                }
+            ],
+        },
+    )
     page = await connectors.fetch_page(Source(id="j", family="jobscore", tenant="acme"))
     assert calls[0]["url"].startswith("https://careers.jobscore.com/jobs/acme/feed.json")
     job = page.jobs[0]
-    assert job["company"] == "Acme Inc" and job["location"] == "Austin, TX" and job["remote"] == "remote"
+    assert (
+        job["company"] == "Acme Inc"
+        and job["location"] == "Austin, TX"
+        and job["remote"] == "remote"
+    )
 
 
 TRAK = """<?xml version="1.0"?><rss version="2.0" xmlns:rb="https://recruiterbox.com/rss/job/"><channel>
@@ -198,11 +273,23 @@ async def test_trakstar_feed_upgrades_http_links(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_hibob_sends_referer_and_unescapes_body(monkeypatch):
-    calls = _capture(monkeypatch, {"jobAdDetails": [{
-        "id": "abc", "title": "PM", "site": "Berlin", "country": "Germany",
-        "description": "&lt;p&gt;Lead.&lt;/p&gt;", "requirements": "&lt;li&gt;SQL&lt;/li&gt;",
-        "publishedAt": "2026-10-04T08:00:00Z", "workspaceType": "Hybrid",
-    }]})
+    calls = _capture(
+        monkeypatch,
+        {
+            "jobAdDetails": [
+                {
+                    "id": "abc",
+                    "title": "PM",
+                    "site": "Berlin",
+                    "country": "Germany",
+                    "description": "&lt;p&gt;Lead.&lt;/p&gt;",
+                    "requirements": "&lt;li&gt;SQL&lt;/li&gt;",
+                    "publishedAt": "2026-10-04T08:00:00Z",
+                    "workspaceType": "Hybrid",
+                }
+            ]
+        },
+    )
     page = await connectors.fetch_page(Source(id="h", family="hibob", tenant="acme"))
     assert calls[0]["url"] == "https://acme.careers.hibob.com/api/job-ad"
     assert calls[0]["headers"] == {"Referer": "https://acme.careers.hibob.com/jobs"}
@@ -214,10 +301,23 @@ async def test_hibob_sends_referer_and_unescapes_body(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_gem_posts_graphql_list(monkeypatch):
-    calls = _capture(monkeypatch, {"data": {"oatsExternalJobPostings": {"jobPostings": [{
-        "extId": "E1", "title": "Data Scientist", "job": {"locationType": "REMOTE"},
-        "locations": [{"city": "Paris", "isoCountry": "FR", "isRemote": False}],
-    }]}}})
+    calls = _capture(
+        monkeypatch,
+        {
+            "data": {
+                "oatsExternalJobPostings": {
+                    "jobPostings": [
+                        {
+                            "extId": "E1",
+                            "title": "Data Scientist",
+                            "job": {"locationType": "REMOTE"},
+                            "locations": [{"city": "Paris", "isoCountry": "FR", "isRemote": False}],
+                        }
+                    ]
+                }
+            }
+        },
+    )
     page = await connectors.fetch_page(Source(id="g", family="gem", tenant="acme"))
     assert calls[0]["url"] == "https://jobs.gem.com/api/public/graphql"
     assert calls[0]["json_body"]["variables"] == {"boardId": "acme"}
@@ -227,12 +327,25 @@ async def test_gem_posts_graphql_list(monkeypatch):
 
 
 def test_new_families_registered_and_catalogued():
-    new = {"workday", "personio", "bamboohr", "breezy", "pinpoint", "rippling",
-           "teamtailor", "jobscore", "trakstar", "hibob", "gem"}
+    new = {
+        "workday",
+        "personio",
+        "bamboohr",
+        "breezy",
+        "pinpoint",
+        "rippling",
+        "teamtailor",
+        "jobscore",
+        "trakstar",
+        "hibob",
+        "gem",
+    }
     assert new <= connectors.FAMILIES
     for host in ("myworkdayjobs.com", "personio.com", "breezy.hr", "pinpointhq.com", "hibob.com"):
         assert connectors.is_ats_url(f"https://acme.{host}/x")
-    rows = json.loads((Path(connectors.__file__).parent / "job_sources.json").read_text(encoding="utf-8"))
+    rows = json.loads(
+        (Path(connectors.__file__).parent / "job_sources.json").read_text(encoding="utf-8")
+    )
     added = [r for r in rows if r["family"] in new]
     # gem/trakstar have no known board; breezy/rippling's only known boards were empty
     # when checked live — board_harvest finds real ones.

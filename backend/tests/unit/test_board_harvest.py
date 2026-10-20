@@ -16,18 +16,38 @@ HTML = """
 <a href="https://nu.wd5.myworkdayjobs.com/en-US/NuSite/job/1">m</a>
 <a href="https://www.recruitee.com">noise</a>
 """
-ALL = {"greenhouse", "lever", "ashby", "workable", "recruitee", "personio", "bamboohr",
-       "teamtailor", "breezy", "smartrecruiters", "workday"}
+ALL = {
+    "greenhouse",
+    "lever",
+    "ashby",
+    "workable",
+    "recruitee",
+    "personio",
+    "bamboohr",
+    "teamtailor",
+    "breezy",
+    "smartrecruiters",
+    "workday",
+}
 
 
 def test_detect_all_patterns(monkeypatch):
     monkeypatch.setattr(job_connectors, "FAMILIES", ALL)
     got = bh.detect_boards(HTML, "https://x.com")
     assert got == {
-        ("greenhouse", "acme"), ("greenhouse", "beta"), ("lever", "gamma"), ("lever", "eu:delta"),
-        ("ashby", "eps"), ("workable", "zeta"), ("recruitee", "eta"), ("personio", "theta"),
-        ("bamboohr", "iota"), ("teamtailor", "kappa"), ("breezy", "lam"),
-        ("smartrecruiters", "mu"), ("workday", "nu.wd5.myworkdayjobs.com|nu|NuSite"),
+        ("greenhouse", "acme"),
+        ("greenhouse", "beta"),
+        ("lever", "gamma"),
+        ("lever", "eu:delta"),
+        ("ashby", "eps"),
+        ("workable", "zeta"),
+        ("recruitee", "eta"),
+        ("personio", "theta"),
+        ("bamboohr", "iota"),
+        ("teamtailor", "kappa"),
+        ("breezy", "lam"),
+        ("smartrecruiters", "mu"),
+        ("workday", "nu.wd5.myworkdayjobs.com|nu|NuSite"),
     }
 
 
@@ -52,5 +72,14 @@ def test_probe(monkeypatch):
     targets = [("greenhouse", t) for t in ("full", "empty", "boom", "old")]
     entries, stats = asyncio.run(bh.probe(targets, delay=0, log=io.StringIO()))
     assert stats == {"probed": 3, "kept": 1, "failed": 1}
-    assert entries == [{"id": "greenhouse:full", "family": "greenhouse", "tenant": "full",
-                        "permitted": True, "refresh_hours": 12, "sample_title": "Dev", "job_count": 1}]
+    assert entries == [
+        {
+            "id": "greenhouse:full",
+            "family": "greenhouse",
+            "tenant": "full",
+            "permitted": True,
+            "refresh_hours": 12,
+            "sample_title": "Dev",
+            "job_count": 1,
+        }
+    ]

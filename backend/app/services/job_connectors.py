@@ -634,7 +634,8 @@ async def _fetch_workday(source: Source, query: str, cursor: str | None) -> Page
     total = int(data.get("total") or 0)
     more = len(postings) == _WORKDAY_PAGE and (not total or nxt < total)
     more = more and nxt < _WORKDAY_PAGE * _WORKDAY_MAX_PAGES
-    return Page([job for raw in rows if (job := normalize(raw, source))], str(nxt) if more else None)
+    jobs = [job for raw in rows if (job := normalize(raw, source))]
+    return Page(jobs, str(nxt) if more else None)
 
 
 def _rfc822(value) -> str | None:
@@ -791,7 +792,7 @@ async def _fetch_ats_board(source: Source, tenant: str, page: int) -> Page:
                 bodies = {r["id"]: r["description"] for r in parse_personio(en.text, tenant)}
                 for r in rows:
                     r["description"] = r["description"] or bodies.get(r["id"], "")
-            except Exception:  # noqa: BLE001 - the body is optional
+            except Exception:  # noqa: BLE001, S110 - the body is optional
                 pass
     elif family == "teamtailor":
         rows = parse_teamtailor(response.text, tenant)
@@ -914,7 +915,9 @@ async def _fetch_ats_board(source: Source, tenant: str, page: int) -> Page:
                     "title": j.get("title"),
                     "company": tenant,
                     "url": f"https://jobs.gem.com/{tenant}/{j.get('extId')}",
-                    "location": _join(*(v for p in places for v in (p.get("city"), p.get("isoCountry")))),
+                    "location": _join(
+                        *(v for p in places for v in (p.get("city"), p.get("isoCountry")))
+                    ),
                     "remote": any(p.get("isRemote") for p in places)
                     or (j.get("job") or {}).get("locationType") == "REMOTE",
                 }

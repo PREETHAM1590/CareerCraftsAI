@@ -39,8 +39,22 @@ PATTERNS = [
     ("smartrecruiters", rf"jobs\.smartrecruiters\.com/{S}"),
 ]
 LEVER_EU = re.compile(rf"jobs\.eu\.lever\.co/{S}", re.I)
-WORKDAY = re.compile(r"https://(([A-Za-z0-9-]+)\.wd\d+\.myworkdayjobs\.com)/(?:[a-z]{2}-[A-Z]{2}/)?([A-Za-z0-9_-]+)")
-NOISE = {"www", "api", "app", "careers", "jobs", "embed", "static", "cdn", "assets", "support", "help"}
+WORKDAY = re.compile(
+    r"https://(([A-Za-z0-9-]+)\.wd\d+\.myworkdayjobs\.com)/(?:[a-z]{2}-[A-Z]{2}/)?([A-Za-z0-9_-]+)"
+)
+NOISE = {
+    "www",
+    "api",
+    "app",
+    "careers",
+    "jobs",
+    "embed",
+    "static",
+    "cdn",
+    "assets",
+    "support",
+    "help",
+}
 
 
 def parse_slugs(text: str) -> list[str]:
@@ -69,8 +83,12 @@ def detect_boards(html: str, base_url: str = "") -> set[tuple[str, str]]:
 
 def to_entry(source: Source, jobs: list[dict]) -> dict:
     return {
-        "id": source.id, "family": source.family, "tenant": source.tenant, "permitted": True,
-        "refresh_hours": source.refresh_hours, "sample_title": jobs[0].get("title", ""),
+        "id": source.id,
+        "family": source.family,
+        "tenant": source.tenant,
+        "permitted": True,
+        "refresh_hours": source.refresh_hours,
+        "sample_title": jobs[0].get("title", ""),
         "job_count": len(jobs),
     }
 
@@ -89,7 +107,9 @@ async def probe(targets, concurrency=4, delay=0.5, timeout=20, log=sys.stderr):
     """targets: iterable of (family, tenant). Returns (entries, stats)."""
     sem, throttle, entries = asyncio.Semaphore(concurrency), Throttle(delay), []
     stats = {"probed": 0, "kept": 0, "failed": 0}
-    existing = {e["id"] for e in json.loads(SOURCES.read_text("utf-8"))} if SOURCES.exists() else set()
+    existing = (
+        {e["id"] for e in json.loads(SOURCES.read_text("utf-8"))} if SOURCES.exists() else set()
+    )
 
     async def one(family, tenant):
         source = Source(id=f"{family}:{tenant}", family=family, tenant=tenant, refresh_hours=12)
@@ -106,7 +126,11 @@ async def probe(targets, concurrency=4, delay=0.5, timeout=20, log=sys.stderr):
         if page.jobs:
             stats["kept"] += 1
             entries.append(to_entry(source, page.jobs))
-        print(f"\rprobed {stats['probed']} kept {stats['kept']} failed {stats['failed']}", end="", file=log)
+        print(
+            f"\rprobed {stats['probed']} kept {stats['kept']} failed {stats['failed']}",
+            end="",
+            file=log,
+        )
 
     await asyncio.gather(*(one(f, t) for f, t in sorted(set(targets))))
     print(file=log)
@@ -124,8 +148,10 @@ async def detect(sites, concurrency=4, delay=0.5, timeout=20):
             async with sem:
                 await throttle.wait(parts.hostname)
                 try:
-                    r = await asyncio.wait_for(public_get(f"https://{parts.hostname}{path or parts.path}"), timeout)
-                except Exception:
+                    r = await asyncio.wait_for(
+                        public_get(f"https://{parts.hostname}{path or parts.path}"), timeout
+                    )
+                except Exception:  # noqa: S112 - an unreachable page is just skipped
                     continue
             if r.status_code == 200 and (hit := detect_boards(r.text, url)):
                 found.update(hit)
@@ -153,7 +179,9 @@ def main(argv=None):
             ap.error(f"unknown family {a.family!r}")
         targets = [(a.family, s) for s in parse_slugs(text)]
     else:
-        targets = asyncio.run(detect([u.strip() for u in text.splitlines() if u.strip()], a.concurrency))
+        targets = asyncio.run(
+            detect([u.strip() for u in text.splitlines() if u.strip()], a.concurrency)
+        )
     entries, stats = asyncio.run(probe(targets, a.concurrency))
     Path(a.out).write_text(json.dumps(entries, indent=2) + "\n", "utf-8")
     print(f"done: {stats} -> {a.out}", file=sys.stderr)
