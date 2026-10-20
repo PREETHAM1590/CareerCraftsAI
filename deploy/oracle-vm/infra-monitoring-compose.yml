@@ -1,5 +1,5 @@
-# INFRA VM (Nango + Ollama) collector: one Alloy container that gathers host
-# metrics (node), per-container metrics (cAdvisor) and container logs, and
+# INFRA VM (Nango + Ollama) collector: Alloy gathers host metrics (node),
+# per-container metrics (from the cAdvisor below) and container logs, and
 # pushes them over HTTPS to the APP VM's Prometheus/Loki through
 # https://grafana.careercraftsai.me/ingest/* (basic auth). Nothing listens
 # publicly on this VM.
@@ -33,6 +33,26 @@ services:
       - /dev/disk/:/dev/disk:ro
       - /run/udev:/run/udev:ro
       - alloy-data:/var/lib/alloy
+    mem_limit: 256m
+    restart: unless-stopped
+
+  cadvisor:
+    image: ghcr.io/google/cadvisor:v0.60.6
+    network_mode: host
+    privileged: true
+    devices:
+      - /dev/kmsg
+    command:
+      - --listen_ip=127.0.0.1
+      - --port=19080
+      - --docker_only=true
+      - --housekeeping_interval=15s
+      - --disable_metrics=percpu,sched,tcp,udp,disk,diskIO,hugetlb,referenced_memory,cpu_topology,resctrl,process
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
     mem_limit: 256m
     restart: unless-stopped
 

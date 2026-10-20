@@ -16,17 +16,10 @@ prometheus.scrape "node" {
   forward_to      = [prometheus.relabel.infra.receiver]
 }
 
-// ── Container metrics (cAdvisor) ────────────────────────────────────────
-prometheus.exporter.cadvisor "containers" {
-  docker_host           = "unix:///var/run/docker.sock"
-  docker_only           = true
-  storage_duration      = "2m"
-  disabled_metrics      = ["percpu", "sched", "tcp", "udp", "disk", "diskIO", "hugetlb",
-                           "referenced_memory", "cpu_topology", "resctrl", "process"]
-}
-
+// ── Container metrics (standalone cAdvisor v0.60+, which understands
+// Docker 29's containerd image store; Alloy's built-in one does not) ─────
 prometheus.scrape "cadvisor" {
-  targets         = prometheus.exporter.cadvisor.containers.targets
+  targets         = [{"__address__" = "127.0.0.1:19080"}]
   job_name        = "cadvisor"
   scrape_interval = "15s"
   forward_to      = [prometheus.relabel.infra.receiver]

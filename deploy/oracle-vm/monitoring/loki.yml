@@ -10,14 +10,28 @@ server:
 common:
   path_prefix: /loki
   replication_factor: 1
+  instance_addr: 127.0.0.1
+  instance_interface_names: [lo]
   ring:
     instance_addr: 127.0.0.1
+    instance_interface_names: [lo]
     kvstore:
       store: inmemory
   storage:
     filesystem:
       chunks_directory: /loki/chunks
       rules_directory: /loki/rules
+
+# Everything listens on loopback, so the query frontend must advertise
+# loopback too, otherwise its own querier dials the VM's private IP and hangs.
+frontend:
+  address: 127.0.0.1
+  instance_interface_names: [lo]
+
+query_scheduler:
+  scheduler_ring:
+    instance_addr: 127.0.0.1
+    instance_interface_names: [lo]
 
 schema_config:
   configs:
