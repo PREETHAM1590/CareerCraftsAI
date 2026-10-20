@@ -20,7 +20,6 @@ prometheus.scrape "node" {
 prometheus.exporter.cadvisor "containers" {
   docker_host           = "unix:///var/run/docker.sock"
   docker_only           = true
-  housekeeping_interval = "15s"
   storage_duration      = "2m"
   disabled_metrics      = ["percpu", "sched", "tcp", "udp", "disk", "diskIO", "hugetlb",
                            "referenced_memory", "cpu_topology", "resctrl", "process"]

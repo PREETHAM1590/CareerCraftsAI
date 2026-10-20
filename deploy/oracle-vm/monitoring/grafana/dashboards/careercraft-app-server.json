@@ -1,6 +1,6 @@
 {
- "uid": "careercraft-overview",
- "title": "CareerCraft Overview",
+ "uid": "careercraft-app",
+ "title": "CareerCraft \u00b7 APP server (app-vm)",
  "tags": [
   "careercraft"
  ],
@@ -15,7 +15,7 @@
  "panels": [
   {
    "type": "row",
-   "title": "Servers (APP = app-vm, INFRA = infra-vm)",
+   "title": "APP: server resources",
    "id": 1,
    "collapsed": false,
    "gridPos": {
@@ -36,7 +36,7 @@
    },
    "gridPos": {
     "h": 4,
-    "w": 6,
+    "w": 4,
     "x": 0,
     "y": 1
    },
@@ -70,13 +70,13 @@
      ]
     },
     "colorMode": "background",
-    "textMode": "value_and_name"
+    "textMode": "value"
    },
    "targets": [
     {
-     "expr": "100 - avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[2m])) * 100",
+     "expr": "100 - avg(rate(node_cpu_seconds_total{instance=\"app-vm\",mode=\"idle\"}[2m])) * 100",
      "refId": "A",
-     "legendFormat": "{{instance}}",
+     "legendFormat": "",
      "datasource": {
       "type": "prometheus",
       "uid": "prometheus"
@@ -94,8 +94,8 @@
    },
    "gridPos": {
     "h": 4,
-    "w": 6,
-    "x": 6,
+    "w": 4,
+    "x": 4,
     "y": 1
    },
    "fieldConfig": {
@@ -128,13 +128,13 @@
      ]
     },
     "colorMode": "background",
-    "textMode": "value_and_name"
+    "textMode": "value"
    },
    "targets": [
     {
-     "expr": "(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100",
+     "expr": "(1 - node_memory_MemAvailable_bytes{instance=\"app-vm\"} / node_memory_MemTotal_bytes{instance=\"app-vm\"}) * 100",
      "refId": "A",
-     "legendFormat": "{{instance}}",
+     "legendFormat": "",
      "datasource": {
       "type": "prometheus",
       "uid": "prometheus"
@@ -152,8 +152,8 @@
    },
    "gridPos": {
     "h": 4,
-    "w": 6,
-    "x": 12,
+    "w": 4,
+    "x": 8,
     "y": 1
    },
    "fieldConfig": {
@@ -186,13 +186,13 @@
      ]
     },
     "colorMode": "background",
-    "textMode": "value_and_name"
+    "textMode": "value"
    },
    "targets": [
     {
-     "expr": "100 - node_filesystem_avail_bytes{mountpoint=\"/\"} / node_filesystem_size_bytes{mountpoint=\"/\"} * 100",
+     "expr": "100 - node_filesystem_avail_bytes{instance=\"app-vm\",mountpoint=\"/\"} / node_filesystem_size_bytes{instance=\"app-vm\",mountpoint=\"/\"} * 100",
      "refId": "A",
-     "legendFormat": "{{instance}}",
+     "legendFormat": "",
      "datasource": {
       "type": "prometheus",
       "uid": "prometheus"
@@ -202,7 +202,7 @@
   },
   {
    "type": "stat",
-   "title": "Load (1m) per core",
+   "title": "Load 1m / cores",
    "id": 5,
    "datasource": {
     "type": "prometheus",
@@ -210,8 +210,8 @@
    },
    "gridPos": {
     "h": 4,
-    "w": 6,
-    "x": 18,
+    "w": 4,
+    "x": 12,
     "y": 1
    },
    "fieldConfig": {
@@ -244,13 +244,113 @@
      ]
     },
     "colorMode": "background",
-    "textMode": "value_and_name"
+    "textMode": "value"
    },
    "targets": [
     {
-     "expr": "node_load1 / on(instance) count by (instance) (node_cpu_seconds_total{mode=\"idle\"})",
+     "expr": "node_load1{instance=\"app-vm\"} / count(node_cpu_seconds_total{instance=\"app-vm\",mode=\"idle\"})",
      "refId": "A",
-     "legendFormat": "{{instance}}",
+     "legendFormat": "",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ]
+  },
+  {
+   "type": "stat",
+   "title": "CPU cores",
+   "id": 6,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 16,
+    "y": 1
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "background",
+    "textMode": "value"
+   },
+   "targets": [
+    {
+     "expr": "count(node_cpu_seconds_total{instance=\"app-vm\",mode=\"idle\"})",
+     "refId": "A",
+     "legendFormat": "",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ]
+  },
+  {
+   "type": "stat",
+   "title": "Total memory",
+   "id": 7,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 20,
+    "y": 1
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "background",
+    "textMode": "value"
+   },
+   "targets": [
+    {
+     "expr": "node_memory_MemTotal_bytes{instance=\"app-vm\"}",
+     "refId": "A",
+     "legendFormat": "",
      "datasource": {
       "type": "prometheus",
       "uid": "prometheus"
@@ -260,8 +360,8 @@
   },
   {
    "type": "timeseries",
-   "title": "CPU % per server",
-   "id": 6,
+   "title": "CPU %",
+   "id": 8,
    "datasource": {
     "type": "prometheus",
     "uid": "prometheus"
@@ -304,8 +404,8 @@
    },
    "targets": [
     {
-     "expr": "100 - avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[1m])) * 100",
-     "legendFormat": "{{instance}} used",
+     "expr": "100 - avg(rate(node_cpu_seconds_total{instance=\"app-vm\",mode=\"idle\"}[1m])) * 100",
+     "legendFormat": "used",
      "refId": "A",
      "datasource": {
       "type": "prometheus",
@@ -313,8 +413,8 @@
      }
     },
     {
-     "expr": "avg by (instance) (rate(node_cpu_seconds_total{mode=\"iowait\"}[1m])) * 100",
-     "legendFormat": "{{instance}} iowait",
+     "expr": "avg(rate(node_cpu_seconds_total{instance=\"app-vm\",mode=\"iowait\"}[1m])) * 100",
+     "legendFormat": "iowait",
      "refId": "B",
      "datasource": {
       "type": "prometheus",
@@ -322,8 +422,8 @@
      }
     },
     {
-     "expr": "avg by (instance) (rate(node_cpu_seconds_total{mode=\"steal\"}[1m])) * 100",
-     "legendFormat": "{{instance}} steal",
+     "expr": "avg(rate(node_cpu_seconds_total{instance=\"app-vm\",mode=\"steal\"}[1m])) * 100",
+     "legendFormat": "steal",
      "refId": "C",
      "datasource": {
       "type": "prometheus",
@@ -334,8 +434,8 @@
   },
   {
    "type": "timeseries",
-   "title": "Memory used % per server",
-   "id": 7,
+   "title": "Memory",
+   "id": 9,
    "datasource": {
     "type": "prometheus",
     "uid": "prometheus"
@@ -349,16 +449,14 @@
    },
    "fieldConfig": {
     "defaults": {
-     "unit": "percent",
+     "unit": "bytes",
      "custom": {
       "lineWidth": 1,
       "fillOpacity": 10,
       "stacking": {
        "mode": "none"
       }
-     },
-     "min": 0,
-     "max": 100
+     }
     },
     "overrides": []
    },
@@ -378,9 +476,27 @@
    },
    "targets": [
     {
-     "expr": "(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100",
-     "legendFormat": "{{instance}}",
+     "expr": "node_memory_MemTotal_bytes{instance=\"app-vm\"} - node_memory_MemAvailable_bytes{instance=\"app-vm\"}",
+     "legendFormat": "used",
      "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    },
+    {
+     "expr": "node_memory_MemAvailable_bytes{instance=\"app-vm\"}",
+     "legendFormat": "available",
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    },
+    {
+     "expr": "node_memory_SwapTotal_bytes{instance=\"app-vm\"} - node_memory_SwapFree_bytes{instance=\"app-vm\"}",
+     "legendFormat": "swap used",
+     "refId": "C",
      "datasource": {
       "type": "prometheus",
       "uid": "prometheus"
@@ -391,7 +507,7 @@
   {
    "type": "timeseries",
    "title": "Network in / out",
-   "id": 8,
+   "id": 10,
    "datasource": {
     "type": "prometheus",
     "uid": "prometheus"
@@ -432,8 +548,8 @@
    },
    "targets": [
     {
-     "expr": "sum by (instance) (rate(node_network_receive_bytes_total{device!~\"lo|veth.*|docker.*|br-.*\"}[1m]))",
-     "legendFormat": "{{instance}} in",
+     "expr": "sum(rate(node_network_receive_bytes_total{instance=\"app-vm\",device!~\"lo|veth.*|docker.*|br-.*\"}[1m]))",
+     "legendFormat": "in",
      "refId": "A",
      "datasource": {
       "type": "prometheus",
@@ -441,8 +557,8 @@
      }
     },
     {
-     "expr": "-sum by (instance) (rate(node_network_transmit_bytes_total{device!~\"lo|veth.*|docker.*|br-.*\"}[1m]))",
-     "legendFormat": "{{instance}} out",
+     "expr": "-sum(rate(node_network_transmit_bytes_total{instance=\"app-vm\",device!~\"lo|veth.*|docker.*|br-.*\"}[1m]))",
+     "legendFormat": "out",
      "refId": "B",
      "datasource": {
       "type": "prometheus",
@@ -454,7 +570,7 @@
   {
    "type": "timeseries",
    "title": "Disk I/O",
-   "id": 9,
+   "id": 11,
    "datasource": {
     "type": "prometheus",
     "uid": "prometheus"
@@ -495,8 +611,8 @@
    },
    "targets": [
     {
-     "expr": "sum by (instance) (rate(node_disk_read_bytes_total[1m]))",
-     "legendFormat": "{{instance}} read",
+     "expr": "sum(rate(node_disk_read_bytes_total{instance=\"app-vm\"}[1m]))",
+     "legendFormat": "read",
      "refId": "A",
      "datasource": {
       "type": "prometheus",
@@ -504,8 +620,8 @@
      }
     },
     {
-     "expr": "-sum by (instance) (rate(node_disk_written_bytes_total[1m]))",
-     "legendFormat": "{{instance}} write",
+     "expr": "-sum(rate(node_disk_written_bytes_total{instance=\"app-vm\"}[1m]))",
+     "legendFormat": "write",
      "refId": "B",
      "datasource": {
       "type": "prometheus",
@@ -516,8 +632,8 @@
   },
   {
    "type": "row",
-   "title": "Containers (both servers)",
-   "id": 10,
+   "title": "APP: containers",
+   "id": 12,
    "collapsed": false,
    "gridPos": {
     "h": 1,
@@ -530,7 +646,7 @@
   {
    "type": "timeseries",
    "title": "Container CPU (cores)",
-   "id": 11,
+   "id": 13,
    "datasource": {
     "type": "prometheus",
     "uid": "prometheus"
@@ -571,8 +687,8 @@
    },
    "targets": [
     {
-     "expr": "sum by (instance, name) (rate(container_cpu_usage_seconds_total{name!=\"\"}[1m]))",
-     "legendFormat": "{{instance}} {{name}}",
+     "expr": "sum by (name) (rate(container_cpu_usage_seconds_total{instance=\"app-vm\",name!=\"\"}[1m]))",
+     "legendFormat": "{{name}}",
      "refId": "A",
      "datasource": {
       "type": "prometheus",
@@ -584,7 +700,7 @@
   {
    "type": "timeseries",
    "title": "Container memory (working set)",
-   "id": 12,
+   "id": 14,
    "datasource": {
     "type": "prometheus",
     "uid": "prometheus"
@@ -625,8 +741,8 @@
    },
    "targets": [
     {
-     "expr": "sum by (instance, name) (container_memory_working_set_bytes{name!=\"\"})",
-     "legendFormat": "{{instance}} {{name}}",
+     "expr": "sum by (name) (container_memory_working_set_bytes{instance=\"app-vm\",name!=\"\"})",
+     "legendFormat": "{{name}}",
      "refId": "A",
      "datasource": {
       "type": "prometheus",
@@ -638,7 +754,7 @@
   {
    "type": "timeseries",
    "title": "Container memory % of its limit",
-   "id": 13,
+   "id": 15,
    "datasource": {
     "type": "prometheus",
     "uid": "prometheus"
@@ -679,8 +795,8 @@
    },
    "targets": [
     {
-     "expr": "sum by (instance, name) (container_memory_working_set_bytes{name!=\"\"}) / sum by (instance, name) (container_spec_memory_limit_bytes{name!=\"\"} > 0) * 100",
-     "legendFormat": "{{instance}} {{name}}",
+     "expr": "sum by (name) (container_memory_working_set_bytes{instance=\"app-vm\",name!=\"\"}) / sum by (name) (container_spec_memory_limit_bytes{instance=\"app-vm\",name!=\"\"} > 0) * 100",
+     "legendFormat": "{{name}}",
      "refId": "A",
      "datasource": {
       "type": "prometheus",
@@ -692,12 +808,12 @@
   {
    "type": "timeseries",
    "title": "Container CPU % of its cpus: limit",
-   "id": 14,
+   "id": 16,
    "datasource": {
     "type": "prometheus",
     "uid": "prometheus"
    },
-   "description": "Only containers with a cpus: limit (postgres has 0.5). 100% means throttled.",
+   "description": "Only containers with a cpus: limit. 100% means the container is throttled.",
    "gridPos": {
     "h": 8,
     "w": 12,
@@ -733,8 +849,8 @@
    },
    "targets": [
     {
-     "expr": "sum by (instance, name) (rate(container_cpu_usage_seconds_total{name!=\"\"}[1m])) / sum by (instance, name) (container_spec_cpu_quota{name!=\"\"} / container_spec_cpu_period{name!=\"\"}) * 100",
-     "legendFormat": "{{instance}} {{name}}",
+     "expr": "sum by (name) (rate(container_cpu_usage_seconds_total{instance=\"app-vm\",name!=\"\"}[1m])) / sum by (name) (container_spec_cpu_quota{instance=\"app-vm\",name!=\"\"} / container_spec_cpu_period{instance=\"app-vm\",name!=\"\"}) * 100",
+     "legendFormat": "{{name}}",
      "refId": "A",
      "datasource": {
       "type": "prometheus",
@@ -745,8 +861,8 @@
   },
   {
    "type": "row",
-   "title": "HTTP requests (host nginx, end to end)",
-   "id": 15,
+   "title": "APP: HTTP requests (host nginx, end to end)",
+   "id": 17,
    "collapsed": false,
    "gridPos": {
     "h": 1,
@@ -759,7 +875,7 @@
   {
    "type": "timeseries",
    "title": "Requests per second",
-   "id": 16,
+   "id": 18,
    "datasource": {
     "type": "loki",
     "uid": "loki"
@@ -800,7 +916,7 @@
    },
    "targets": [
     {
-     "expr": "sum by (host) (count_over_time({job=\"nginx\"} | json | host!=\"grafana.careercraftsai.me\" [1m])) / 60",
+     "expr": "sum by (host) (count_over_time({job=\"nginx\",instance=\"app-vm\"} | json | host!=\"grafana.careercraftsai.me\" [1m])) / 60",
      "legendFormat": "{{host}}",
      "refId": "A",
      "datasource": {
@@ -813,7 +929,7 @@
   {
    "type": "timeseries",
    "title": "Latency p50 / p95 / p99",
-   "id": 17,
+   "id": 19,
    "datasource": {
     "type": "loki",
     "uid": "loki"
@@ -854,7 +970,7 @@
    },
    "targets": [
     {
-     "expr": "quantile_over_time(0.50, {job=\"nginx\"} | json | host!=\"grafana.careercraftsai.me\" | unwrap rt [1m]) by (host)",
+     "expr": "quantile_over_time(0.50, {job=\"nginx\",instance=\"app-vm\"} | json | host!=\"grafana.careercraftsai.me\" | unwrap rt [1m]) by (host)",
      "legendFormat": "p50 {{host}}",
      "refId": "A",
      "datasource": {
@@ -863,7 +979,7 @@
      }
     },
     {
-     "expr": "quantile_over_time(0.95, {job=\"nginx\"} | json | host!=\"grafana.careercraftsai.me\" | unwrap rt [1m]) by (host)",
+     "expr": "quantile_over_time(0.95, {job=\"nginx\",instance=\"app-vm\"} | json | host!=\"grafana.careercraftsai.me\" | unwrap rt [1m]) by (host)",
      "legendFormat": "p95 {{host}}",
      "refId": "B",
      "datasource": {
@@ -872,7 +988,7 @@
      }
     },
     {
-     "expr": "quantile_over_time(0.99, {job=\"nginx\"} | json | host!=\"grafana.careercraftsai.me\" | unwrap rt [1m]) by (host)",
+     "expr": "quantile_over_time(0.99, {job=\"nginx\",instance=\"app-vm\"} | json | host!=\"grafana.careercraftsai.me\" | unwrap rt [1m]) by (host)",
      "legendFormat": "p99 {{host}}",
      "refId": "C",
      "datasource": {
@@ -885,7 +1001,7 @@
   {
    "type": "timeseries",
    "title": "Errors per second (5xx, 429)",
-   "id": 18,
+   "id": 20,
    "datasource": {
     "type": "loki",
     "uid": "loki"
@@ -926,7 +1042,7 @@
    },
    "targets": [
     {
-     "expr": "sum by (host) (count_over_time({job=\"nginx\"} | json | host!=\"grafana.careercraftsai.me\" | status=~\"5..\" [1m])) / 60",
+     "expr": "sum by (host) (count_over_time({job=\"nginx\",instance=\"app-vm\"} | json | host!=\"grafana.careercraftsai.me\" | status=~\"5..\" [1m])) / 60",
      "legendFormat": "5xx {{host}}",
      "refId": "A",
      "datasource": {
@@ -935,7 +1051,7 @@
      }
     },
     {
-     "expr": "sum by (host) (count_over_time({job=\"nginx\"} | json | host!=\"grafana.careercraftsai.me\" | status=\"429\" [1m])) / 60",
+     "expr": "sum by (host) (count_over_time({job=\"nginx\",instance=\"app-vm\"} | json | host!=\"grafana.careercraftsai.me\" | status=\"429\" [1m])) / 60",
      "legendFormat": "429 {{host}}",
      "refId": "B",
      "datasource": {
@@ -948,7 +1064,7 @@
   {
    "type": "table",
    "title": "Slowest API endpoints (p95, last 15m)",
-   "id": 19,
+   "id": 21,
    "datasource": {
     "type": "loki",
     "uid": "loki"
@@ -973,14 +1089,14 @@
       "uid": "loki"
      },
      "queryType": "instant",
-     "expr": "topk(20, quantile_over_time(0.95, {job=\"nginx\"} | json | host=~\"api.*|app.*\" | label_format path=`{{ regexReplaceAll \"[0-9a-f]{8}-[0-9a-f-]{27}\" .path \":id\" }}` | unwrap rt [15m]) by (method, path))"
+     "expr": "topk(20, quantile_over_time(0.95, {job=\"nginx\",instance=\"app-vm\"} | json | host=~\"api.*|app.*\" | label_format path=`{{ regexReplaceAll \"[0-9a-f]{8}-[0-9a-f-]{27}\" .path \":id\" }}` | unwrap rt [15m]) by (method, path))"
     }
    ]
   },
   {
    "type": "row",
-   "title": "Postgres and Redis (APP)",
-   "id": 20,
+   "title": "APP: Postgres and Redis",
+   "id": 22,
    "collapsed": false,
    "gridPos": {
     "h": 1,
@@ -993,7 +1109,7 @@
   {
    "type": "stat",
    "title": "Postgres up",
-   "id": 21,
+   "id": 23,
    "datasource": {
     "type": "prometheus",
     "uid": "prometheus"
@@ -1030,7 +1146,7 @@
      ]
     },
     "colorMode": "background",
-    "textMode": "value_and_name"
+    "textMode": "value"
    },
    "targets": [
     {
@@ -1047,7 +1163,7 @@
   {
    "type": "stat",
    "title": "PG connections",
-   "id": 22,
+   "id": 24,
    "datasource": {
     "type": "prometheus",
     "uid": "prometheus"
@@ -1080,13 +1196,63 @@
      ]
     },
     "colorMode": "background",
-    "textMode": "value_and_name"
+    "textMode": "value"
    },
    "targets": [
     {
      "expr": "sum(pg_stat_activity_count)",
      "refId": "A",
-     "legendFormat": "total",
+     "legendFormat": "",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ]
+  },
+  {
+   "type": "stat",
+   "title": "PG cache hit",
+   "id": 25,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 8,
+    "y": 59
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "background",
+    "textMode": "value"
+   },
+   "targets": [
+    {
+     "expr": "sum(rate(pg_stat_database_blks_hit[5m])) / (sum(rate(pg_stat_database_blks_hit[5m])) + sum(rate(pg_stat_database_blks_read[5m])))",
+     "refId": "A",
+     "legendFormat": "",
      "datasource": {
       "type": "prometheus",
       "uid": "prometheus"
@@ -1097,7 +1263,7 @@
   {
    "type": "stat",
    "title": "Redis up",
-   "id": 23,
+   "id": 26,
    "datasource": {
     "type": "prometheus",
     "uid": "prometheus"
@@ -1105,7 +1271,7 @@
    "gridPos": {
     "h": 4,
     "w": 4,
-    "x": 8,
+    "x": 12,
     "y": 59
    },
    "fieldConfig": {
@@ -1134,7 +1300,7 @@
      ]
     },
     "colorMode": "background",
-    "textMode": "value_and_name"
+    "textMode": "value"
    },
    "targets": [
     {
@@ -1151,7 +1317,7 @@
   {
    "type": "stat",
    "title": "Redis memory",
-   "id": 24,
+   "id": 27,
    "datasource": {
     "type": "prometheus",
     "uid": "prometheus"
@@ -1159,7 +1325,7 @@
    "gridPos": {
     "h": 4,
     "w": 4,
-    "x": 12,
+    "x": 16,
     "y": 59
    },
    "fieldConfig": {
@@ -1184,7 +1350,7 @@
      ]
     },
     "colorMode": "background",
-    "textMode": "value_and_name"
+    "textMode": "value"
    },
    "targets": [
     {
@@ -1201,7 +1367,7 @@
   {
    "type": "stat",
    "title": "Redis clients",
-   "id": 25,
+   "id": 28,
    "datasource": {
     "type": "prometheus",
     "uid": "prometheus"
@@ -1209,7 +1375,7 @@
    "gridPos": {
     "h": 4,
     "w": 4,
-    "x": 16,
+    "x": 20,
     "y": 59
    },
    "fieldConfig": {
@@ -1234,7 +1400,7 @@
      ]
     },
     "colorMode": "background",
-    "textMode": "value_and_name"
+    "textMode": "value"
    },
    "targets": [
     {
@@ -1249,59 +1415,9 @@
    ]
   },
   {
-   "type": "stat",
-   "title": "PG cache hit",
-   "id": 26,
-   "datasource": {
-    "type": "prometheus",
-    "uid": "prometheus"
-   },
-   "gridPos": {
-    "h": 4,
-    "w": 4,
-    "x": 20,
-    "y": 59
-   },
-   "fieldConfig": {
-    "defaults": {
-     "unit": "percentunit",
-     "thresholds": {
-      "mode": "absolute",
-      "steps": [
-       {
-        "color": "green",
-        "value": null
-       }
-      ]
-     }
-    },
-    "overrides": []
-   },
-   "options": {
-    "reduceOptions": {
-     "calcs": [
-      "lastNotNull"
-     ]
-    },
-    "colorMode": "background",
-    "textMode": "value_and_name"
-   },
-   "targets": [
-    {
-     "expr": "sum(rate(pg_stat_database_blks_hit[5m])) / (sum(rate(pg_stat_database_blks_hit[5m])) + sum(rate(pg_stat_database_blks_read[5m])))",
-     "refId": "A",
-     "legendFormat": "",
-     "datasource": {
-      "type": "prometheus",
-      "uid": "prometheus"
-     }
-    }
-   ]
-  },
-  {
    "type": "timeseries",
    "title": "Postgres connections by state",
-   "id": 27,
+   "id": 29,
    "datasource": {
     "type": "prometheus",
     "uid": "prometheus"
@@ -1355,7 +1471,7 @@
   {
    "type": "timeseries",
    "title": "Postgres transactions/s",
-   "id": 28,
+   "id": 30,
    "datasource": {
     "type": "prometheus",
     "uid": "prometheus"
@@ -1427,7 +1543,7 @@
   {
    "type": "timeseries",
    "title": "Redis commands/s, hits, misses",
-   "id": 29,
+   "id": 31,
    "datasource": {
     "type": "prometheus",
     "uid": "prometheus"
@@ -1498,8 +1614,8 @@
   },
   {
    "type": "row",
-   "title": "Workers and auto-apply (temporal-worker, sandbox-server)",
-   "id": 30,
+   "title": "APP: workers and auto-apply (temporal-worker, sandbox-server)",
+   "id": 32,
    "collapsed": false,
    "gridPos": {
     "h": 1,
@@ -1512,7 +1628,7 @@
   {
    "type": "timeseries",
    "title": "Worker CPU (cores)",
-   "id": 31,
+   "id": 33,
    "datasource": {
     "type": "prometheus",
     "uid": "prometheus"
@@ -1553,7 +1669,7 @@
    },
    "targets": [
     {
-     "expr": "sum by (name) (rate(container_cpu_usage_seconds_total{name=~\".*(temporal-worker|notification-worker|sandbox-server|temporal-1).*\"}[1m]))",
+     "expr": "sum by (name) (rate(container_cpu_usage_seconds_total{instance=\"app-vm\",name=~\".*(temporal-worker|notification-worker|sandbox-server|temporal-1).*\"}[1m]))",
      "legendFormat": "{{name}}",
      "refId": "A",
      "datasource": {
@@ -1566,7 +1682,7 @@
   {
    "type": "timeseries",
    "title": "Worker memory",
-   "id": 32,
+   "id": 34,
    "datasource": {
     "type": "prometheus",
     "uid": "prometheus"
@@ -1607,7 +1723,7 @@
    },
    "targets": [
     {
-     "expr": "sum by (name) (container_memory_working_set_bytes{name=~\".*(temporal-worker|notification-worker|sandbox-server|temporal-1).*\"})",
+     "expr": "sum by (name) (container_memory_working_set_bytes{instance=\"app-vm\",name=~\".*(temporal-worker|notification-worker|sandbox-server|temporal-1).*\"})",
      "legendFormat": "{{name}}",
      "refId": "A",
      "datasource": {
@@ -1619,8 +1735,8 @@
   },
   {
    "type": "timeseries",
-   "title": "Error log lines per service (5m)",
-   "id": 33,
+   "title": "Auto-apply log activity (5m)",
+   "id": 35,
    "datasource": {
     "type": "loki",
     "uid": "loki"
@@ -1661,8 +1777,8 @@
    },
    "targets": [
     {
-     "expr": "sum by (instance, service) (count_over_time({service=~\".+\"} | level=~\"error|critical|fatal\" [5m]))",
-     "legendFormat": "{{instance}} {{service}}",
+     "expr": "sum by (service) (count_over_time({instance=\"app-vm\",service=~\"temporal-worker|sandbox-server|backend\"} |~ \"(?i)auto.?apply|apply_task|submission\" [5m]))",
+     "legendFormat": "{{service}}",
      "refId": "A",
      "datasource": {
       "type": "loki",
@@ -1672,9 +1788,22 @@
    ]
   },
   {
+   "type": "row",
+   "title": "APP: logs",
+   "id": 36,
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 80
+   },
+   "panels": []
+  },
+  {
    "type": "timeseries",
-   "title": "Auto-apply log activity (5m)",
-   "id": 34,
+   "title": "Log lines per service (1m)",
+   "id": 37,
    "datasource": {
     "type": "loki",
     "uid": "loki"
@@ -1684,7 +1813,7 @@
     "h": 8,
     "w": 8,
     "x": 0,
-    "y": 80
+    "y": 81
    },
    "fieldConfig": {
     "defaults": {
@@ -1715,7 +1844,61 @@
    },
    "targets": [
     {
-     "expr": "sum by (service) (count_over_time({service=~\"temporal-worker|sandbox-server|backend\"} |~ \"(?i)auto.?apply|apply_task|submission\" [5m]))",
+     "expr": "sum by (service) (count_over_time({instance=\"app-vm\",service=~\".+\"} [1m]))",
+     "legendFormat": "{{service}}",
+     "refId": "A",
+     "datasource": {
+      "type": "loki",
+      "uid": "loki"
+     }
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "Error log lines per service (5m)",
+   "id": 38,
+   "datasource": {
+    "type": "loki",
+    "uid": "loki"
+   },
+   "description": "",
+   "gridPos": {
+    "h": 8,
+    "w": 16,
+    "x": 8,
+    "y": 81
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "stacking": {
+       "mode": "none"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "expr": "sum by (service) (count_over_time({instance=\"app-vm\",service=~\".+\"} | level=~\"error|critical|fatal\" [5m]))",
      "legendFormat": "{{service}}",
      "refId": "A",
      "datasource": {
@@ -1727,17 +1910,17 @@
   },
   {
    "type": "logs",
-   "title": "Recent errors (all services, both servers)",
-   "id": 35,
+   "title": "Recent errors on APP",
+   "id": 39,
    "datasource": {
     "type": "loki",
     "uid": "loki"
    },
    "gridPos": {
-    "h": 8,
-    "w": 16,
-    "x": 8,
-    "y": 80
+    "h": 10,
+    "w": 24,
+    "x": 0,
+    "y": 89
    },
    "options": {
     "showTime": true,
@@ -1751,7 +1934,7 @@
       "type": "loki",
       "uid": "loki"
      },
-     "expr": "{service=~\".+\"} | level=~\"error|critical|fatal\""
+     "expr": "{instance=\"app-vm\",service=~\".+\"} | level=~\"error|critical|fatal\""
     }
    ]
   }
