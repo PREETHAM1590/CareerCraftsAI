@@ -9,6 +9,10 @@ import sys
 
 PROM = {"type": "prometheus", "uid": "prometheus"}
 LOKI = {"type": "loki", "uid": "loki"}
+# Loki logs this one line at error level whenever Grafana cancels a query it
+# no longer needs (panel refresh, dashboard closed). Match only that line, so
+# any other scheduler_processor.go error still shows.
+QUERY_CANCEL_NOISE = '!~ "caller=scheduler_processor[.]go:[0-9]+ .*code = Canceled"'
 PCT = [
     {"color": "green", "value": None},
     {"color": "orange", "value": 70},
@@ -342,7 +346,7 @@ def logs_section(d, i, name):
         [
             {
                 "expr": f'sum by (service) (count_over_time({{instance="{i}",service=~".+"}} '
-                f'| level=~"error|critical|fatal" !~ "scheduler_processor.go" [5m]))',
+                f'| level=~"error|critical|fatal" {QUERY_CANCEL_NOISE} [5m]))',
                 "legendFormat": "{{service}}",
             }
         ],
@@ -353,7 +357,7 @@ def logs_section(d, i, name):
     d.y += 8
     d.logs(
         f"Recent errors on {name}",
-        f'{{instance="{i}",service=~".+"}} | level=~"error|critical|fatal" !~ "scheduler_processor.go"',
+        f'{{instance="{i}",service=~".+"}} | level=~"error|critical|fatal" {QUERY_CANCEL_NOISE}',
         0,
         24,
     )
