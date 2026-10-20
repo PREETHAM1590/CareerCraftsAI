@@ -257,7 +257,8 @@ async def test_jobscore_feed(monkeypatch):
 
 TRAK = """<?xml version="1.0"?><rss version="2.0" xmlns:rb="https://recruiterbox.com/rss/job/"><channel>
 <item><title>Recruiter</title><link>http://acme.hire.trakstar.com/jobs/fk123/</link>
-<pubDate>Mon, 05 Oct 2026 10:00:00 +0000</pubDate><description>&lt;p&gt;Hire.&lt;/p&gt;</description>
+<pubDate>Mon, 05 Oct 2026 10:00:00 +0000</pubDate>
+<description>&lt;p&gt;Hire.&lt;/p&gt;</description>
 <rb:locationCity>Denver</rb:locationCity><rb:locationState>CO</rb:locationState></item></channel></rss>"""
 
 
