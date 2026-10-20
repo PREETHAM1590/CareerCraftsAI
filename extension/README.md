@@ -104,7 +104,7 @@ the extension paces its actions like a person, and it never solves CAPTCHAs.
   (closed shadow DOM), platform drivers, and the runner.
 - `test/fixtures/` — Greenhouse-, LinkedIn- and Naukri-like pages.
 - `test/e2e_apply.mjs` — the whole apply flow in a real Chromium against
-  local fixture job sites (Greenhouse, Lever, Workday, SmartRecruiters, Workable, a form behind an in-page Apply button, a company page with an embedded Greenhouse form) and a fake API that
+  local fixture job sites (Greenhouse, Lever, Workday, SmartRecruiters, Workable, an in-page Apply button the extension must leave for the person, a company page with an embedded Greenhouse form) and a fake API that
   follows the backend's status rules. Run `node test/e2e_apply.mjs`.
 - `test/e2e_live.py` — end-to-end run against a local stack (see its
   docstring): real API, Temporal worker and this extension in Chromium.
