@@ -232,7 +232,7 @@ def _override_auth(monkeypatch):
     from app.main import app
 
     payload = {"sub": "00000000-0000-0000-0000-000000000001", "email": "t@e.com"}
-    monkeypatch.setattr("app.main.verify_token", lambda token: payload)
+    monkeypatch.setattr("app.core.clerk_auth.verify_token", lambda token: payload)
     monkeypatch.setattr("app.api.v1.deps.verify_auth_jwt", lambda token: payload)
 
     model_row = MagicMock()

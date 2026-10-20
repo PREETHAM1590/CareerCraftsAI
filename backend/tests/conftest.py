@@ -55,3 +55,13 @@ def mock_user():
     user.deletion_scheduled_for = None
     user.clerk_user_id = "00000000-0000-0000-0000-000000000abc"
     return user
+
+
+@pytest.fixture(autouse=True)
+def _clear_verified_token_cache():
+    """Tests reuse token strings with different fake payloads; never share them."""
+    from app.core import clerk_auth
+
+    clerk_auth._token_cache.clear()
+    yield
+    clerk_auth._token_cache.clear()

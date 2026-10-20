@@ -24,7 +24,20 @@ def _get_user_or_ip(request: Request) -> str:
     return get_remote_address(request)
 
 
-limiter = Limiter(key_func=_get_user_or_ip)
+def _storage_uri() -> str:
+    """Production keeps counters in Redis so every uvicorn worker (and every
+    future app VM) shares one budget per user; in-memory counters would give
+    each process its own and multiply every limit by the worker count."""
+    from app.core.config import settings
+
+    if settings.APP_ENV == "production" and settings.REDIS_URL:
+        return settings.REDIS_URL
+    return "memory://"
+
+
+# swallow_errors: if Redis is unreachable the limiter logs and lets the
+# request through (fails open) rather than turning a Redis blip into 500s.
+limiter = Limiter(key_func=_get_user_or_ip, storage_uri=_storage_uri(), swallow_errors=True)
 
 # Stricter limits for sensitive endpoints (use as decorator):
 # @limiter.limit("5/minute")  — for API key submission

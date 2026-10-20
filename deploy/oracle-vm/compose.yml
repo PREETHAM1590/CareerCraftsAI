@@ -17,7 +17,10 @@ services:
     build: ../../backend
     network_mode: host
     env_file: /opt/careercraft-secrets/backend.env
-    command: uvicorn app.main:app --host 127.0.0.1 --port 18100
+    # Two worker processes: one Python process can only use one core. The
+    # rate limiter, SSE bus, run admission and Temporal all live in
+    # Redis/Postgres, so workers share state; caches are per-process.
+    command: uvicorn app.main:app --host 127.0.0.1 --port 18100 --workers 2
     init: true
     # Uploaded resumes/documents. Supabase Storage is unreachable from this VM
     # for the same reason the database was, so files live on local disk.
@@ -27,7 +30,9 @@ services:
       # Served as a zip by GET /api/v1/extension/download.
       - ../../extension:/extension:ro
     mem_limit: 1500m
-    cpus: 0.5
+    # Ceiling, not a reservation. 0.5 capped the API at ~200 req/s in the
+    # 2026-10-20 k6 test (tests/load/k6_capacity.js).
+    cpus: 1.5
     restart: unless-stopped
     depends_on:
       postgres:
@@ -138,7 +143,7 @@ services:
       - pgdata:/var/lib/postgresql/data
       - ./postgres-bootstrap.sql:/docker-entrypoint-initdb.d/00-bootstrap.sql:ro
     mem_limit: 1g
-    cpus: 0.5
+    cpus: 1.0
     restart: unless-stopped
     healthcheck:
       # pg_isready only needs the server to accept the connection and respond

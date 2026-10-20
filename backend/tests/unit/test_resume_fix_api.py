@@ -221,7 +221,7 @@ class _Harness:
 
         self.app, is_main = _build_app()
         if is_main:
-            monkeypatch.setattr("app.main.verify_token", lambda token: {"sub": "user-1"})
+            monkeypatch.setattr("app.core.clerk_auth.verify_token", lambda token: {"sub": "user-1"})
 
     def _db(self):
         harness = self

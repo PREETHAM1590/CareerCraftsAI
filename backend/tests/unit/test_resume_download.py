@@ -42,7 +42,7 @@ async def _download(monkeypatch, doc, *, render=None, pinned=False, params=None)
         calls["stored"] += 1
         return b"%PDF-stored"
 
-    monkeypatch.setattr("app.main.verify_token", lambda token: {"sub": "user-1"})
+    monkeypatch.setattr("app.core.clerk_auth.verify_token", lambda token: {"sub": "user-1"})
     monkeypatch.setattr("app.services.pdf_service.generate_resume_pdf", fake_render)
     monkeypatch.setattr("app.services.storage_service.download_file", fake_stored)
 
