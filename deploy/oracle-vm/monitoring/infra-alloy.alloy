@@ -78,6 +78,12 @@ loki.source.docker "containers" {
 }
 
 loki.process "levels" {
+  // Idle containers' last lines can be weeks old; Docker re-sends them when
+  // Alloy reconnects and Loki rejects anything past its 1-week window.
+  stage.drop {
+    older_than          = "160h"
+    drop_counter_reason = "too_old"
+  }
   stage.regex {
     expression = "(?i)\\b(?P<level>debug|info|warning|warn|error|critical|fatal)\\b"
   }

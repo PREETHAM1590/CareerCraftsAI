@@ -342,7 +342,7 @@ def logs_section(d, i, name):
         [
             {
                 "expr": f'sum by (service) (count_over_time({{instance="{i}",service=~".+"}} '
-                f'| level=~"error|critical|fatal" [5m]))',
+                f'| level=~"error|critical|fatal" !~ "scheduler_processor.go" [5m]))',
                 "legendFormat": "{{service}}",
             }
         ],
@@ -353,7 +353,7 @@ def logs_section(d, i, name):
     d.y += 8
     d.logs(
         f"Recent errors on {name}",
-        f'{{instance="{i}",service=~".+"}} | level=~"error|critical|fatal"',
+        f'{{instance="{i}",service=~".+"}} | level=~"error|critical|fatal" !~ "scheduler_processor.go"',
         0,
         24,
     )
