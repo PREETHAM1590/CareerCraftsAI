@@ -85,8 +85,12 @@ async def catalog_version() -> str:
 async def bump_catalog_version() -> None:
     """Called after a catalog refresh so new jobs show up before the TTL ends."""
     r = _redis()
-    if r is not None:
-        await _op(r.incr(f"{PREFIX}:catalog_version"))
+    if r is not None and await _op(r.incr(f"{PREFIX}:catalog_version"), default=_ERROR) is _ERROR:
+        # Not raised: failing the refresh would re-run every source for a Redis
+        # blip. Cached searches then lag new jobs by at most CATALOG_TTL.
+        logger.warning(
+            "search cache: catalog version bump failed; results may lag %ss", CATALOG_TTL
+        )
 
 
 async def _count(kind: str, outcome: str) -> None:
