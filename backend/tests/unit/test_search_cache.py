@@ -38,7 +38,8 @@ async def test_miss_then_hit_and_counts(redis):
     assert len(calls) == 1
     assert 0 < await redis.ttl("k") <= 60
     keys = await redis.keys(f"{search_cache.PREFIX}:stats:*")
-    assert {k.rsplit(":", 1)[1] for k in keys} == {"hit", "miss"}
+    counts = {k.rsplit(":", 1)[1]: int(await redis.get(k)) for k in keys}
+    assert counts == {"hit": 1, "miss": 1}
 
 
 @pytest.mark.asyncio
@@ -61,6 +62,7 @@ async def test_oversized_payload_is_not_cached(redis, monkeypatch):
 @pytest.mark.asyncio
 async def test_exception_caches_nothing_and_releases_lock(redis):
     async def boom():
+        assert await redis.get("k:lock")  # the lock is held while computing
         raise TimeoutError
 
     with pytest.raises(TimeoutError):
@@ -95,10 +97,13 @@ async def test_waiter_computes_itself_when_owner_caches_nothing(redis):
         await asyncio.sleep(0.05)
         return [], None
 
+    started = asyncio.get_running_loop().time()
     await asyncio.gather(
-        *(search_cache.get_or_compute("live", "k", 60, empty, wait_s=2) for _ in range(2))
+        *(search_cache.get_or_compute("live", "k", 60, empty, wait_s=5) for _ in range(2))
     )
-    assert len(calls) == 2  # the waiter did not hang for wait_s
+    assert len(calls) == 2
+    # The waiter noticed the released lock instead of polling out wait_s.
+    assert asyncio.get_running_loop().time() - started < 1
 
 
 @pytest.mark.asyncio
@@ -136,8 +141,10 @@ async def test_catalog_version_bump(redis):
 def test_query_normalisation_ignores_case_and_word_order():
     a = {"titles": ["Python Developer"], "locations": ["Bangalore", "Remote"]}
     b = {"titles": ["developer python"], "locations": ["remote ", "BANGALORE"]}
-    assert search_cache.terms_of(a) == search_cache.terms_of(b)
-    assert search_cache.places_of(a) == search_cache.places_of(b)
+    assert search_cache.terms_of(a) == search_cache.terms_of(b) == ["developer", "python"]
+    assert search_cache.places_of(a) == search_cache.places_of(b) == ["bangalore", "remote"]
+    assert search_cache.terms_of({"titles": ["Java Developer"]}) != search_cache.terms_of(a)
+    assert search_cache.query_hash({"x": 1}) != search_cache.query_hash({"x": 2})
     assert search_cache.query_hash({"x": 1, "y": [1]}) == search_cache.query_hash(
         {"y": [1], "x": 1}
     )
@@ -164,7 +171,7 @@ async def test_catalog_hit_rereads_cached_ids_without_scanning(redis, monkeypatc
 
     async def scan(query, public, live_ids, relevant_of):
         scans.append(1)
-        return [job], []
+        return [job], [], ["j1"]
 
     async def by_id(ids, sources):
         reads.append(ids)
@@ -193,7 +200,7 @@ async def test_catalog_result_with_source_warnings_is_not_cached(redis, monkeypa
 
     async def scan(query, public, live_ids, relevant_of):
         scans.append(1)
-        return [], ["greenhouse:acme: TimeoutError"]
+        return [], ["greenhouse:acme: TimeoutError"], []
 
     monkeypatch.setattr(job_catalog, "_search_catalog_db", scan)
     for _ in range(2):
@@ -233,3 +240,85 @@ async def test_live_hit_skips_adapter_and_write_through(redis, monkeypatch):
     assert len(calls) == 1 and writes == ["fake"]
     assert [j["url"] for j in first] == [j["url"] for j in second]
     assert json.loads(await redis.get(next(iter(await redis.keys("*:live:fake:*")))))
+
+
+@pytest.mark.asyncio
+async def test_unreadable_catalog_version_skips_the_cache(redis, monkeypatch):
+    from app.services import job_catalog
+
+    scans = []
+
+    async def scan(query, public, live_ids, relevant_of):
+        scans.append(1)
+        return [], [], []
+
+    async def unreadable():
+        return None
+
+    monkeypatch.setattr(job_catalog, "_search_catalog_db", scan)
+    monkeypatch.setattr(search_cache, "catalog_version", unreadable)
+    for _ in range(2):
+        await job_catalog.search_catalog({"titles": ["x"]}, live_platforms=["jobspy"])
+    assert scans == [1, 1]
+    assert not await redis.keys(f"{search_cache.PREFIX}:catalog:*")
+
+
+@pytest.mark.asyncio
+async def test_owner_rechecks_cache_after_taking_the_lock(redis):
+    await redis.set("k", "p")  # filled by another caller after our first miss
+    calls = []
+
+    real_get = redis.get
+    first = {"done": False}
+
+    async def get_once_missing(key):
+        if key == "k" and not first["done"]:
+            first["done"] = True
+            return None
+        return await real_get(key)
+
+    redis.get = get_once_missing
+    assert await search_cache.get_or_compute("live", "k", 60, _compute(calls), wait_s=1) == (
+        None,
+        "p",
+    )
+    assert calls == [] and await real_get("k:lock") is None
+
+
+@pytest.mark.asyncio
+async def test_live_key_keeps_word_order_and_demo_adapter_is_never_cached(redis, monkeypatch):
+    from app.services import job_search_service as svc
+
+    seen = []
+
+    def adapter(q, location, n):
+        seen.append(q)
+        return [
+            {
+                "title": "Python Developer",
+                "company": "Acme",
+                "url": f"https://acme.io/jobs/{len(seen)}",
+                "location": "Remote",
+            }
+        ]
+
+    async def nothing(*a, **k):
+        return [], []
+
+    async def no_write(*a, **k):
+        return None
+
+    monkeypatch.setitem(svc._ADAPTERS, "fake", adapter)
+    monkeypatch.setitem(svc._ADAPTERS, "open_apis_keyless", adapter)
+    monkeypatch.setattr("app.services.job_catalog.search_catalog", nothing)
+    monkeypatch.setattr("app.services.job_catalog.write_through", no_write)
+    for titles in (["python developer"], ["developer python"]):
+        await svc.search_all_platforms({"titles": titles, "locations": ["Remote"]}, ["fake"])
+    assert seen == ["python developer", "developer python"]  # different order, own entries
+
+    for _ in range(2):
+        await svc.search_all_platforms(
+            {"titles": ["python developer"], "locations": ["Remote"]}, ["open_apis_keyless"]
+        )
+    assert len(seen) == 4
+    assert not await redis.keys("*:live:open_apis_keyless:*")

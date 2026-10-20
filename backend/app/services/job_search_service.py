@@ -266,14 +266,16 @@ async def search_all_platforms(
             # An empty result may be a block or blip upstream; don't pin it.
             return jobs, (json.dumps(jobs, default=str) if jobs else None)
 
+        # The adapter gets q verbatim and may rank by word order, so the key
+        # keeps the order (only case and spacing are normalised).
         key = f"{search_cache.PREFIX}:live:{name}:" + search_cache.query_hash(
-            {
-                "terms": search_cache.terms_of({"search_query": q}),
-                "place": location.strip().lower(),
-                "n": fetch_n,
-            }
+            {"q": " ".join(q.lower().split()), "place": location.strip().lower(), "n": fetch_n}
         )
         try:
+            if name in NO_CATALOG:
+                # The public demo adapter: unauthenticated input never gets a
+                # shared cache entry (bounded Redis use, like the catalog rule).
+                return (await compute())[0], False
             jobs, cached = await search_cache.get_or_compute(
                 "live", key, search_cache.LIVE_TTL, compute, wait_s=timeout
             )

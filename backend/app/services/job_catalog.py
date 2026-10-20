@@ -358,9 +358,15 @@ async def search_catalog(query: dict, selected_sources=None, live_platforms=()):
         return [job for job in dedupe(rows, days) if matches_query(job, query)]
 
     # The result is the same for every member who runs this query, so it is
-    # cached as the ordered job ids; a hit re-reads just those rows by primary
-    # key instead of scanning the catalog (see app/services/search_cache.py).
+    # cached as the ids of every matching row (before duplicates are merged);
+    # a hit re-reads just those rows by primary key and merges them again,
+    # instead of scanning the catalog (see app/services/search_cache.py).
     from app.services import search_cache
+
+    version = await search_cache.catalog_version()
+    if version is None:
+        relevant, warnings, _ = await _search_catalog_db(query, public, live_ids, relevant_of)
+        return relevant, warnings
 
     key = (
         f"{search_cache.PREFIX}:catalog:"
@@ -374,14 +380,13 @@ async def search_catalog(query: dict, selected_sources=None, live_platforms=()):
                 "sources": source_ids,
             }
         )
-        + f":{await search_cache.catalog_version()}"
+        + f":{version}"
     )
 
     async def compute():
-        relevant, warnings = await _search_catalog_db(query, public, live_ids, relevant_of)
+        relevant, warnings, ids = await _search_catalog_db(query, public, live_ids, relevant_of)
         # A source that failed during gap fill should be retried by the next
         # search, not hidden behind a thin cached result.
-        ids = [job["job_id"] for job in relevant if job.get("job_id")]
         payload = None if warnings else json.dumps({"ids": ids, "warnings": []})
         return (relevant, warnings), payload
 
@@ -472,4 +477,6 @@ async def _search_catalog_db(query: dict, public, live_ids, relevant_of):
         rows = rows + [j for jobs, _ in results for j in jobs]
         warnings.extend(w for _, w in results if w)
         relevant = relevant_of(rows)
-    return relevant, warnings
+    # Every row that matches on its own, so a cache hit can redo the merge.
+    candidates = [row["job_id"] for row in rows if row.get("job_id") and matches_query(row, query)]
+    return relevant, warnings, list(dict.fromkeys(candidates))

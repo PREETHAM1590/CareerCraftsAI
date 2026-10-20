@@ -75,11 +75,14 @@ def places_of(query: dict) -> list[str]:
     return sorted({str(x).strip().lower() for x in raw if x})
 
 
-async def catalog_version() -> str:
+async def catalog_version() -> str | None:
+    """Current catalog version, or None when it can't be read (skip the cache
+    then: a stale version would serve results from before a refresh)."""
     r = _redis()
     if r is None:
-        return "off"
-    return str(await _op(r.get(f"{PREFIX}:catalog_version")) or "0")
+        return None
+    version = await _op(r.get(f"{PREFIX}:catalog_version"), default=_ERROR)
+    return None if version is _ERROR else str(version or "0")
 
 
 async def bump_catalog_version() -> None:
@@ -132,6 +135,13 @@ async def get_or_compute(
     owner = await _op(r.set(lock, token, nx=True, ex=int(wait_s) + 30), default=_ERROR)
     if owner is _ERROR:
         return (await compute())[0], None
+    if owner:
+        # Another caller may have filled the key between our miss and the lock.
+        cached = await _op(r.get(key))
+        if cached is not None:
+            await _op(r.delete(lock))
+            await _count(kind, "hit")
+            return None, cached
     if not owner:
         # Someone else is computing this key: wait for their result.
         deadline = time.monotonic() + wait_s
