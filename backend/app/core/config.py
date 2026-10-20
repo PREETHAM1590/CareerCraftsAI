@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     APP_SECRET_KEY: str
     DATABASE_URL: str
     REDIS_URL: str
+    # Shared Redis cache for job-search catalog/live results
+    # (app/services/search_cache.py). Off = every search computes fresh.
+    SEARCH_CACHE_ENABLED: bool = True
 
     # ── Clerk Auth (primary identity provider) ─────────────────────────
     # Clerk signs session tokens with RS256. Either point CLERK_JWKS_URL at the

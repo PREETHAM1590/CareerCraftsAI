@@ -65,3 +65,11 @@ def _clear_verified_token_cache():
     clerk_auth._token_cache.clear()
     yield
     clerk_auth._token_cache.clear()
+
+
+@pytest.fixture(autouse=True)
+def _search_cache_off(monkeypatch):
+    """Search tests run uncached unless they opt in (see test_search_cache.py)."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "SEARCH_CACHE_ENABLED", False)

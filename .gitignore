@@ -103,3 +103,7 @@ Diagram/
 
 # k6 run outputs
 tests/load/results/
+
+# local agent tool state
+.claude-flow/
+**/.claude-flow/

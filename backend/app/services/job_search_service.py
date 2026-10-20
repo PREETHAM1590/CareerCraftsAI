@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -250,18 +251,39 @@ async def search_all_platforms(
     q = " ".join(titles) if titles else str(query.get("search_query", "software engineer"))
     fetch_n = max(need, LIVE_FETCH_LIMIT)
 
-    async def run_one(name: str, location: str) -> list[dict]:
+    from app.services import search_cache
+
+    async def run_one(name: str, location: str) -> tuple[list[dict], bool]:
+        """One adapter for one city -> (jobs, served_from_cache)."""
         adapter = _ADAPTERS[name]
-        try:
+        timeout = _ADAPTER_TIMEOUT_SEC.get(name, PLATFORM_TIMEOUT_SEC)
+
+        async def compute():
             raw = await asyncio.wait_for(
-                asyncio.to_thread(adapter, q, location, fetch_n),
-                timeout=_ADAPTER_TIMEOUT_SEC.get(name, PLATFORM_TIMEOUT_SEC),
+                asyncio.to_thread(adapter, q, location, fetch_n), timeout=timeout
             )
-            return [_normalize(job, name) for job in (raw or [])]
+            jobs = [_normalize(job, name) for job in (raw or [])]
+            # An empty result may be a block or blip upstream; don't pin it.
+            return jobs, (json.dumps(jobs, default=str) if jobs else None)
+
+        # The adapter gets q verbatim and may rank by word order, so the key
+        # keeps the order (only case and spacing are normalised).
+        key = f"{search_cache.PREFIX}:live:{name}:" + search_cache.query_hash(
+            {"q": " ".join(q.lower().split()), "place": location.strip().lower(), "n": fetch_n}
+        )
+        try:
+            if name in NO_CATALOG:
+                # The public demo adapter: unauthenticated input never gets a
+                # shared cache entry (bounded Redis use, like the catalog rule).
+                return (await compute())[0], False
+            jobs, cached = await search_cache.get_or_compute(
+                "live", key, search_cache.LIVE_TTL, compute, wait_s=timeout
+            )
+            return (json.loads(cached), True) if cached is not None else (jobs, False)
         except Exception as exc:
             logger.warning("Platform %s (%s) failed: %s", name, location, exc)
             warnings.append(f"{name} failed: {type(exc).__name__}")
-            return []
+            return [], False
 
     # No outer timeout: each platform is individually capped (see
     # _ADAPTER_TIMEOUT_SEC) and run_one never raises, so gather always
@@ -270,13 +292,16 @@ async def search_all_platforms(
     # Fan out over every requested location, not just the first — a
     # multi-location search previously silently dropped all but one city.
     pairs = [(name, location) for name in valid_names for location in locations]
-    per_source = await asyncio.gather(*(run_one(n, loc) for n, loc in pairs))
+    results = await asyncio.gather(*(run_one(n, loc) for n, loc in pairs))
+    per_source = [jobs for jobs, _ in results]
 
     # 3. Write-through so the next user's search finds these in the catalog.
     # write_through never raises; a failed catalog write must not fail the search.
+    # Cached groups were already written through by the search that fetched them.
     by_name: dict[str, list[dict]] = {}
-    for (name, _), group in zip(pairs, per_source, strict=True):
-        by_name.setdefault(name, []).extend(group)
+    for (name, _), (group, from_cache) in zip(pairs, results, strict=True):
+        if not from_cache:
+            by_name.setdefault(name, []).extend(group)
     await asyncio.gather(
         *(write_through(g, n) for n, g in by_name.items() if g and n not in NO_CATALOG)
     )
