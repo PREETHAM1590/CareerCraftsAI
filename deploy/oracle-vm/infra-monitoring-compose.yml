@@ -1,0 +1,39 @@
+# INFRA VM (Nango + Ollama) collector: one Alloy container that gathers host
+# metrics (node), per-container metrics (cAdvisor) and container logs, and
+# pushes them over HTTPS to the APP VM's Prometheus/Loki through
+# https://grafana.careercraftsai.me/ingest/* (basic auth). Nothing listens
+# publicly on this VM.
+#
+# On the INFRA VM, with this file and monitoring/infra-alloy.alloy copied to
+# ~/careercraft-monitoring/:
+#   sudo docker compose -p monitoring -f infra-monitoring-compose.yml up -d
+# Credentials: /opt/careercraft-secrets/monitoring.env
+#   INGEST_USER=infra
+#   INGEST_PASSWORD=...
+
+services:
+  alloy:
+    image: grafana/alloy:v1.10.1
+    network_mode: host
+    pid: host
+    privileged: true
+    command:
+      - run
+      - --server.http.listen-addr=127.0.0.1:19320
+      - --storage.path=/var/lib/alloy
+      - /etc/alloy/config.alloy
+    env_file: /opt/careercraft-secrets/monitoring.env
+    volumes:
+      - ./monitoring/infra-alloy.alloy:/etc/alloy/config.alloy:ro
+      - /:/host/root:ro,rslave
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+      - alloy-data:/var/lib/alloy
+    mem_limit: 256m
+    restart: unless-stopped
+
+volumes:
+  alloy-data:

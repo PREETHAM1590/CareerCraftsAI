@@ -1,6 +1,12 @@
-// Ship every container's stdout/stderr to Loki, labelled by compose
-// project and service (e.g. project="careercraft-isolated", service="backend").
+// APP VM collector:
+//  - every container's stdout/stderr -> Loki (labels: project, service, level)
+//  - host nginx timing log (/var/log/nginx/timing.log, JSON with request
+//    time) -> Loki, for request rate / latency / errors
+//  - Postgres and Redis exporters -> Prometheus (remote write)
+// Secrets come from /opt/careercraft-secrets/monitoring.env:
+//   PG_MONITOR_DSN, REDIS_PASSWORD
 
+// ── Container logs ──────────────────────────────────────────────────────
 discovery.docker "containers" {
   host = "unix:///var/run/docker.sock"
 }
@@ -20,6 +26,10 @@ discovery.relabel "containers" {
   rule {
     source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
     target_label  = "service"
+  }
+  rule {
+    target_label = "instance"
+    replacement  = "app-vm"
   }
 }
 
@@ -46,8 +56,60 @@ loki.process "levels" {
   forward_to = [loki.write.local.receiver]
 }
 
+// ── Host nginx request timing ───────────────────────────────────────────
+local.file_match "nginx_timing" {
+  path_targets = [{
+    "__path__" = "/var/log/nginx/timing.log",
+    "job"      = "nginx",
+    "instance" = "app-vm",
+  }]
+}
+
+loki.source.file "nginx_timing" {
+  targets    = local.file_match.nginx_timing.targets
+  forward_to = [loki.write.local.receiver]
+}
+
 loki.write "local" {
   endpoint {
     url = "http://127.0.0.1:19310/loki/api/v1/push"
+  }
+}
+
+// ── Postgres and Redis metrics ──────────────────────────────────────────
+prometheus.exporter.postgres "app" {
+  data_source_names = [sys.env("PG_MONITOR_DSN")]
+}
+
+prometheus.scrape "postgres" {
+  targets         = prometheus.exporter.postgres.app.targets
+  job_name        = "postgres"
+  scrape_interval = "15s"
+  forward_to      = [prometheus.relabel.app.receiver]
+}
+
+prometheus.exporter.redis "app" {
+  redis_addr     = "127.0.0.1:18179"
+  redis_password = sys.env("REDIS_PASSWORD")
+}
+
+prometheus.scrape "redis" {
+  targets         = prometheus.exporter.redis.app.targets
+  job_name        = "redis"
+  scrape_interval = "15s"
+  forward_to      = [prometheus.relabel.app.receiver]
+}
+
+prometheus.relabel "app" {
+  rule {
+    target_label = "instance"
+    replacement  = "app-vm"
+  }
+  forward_to = [prometheus.remote_write.local.receiver]
+}
+
+prometheus.remote_write "local" {
+  endpoint {
+    url = "http://127.0.0.1:19090/api/v1/write"
   }
 }

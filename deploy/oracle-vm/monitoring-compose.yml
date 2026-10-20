@@ -25,6 +25,8 @@ services:
       - --storage.tsdb.retention.time=15d
       - --storage.tsdb.retention.size=3GB
       - --web.listen-address=127.0.0.1:19090
+      # Alloy (Postgres/Redis), the INFRA VM and k6 push metrics here.
+      - --web.enable-remote-write-receiver
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
@@ -74,7 +76,7 @@ services:
     mem_limit: 384m
     restart: unless-stopped
 
-  # Tails every container's logs from the Docker socket into Loki.
+  # Container logs + nginx timing log -> Loki; Postgres/Redis -> Prometheus.
   alloy:
     image: grafana/alloy:v1.10.1
     network_mode: host
@@ -83,9 +85,11 @@ services:
       - --server.http.listen-addr=127.0.0.1:19320
       - --storage.path=/var/lib/alloy
       - /etc/alloy/config.alloy
+    env_file: /opt/careercraft-secrets/monitoring.env
     volumes:
       - ./monitoring/alloy.alloy:/etc/alloy/config.alloy:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/log/nginx:/var/log/nginx:ro
       - alloy-data:/var/lib/alloy
     mem_limit: 192m
     restart: unless-stopped
