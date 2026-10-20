@@ -12,9 +12,10 @@
 #   INGEST_PASSWORD=...
 
 services:
-  # Read-only Docker API for Alloy: container list/inspect/logs only, no
-  # writes (POST=0), on loopback. A raw docker.sock mount (even :ro) would let
-  # a compromised Alloy start privileged containers and own the host.
+  # Read-only Docker API for Alloy: container list/inspect/logs and network
+  # list only, no writes (POST=0), on loopback. A raw docker.sock mount (even
+  # :ro) would let a compromised Alloy start privileged containers and own
+  # the host.
   docker-socket-proxy:
     image: tecnativa/docker-socket-proxy:v0.5.0
     network_mode: host
@@ -22,6 +23,7 @@ services:
       BIND_CONFIG: "127.0.0.1:12375"
       CONTAINERS: "1"
       INFO: "1"
+      NETWORKS: "1" # discovery.docker reads network labels
       POST: "0"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
