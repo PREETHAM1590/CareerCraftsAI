@@ -100,3 +100,6 @@ _scratch/
 
 # Locally generated architecture diagrams (archify output)
 Diagram/
+
+# k6 run outputs
+tests/load/results/
