@@ -1,0 +1,144 @@
+# Host + container monitoring for the APP VM: Prometheus scrapes
+# node-exporter (host CPU/RAM/disk/network) and cAdvisor (per-container),
+# Alloy ships every container's logs to Loki, Grafana shows both.
+# Everything listens on 127.0.0.1 only; Grafana is published as
+# https://grafana.careercraftsai.me by the host nginx
+# (monitoring/nginx-grafana.conf), or via a tunnel:
+#   ssh -N -L 19300:127.0.0.1:19300 oraclevm   then http://localhost:19300
+#
+# Start (from deploy/oracle-vm):
+#   sudo docker compose -p monitoring -f monitoring-compose.yml up -d
+# Admin password lives in /opt/careercraft-secrets/monitoring.env
+# (GF_SECURITY_ADMIN_PASSWORD=...), never in git.
+#
+# Host networking keeps loopback-only listeners simple and gives node-exporter
+# the real host network stats. Memory caps keep monitoring from competing
+# with the app on this 2-vCPU box.
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    network_mode: host
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --storage.tsdb.retention.size=3GB
+      - --web.listen-address=127.0.0.1:19090
+      # Alloy (Postgres/Redis), the INFRA VM and k6 push metrics here.
+      - --web.enable-remote-write-receiver
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    mem_limit: 512m
+    restart: unless-stopped
+
+  node-exporter:
+    image: prom/node-exporter:v1.9.1
+    network_mode: host
+    pid: host
+    command:
+      - --path.rootfs=/host
+      - --web.listen-address=127.0.0.1:19100
+    volumes:
+      - /:/host:ro,rslave
+    mem_limit: 64m
+    restart: unless-stopped
+
+  cadvisor:
+    image: ghcr.io/google/cadvisor:v0.60.6
+    network_mode: host
+    privileged: true
+    devices:
+      - /dev/kmsg
+    command:
+      - --listen_ip=127.0.0.1
+      - --port=19080
+      - --docker_only=true
+      # cAdvisor is CPU-hungry at its defaults; 15s is plenty for dashboards.
+      - --housekeeping_interval=15s
+      - --disable_metrics=percpu,sched,tcp,udp,disk,diskIO,hugetlb,referenced_memory,cpu_topology,resctrl,process
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    mem_limit: 256m
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:3.5.3
+    network_mode: host
+    command: -config.file=/etc/loki/loki.yml
+    volumes:
+      - ./monitoring/loki.yml:/etc/loki/loki.yml:ro
+      - loki-data:/loki
+    mem_limit: 384m
+    restart: unless-stopped
+
+  # Read-only Docker API for Alloy: container list/inspect/logs and network
+  # list only, no writes (POST=0), on loopback. A raw docker.sock mount (even
+  # :ro) would let a compromised Alloy start privileged containers and own
+  # the host.
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:v0.5.0
+    network_mode: host
+    environment:
+      BIND_CONFIG: "127.0.0.1:12375"
+      CONTAINERS: "1"
+      INFO: "1"
+      NETWORKS: "1" # discovery.docker reads network labels
+      POST: "0"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    mem_limit: 64m
+    restart: unless-stopped
+
+  # Container logs + nginx timing log -> Loki; Postgres/Redis -> Prometheus.
+  alloy:
+    image: grafana/alloy:v1.10.1
+    network_mode: host
+    command:
+      - run
+      - --server.http.listen-addr=127.0.0.1:19320
+      - --storage.path=/var/lib/alloy
+      - /etc/alloy/config.alloy
+    env_file: /opt/careercraft-secrets/monitoring.env
+    volumes:
+      - ./monitoring/alloy.alloy:/etc/alloy/config.alloy:ro
+      - /var/log/nginx:/var/log/nginx:ro
+      - alloy-data:/var/lib/alloy
+    depends_on:
+      - docker-socket-proxy
+    mem_limit: 192m
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana-oss:12.1.0
+    network_mode: host
+    env_file: /opt/careercraft-secrets/monitoring.env
+    environment:
+      GF_SERVER_HTTP_ADDR: 127.0.0.1
+      GF_SERVER_HTTP_PORT: "19300"
+      # Served publicly by the host nginx (TLS via certbot); Grafana's own
+      # login is the gate, so no basic auth in front of it.
+      GF_SERVER_ROOT_URL: https://grafana.careercraftsai.me/
+      GF_SERVER_DOMAIN: grafana.careercraftsai.me
+      GF_SECURITY_COOKIE_SECURE: "true"
+      GF_SECURITY_DISABLE_GRAVATAR: "true"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    mem_limit: 256m
+    restart: unless-stopped
+
+volumes:
+  prometheus-data:
+  grafana-data:
+  loki-data:
+  alloy-data:

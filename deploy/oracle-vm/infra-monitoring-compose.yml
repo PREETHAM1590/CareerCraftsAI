@@ -1,0 +1,75 @@
+# INFRA VM (Nango + Ollama) collector: Alloy gathers host metrics (node),
+# per-container metrics (from the cAdvisor below) and container logs, and
+# pushes them over HTTPS to the APP VM's Prometheus/Loki through
+# https://grafana.careercraftsai.me/ingest/* (basic auth). Nothing listens
+# publicly on this VM.
+#
+# On the INFRA VM, with this file and monitoring/infra-alloy.alloy copied to
+# ~/careercraft-monitoring/:
+#   sudo docker compose -p monitoring -f infra-monitoring-compose.yml up -d
+# Credentials: /opt/careercraft-secrets/monitoring.env
+#   INGEST_USER=infra
+#   INGEST_PASSWORD=...
+
+services:
+  # Read-only Docker API for Alloy: container list/inspect/logs and network
+  # list only, no writes (POST=0), on loopback. A raw docker.sock mount (even
+  # :ro) would let a compromised Alloy start privileged containers and own
+  # the host.
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:v0.5.0
+    network_mode: host
+    environment:
+      BIND_CONFIG: "127.0.0.1:12375"
+      CONTAINERS: "1"
+      INFO: "1"
+      NETWORKS: "1" # discovery.docker reads network labels
+      POST: "0"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    mem_limit: 64m
+    restart: unless-stopped
+
+  alloy:
+    image: grafana/alloy:v1.10.1
+    network_mode: host
+    command:
+      - run
+      - --server.http.listen-addr=127.0.0.1:19320
+      - --storage.path=/var/lib/alloy
+      - /etc/alloy/config.alloy
+    env_file: /opt/careercraft-secrets/monitoring.env
+    volumes:
+      - ./monitoring/infra-alloy.alloy:/etc/alloy/config.alloy:ro
+      - /:/host/root:ro,rslave
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /run/udev:/run/udev:ro
+      - alloy-data:/var/lib/alloy
+    depends_on:
+      - docker-socket-proxy
+    mem_limit: 256m
+    restart: unless-stopped
+
+  cadvisor:
+    image: ghcr.io/google/cadvisor:v0.60.6
+    network_mode: host
+    privileged: true
+    devices:
+      - /dev/kmsg
+    command:
+      - --listen_ip=127.0.0.1
+      - --port=19080
+      - --docker_only=true
+      - --housekeeping_interval=15s
+      - --disable_metrics=percpu,sched,tcp,udp,disk,diskIO,hugetlb,referenced_memory,cpu_topology,resctrl,process
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    mem_limit: 256m
+    restart: unless-stopped
+
+volumes:
+  alloy-data:

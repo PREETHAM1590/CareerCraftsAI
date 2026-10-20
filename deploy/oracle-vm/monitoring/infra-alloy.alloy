@@ -1,0 +1,102 @@
+// INFRA VM collector: host + container metrics and container logs, pushed
+// to the APP VM over HTTPS. Labels match the APP side (job="node",
+// job="cadvisor", instance="infra-vm") so the same dashboards show both.
+
+// ── Host metrics (node-exporter equivalent) ─────────────────────────────
+prometheus.exporter.unix "host" {
+  procfs_path = "/host/proc"
+  sysfs_path  = "/host/sys"
+  rootfs_path = "/host/root"
+}
+
+prometheus.scrape "node" {
+  targets         = prometheus.exporter.unix.host.targets
+  job_name        = "node"
+  scrape_interval = "15s"
+  forward_to      = [prometheus.relabel.infra.receiver]
+}
+
+// ── Container metrics (standalone cAdvisor v0.60+, which understands
+// Docker 29's containerd image store; Alloy's built-in one does not) ─────
+prometheus.scrape "cadvisor" {
+  targets         = [{"__address__" = "127.0.0.1:19080"}]
+  job_name        = "cadvisor"
+  scrape_interval = "15s"
+  forward_to      = [prometheus.relabel.infra.receiver]
+}
+
+prometheus.relabel "infra" {
+  rule {
+    target_label = "instance"
+    replacement  = "infra-vm"
+  }
+  forward_to = [prometheus.remote_write.app.receiver]
+}
+
+prometheus.remote_write "app" {
+  endpoint {
+    url = "https://grafana.careercraftsai.me/ingest/prometheus"
+    basic_auth {
+      username = sys.env("INGEST_USER")
+      password = sys.env("INGEST_PASSWORD")
+    }
+  }
+}
+
+// ── Container logs ──────────────────────────────────────────────────────
+discovery.docker "containers" {
+  host = "tcp://127.0.0.1:12375"
+}
+
+discovery.relabel "containers" {
+  targets = []
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "project"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+  rule {
+    target_label = "instance"
+    replacement  = "infra-vm"
+  }
+}
+
+loki.source.docker "containers" {
+  host          = "tcp://127.0.0.1:12375"
+  targets       = discovery.docker.containers.targets
+  relabel_rules = discovery.relabel.containers.rules
+  forward_to    = [loki.process.levels.receiver]
+}
+
+loki.process "levels" {
+  stage.regex {
+    expression = "(?i)\\b(?P<level>debug|info|warning|warn|error|critical|fatal)\\b"
+  }
+  stage.template {
+    source   = "level"
+    template = "{{ ToLower .Value }}"
+  }
+  stage.labels {
+    values = { level = "" }
+  }
+  forward_to = [loki.write.app.receiver]
+}
+
+loki.write "app" {
+  endpoint {
+    url = "https://grafana.careercraftsai.me/ingest/loki"
+    basic_auth {
+      username = sys.env("INGEST_USER")
+      password = sys.env("INGEST_PASSWORD")
+    }
+  }
+}
