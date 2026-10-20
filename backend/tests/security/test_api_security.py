@@ -77,7 +77,9 @@ def authenticated_transport():
     """Real route validation with an admitted identity, no live DB/provider."""
     import uuid
     from types import SimpleNamespace
+
     from fastapi import FastAPI
+
     from app.api.v1 import agents, jobs, rag
     from app.api.v1.deps import get_current_user, get_db
 
@@ -101,13 +103,21 @@ async def test_agent_run_rejects_invalid_task_type(authenticated_transport):
 
 def test_sql_injection_job_filter_is_bound_as_data():
     import uuid
+
     from app.api.v1.jobs import _application_query
 
     payload = "'; DROP TABLE users; --"
     query = _application_query(
-        uuid.uuid4(), status=None, location=None, source=None,
-        posted_within_days=None, min_match=None, found_after=None,
-        found_before=None, sort=None, q=payload,
+        uuid.uuid4(),
+        status=None,
+        location=None,
+        source=None,
+        posted_within_days=None,
+        min_match=None,
+        found_after=None,
+        found_before=None,
+        sort=None,
+        q=payload,
     ).compile()
     assert payload not in str(query)
     assert any(payload.lower() in str(value).lower() for value in query.params.values())
@@ -179,8 +189,8 @@ def test_rate_limiting_header_present():
     """Verify rate limit headers structure is correct."""
     from app.core.config import settings
 
-    assert settings.RATE_LIMIT_STR is not None
-    parts = settings.RATE_LIMIT_STR.split("/")
+    assert settings.RATE_LIMIT_DEFAULT is not None
+    parts = settings.RATE_LIMIT_DEFAULT.split("/")
     assert len(parts) == 2
     assert parts[1] in ("second", "minute", "hour", "day")
 

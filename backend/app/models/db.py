@@ -48,6 +48,7 @@ class User(Base):
     # Policy" at sign-up, and which policy revision was current then. NULL on
     # accounts created before this was required — never backfilled.
     policy_accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    memory_generation: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     policy_version: Mapped[str | None] = mapped_column(String(20))
     # Deletion is a 15-day grace period: requesting it stamps these two;
     # a maintenance sweep hard-deletes once deletion_scheduled_for passes.

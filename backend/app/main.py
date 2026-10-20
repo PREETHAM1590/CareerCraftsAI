@@ -38,7 +38,7 @@ from app.api.v1 import (
 from app.api.v1.copilot_chat import mount_copilot_chat
 from app.core.config import settings
 from app.core.llm_gateway import router as llm_gw
-from app.core.rate_limit import limiter
+from app.core.rate_limit import StreamingSafeSlowAPIMiddleware, limiter
 from app.core.request_middleware import ApiRequestMiddleware
 
 logger = logging.getLogger(__name__)
@@ -171,6 +171,7 @@ async def _generic_handler(request: Request, exc: Exception) -> JSONResponse:
 # an expired token from a dead network.
 # Execution order: CORS → ApiRequestMiddleware (request ID, security headers,
 # JWT) → route. One pure ASGI layer; see app/core/request_middleware.py.
+app.add_middleware(StreamingSafeSlowAPIMiddleware)
 app.add_middleware(ApiRequestMiddleware)
 app.add_middleware(
     CORSMiddleware,
@@ -219,6 +220,7 @@ mount_copilot_chat(app)
 # Bare liveness — no dependency checks, so a slow/degraded DB or Redis can't
 # flap the load balancer's health probe. Use /health for deep diagnostics.
 @app.get("/health/live")
+@limiter.exempt
 async def health_live():
     return {"status": "ok"}
 
@@ -228,6 +230,7 @@ _HEALTH_CACHE_SECONDS = 5.0
 
 
 @app.get("/health")
+@limiter.exempt
 async def health():
     """The deep check opens database, Redis and Temporal connections and is
     public, so a burst of calls shares one result for a few seconds."""

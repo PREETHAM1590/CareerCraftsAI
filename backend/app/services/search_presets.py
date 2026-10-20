@@ -568,8 +568,3 @@ def build_url(
 def presets_for_region(region: str) -> list[SearchPreset]:
     """Return all presets for a region: 'india', 'global', 'remote'."""
     return [p for p in SEARCH_PRESETS if p.get("region") == region]
-
-
-def dorks_for_engine(engine: str) -> list[GoogleDork]:
-    """Return all dorks that target a specific search engine."""
-    return [d for d in GOOGLE_DORKS if d.get("engine") == engine]

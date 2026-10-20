@@ -280,6 +280,8 @@ async def delete_clerk_user(
     by the same Clerk identity signing back in.
     """
     if not settings.CLERK_SECRET_KEY:
+        if strict:
+            raise RuntimeError("CLERK_SECRET_KEY is required for account erasure")
         logger.warning(
             "Skipping Clerk user deletion for %s — CLERK_SECRET_KEY not configured", subject
         )

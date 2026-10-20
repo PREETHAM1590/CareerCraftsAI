@@ -333,3 +333,128 @@ def test_shared_work_mode_treats_hybrid_separately_from_remote():
     row = _job(1, remote="hybrid", location="Bengaluru (hybrid/remote)")
     assert cat.matches_query(row, {"titles": ["Backend"], "remote": "hybrid"})
     assert not cat.matches_query(row, {"titles": ["Backend"], "remote": "remote"})
+
+
+@pytest.mark.asyncio
+async def test_live_search_fans_out_roles_and_cities_with_shared_predicate():
+    seen = []
+
+    def adapter(role, city, count):
+        seen.append((role, city))
+        return [_raw(len(seen)) | {"title": role, "location": city}]
+
+    jobs, warnings = await _search(
+        ["jobspy"],
+        AsyncMock(return_value=([], [])),
+        adapter,
+        AsyncMock(),
+        titles=["Backend Engineer", "Data Scientist"],
+        locations=["Bengaluru", "Hyderabad"],
+    )
+    assert set(seen) == {
+        (role, city)
+        for role in ("Backend Engineer", "Data Scientist")
+        for city in ("Bengaluru", "Hyderabad")
+    }
+    assert len(jobs) == 4 and not warnings
+
+
+@pytest.mark.asyncio
+async def test_overall_budget_preserves_completed_source_results(monkeypatch):
+    import time
+
+    def adapter(role, city, count):
+        if city == "Hyderabad":
+            time.sleep(0.15)
+        return [_raw(1) | {"location": city}]
+
+    monkeypatch.setattr(cat, "search_catalog", AsyncMock(return_value=([], [])))
+    monkeypatch.setattr(cat, "write_through", AsyncMock())
+    monkeypatch.setattr(svc, "_ADAPTERS", {"jobspy": adapter})
+    jobs, warnings = await svc.search_all_platforms(
+        {"titles": ["Backend"], "locations": ["Bengaluru", "Hyderabad"]},
+        ["jobspy"],
+        timeout_s=0.05,
+    )
+    assert [j["location"] for j in jobs] == ["Bengaluru"]
+    assert any("budget" in warning for warning in warnings)
+
+
+def test_timed_out_workers_keep_capacity_across_event_loops(monkeypatch):
+    import asyncio
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    release = threading.Event()
+    started = threading.Event()
+    calls = []
+
+    def adapter(role, city, count):
+        calls.append(city)
+        started.set()
+        assert release.wait(3)
+        return [_raw(1) | {"location": city}]
+
+    monkeypatch.setattr(cat, "search_catalog", AsyncMock(return_value=([], [])))
+    monkeypatch.setattr(cat, "write_through", AsyncMock())
+    monkeypatch.setattr(svc, "_ADAPTERS", {"jobspy": adapter})
+    monkeypatch.setattr(svc, "_ADAPTER_TIMEOUT_SEC", {"jobspy": 0.05})
+    query = {"titles": ["Backend"], "locations": ["Bengaluru"]}
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        monkeypatch.setattr(svc, "_ADAPTER_EXECUTOR", executor)
+        try:
+            jobs, warnings = asyncio.run(svc.search_all_platforms(query, ["jobspy"]))
+            assert started.is_set()
+            assert not jobs and any("TimeoutError" in w for w in warnings)
+            # The first event loop is closed, but its worker still owns the thread, so
+            # the second search only queues and times out.
+            jobs, warnings = asyncio.run(svc.search_all_platforms(query, ["jobspy"], timeout_s=0.1))
+            assert not jobs and warnings
+            assert calls == ["Bengaluru"]
+        finally:
+            release.set()
+        # Wait for completion/callback before checking recovery on a third loop.
+        executor.submit(lambda: None).result(timeout=3)
+        jobs, warnings = asyncio.run(svc.search_all_platforms(query, ["jobspy"]))
+        assert len(jobs) == 1 and not warnings
+        assert len(calls) == 2
+
+
+@pytest.mark.parametrize("role", ["QA", "UX", "PM", "AI", "ML", "C#"])
+def test_short_role_alternatives_never_match_unrelated_jobs(role):
+    query = {"titles": [role, "Backend Engineer"]}
+    assert cat.matches_query(_job(1, title=f"Senior {role} Engineer"), query)
+    assert cat.matches_query(_job(2, title="Backend Engineer"), query)
+    assert not cat.matches_query(_job(3, title="Financial Analyst"), query)
+    assert not cat.matches_query(_job(4, title=f"prefix{role}suffix"), query)
+    assert not cat.matches_query(
+        _job(5, title="Software Engineer"), {"titles": [f"{role} Engineer"]}
+    )
+
+
+def test_stopword_only_role_does_not_disable_other_alternatives():
+    query = {"titles": ["the job", "Backend Engineer"]}
+    assert not cat.matches_query(_job(1, title="Financial Analyst"), query)
+    assert cat.matches_query(_job(2, title="Backend Engineer"), query)
+
+
+@pytest.mark.asyncio
+async def test_catalog_sql_prefilter_keeps_short_role_alternatives():
+    db = MagicMock()
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = [
+        _job(1, title="QA Analyst"),
+        _job(2, title="Backend Engineer"),
+    ]
+    db.execute = AsyncMock(return_value=result)
+    session = MagicMock()
+    session.__aenter__ = AsyncMock(return_value=db)
+    session.__aexit__ = AsyncMock(return_value=False)
+    with patch.object(cat, "AsyncSessionLocal", lambda: session):
+        jobs, _ = await cat.search_catalog(
+            {"titles": ["QA", "Backend Engineer"]}, [], live_platforms=["jobspy"]
+        )
+    assert db.execute.await_args.args[1]["title_0_0"] == r"(?<!\w)qa(?!\w)"
+    assert db.execute.await_args.args[1]["title_1_0"] == "backend"
+    assert db.execute.await_args.args[1]["title_1_1"] == "engineer"
+    assert {job["title"] for job in jobs} == {"QA Analyst", "Backend Engineer"}

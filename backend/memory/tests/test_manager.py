@@ -7,18 +7,15 @@ runs offline without a real database or Redis instance.
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import UUID, uuid4
+from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
 
 import pytest
-import pytest_asyncio
 
 from memory.embedder import MemoryEmbedder
 from memory.manager import MemoryManager
-from memory.models import AgentContext, Episode, Learning, Memory
+from memory.models import AgentContext, Episode, Memory
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -416,6 +413,6 @@ class TestEmbeddingFallback:
         # INSERT args: sql, user_id, memory_type, content, embedding ($4), source_agent, confidence
         # Index 0=sql, 1=user_id, 2=memory_type, 3=content, 4=embedding
         embedding_param = insert_call_args[4]
-        assert embedding_param is None, (
-            f"Expected NULL embedding param when all zeros, got: {embedding_param!r}"
-        )
+        assert (
+            embedding_param is None
+        ), f"Expected NULL embedding param when all zeros, got: {embedding_param!r}"

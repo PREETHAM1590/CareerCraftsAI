@@ -5,9 +5,15 @@ import hashlib
 import json
 import logging
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 logger = logging.getLogger(__name__)
+# Process-wide bound on live adapter threads. A timed-out synchronous worker keeps
+# its thread until it finishes, so this (not the caller's timeout) caps the threads.
+# Sized for several concurrent users: JobSpy alone holds a thread for ~40-75s.
+_ADAPTER_EXECUTOR = ThreadPoolExecutor(max_workers=16, thread_name_prefix="job-source")
+
 
 # Per-platform budget: no single source may stall a run.
 PLATFORM_TIMEOUT_SEC = 25
@@ -180,7 +186,7 @@ async def search_all_platforms(
         platforms: public families/source ids (served from the shared catalog)
             and/or _ADAPTERS keys (live). Unknown names are skipped with a
             warning. Defaults to DEFAULT_PLATFORMS.
-        timeout_s: unused; each platform is individually capped at
+        timeout_s: overall live-search budget; each platform is also capped at
             PLATFORM_TIMEOUT_SEC.
 
     Returns:
@@ -248,36 +254,42 @@ async def search_all_platforms(
 
     # 2. Shortfall: live adapters fill the gap.
     titles = query.get("titles") or []
-    q = " ".join(titles) if titles else str(query.get("search_query", "software engineer"))
+    queries = (
+        list(dict.fromkeys(titles))
+        if titles
+        else [str(query.get("search_query", "software engineer"))]
+    )
     fetch_n = max(need, LIVE_FETCH_LIMIT)
 
     from app.services import search_cache
 
-    async def run_one(name: str, location: str) -> tuple[list[dict], bool]:
-        """One adapter for one city -> (jobs, served_from_cache)."""
+    async def run_one(name: str, location: str, q: str) -> tuple[list[dict], bool]:
+        """One adapter for a role/city -> (jobs, served_from_cache)."""
         adapter = _ADAPTERS[name]
         timeout = _ADAPTER_TIMEOUT_SEC.get(name, PLATFORM_TIMEOUT_SEC)
 
         async def compute():
+            # Queue time in the bounded executor counts toward the source timeout.
             raw = await asyncio.wait_for(
-                asyncio.to_thread(adapter, q, location, fetch_n), timeout=timeout
+                asyncio.get_running_loop().run_in_executor(
+                    _ADAPTER_EXECUTOR, adapter, q, location, fetch_n
+                ),
+                timeout=timeout,
             )
             jobs = [_normalize(job, name) for job in (raw or [])]
-            # An empty result may be a block or blip upstream; don't pin it.
+            # An empty result may be an upstream block or blip; don't pin it.
             return jobs, (json.dumps(jobs, default=str) if jobs else None)
 
-        # The adapter gets q verbatim and may rank by word order, so the key
-        # keeps the order (only case and spacing are normalised).
+        # Adapters receive each role verbatim; preserve word order in its key.
         key = f"{search_cache.PREFIX}:live:{name}:" + search_cache.query_hash(
             {"q": " ".join(q.lower().split()), "place": location.strip().lower(), "n": fetch_n}
         )
         try:
             if name in NO_CATALOG:
-                # The public demo adapter: unauthenticated input never gets a
-                # shared cache entry (bounded Redis use, like the catalog rule).
+                # Public demo input never populates the shared cache.
                 return (await compute())[0], False
             jobs, cached = await search_cache.get_or_compute(
-                "live", key, search_cache.LIVE_TTL, compute, wait_s=timeout
+                "live", key, search_cache.LIVE_TTL, compute, wait_s=max(timeout, timeout_s)
             )
             return (json.loads(cached), True) if cached is not None else (jobs, False)
         except Exception as exc:
@@ -285,21 +297,34 @@ async def search_all_platforms(
             warnings.append(f"{name} failed: {type(exc).__name__}")
             return [], False
 
-    # No outer timeout: each platform is individually capped (see
-    # _ADAPTER_TIMEOUT_SEC) and run_one never raises, so gather always
-    # resolves with partial results. (An outer wait_for would cancel
-    # completed sources and discard their jobs.)
-    # Fan out over every requested location, not just the first — a
-    # multi-location search previously silently dropped all but one city.
-    pairs = [(name, location) for name in valid_names for location in locations]
-    results = await asyncio.gather(*(run_one(n, loc) for n, loc in pairs))
+    # A shared executor bounds synchronous work even after cancellation. The
+    # overall budget keeps multi-role/city expansion within the activity deadline;
+    # completed sources survive a timeout and missing sources are reported.
+    pairs = [(name, location, q) for name in valid_names for location in locations for q in queries]
+    tasks = [asyncio.create_task(run_one(n, loc, q)) for n, loc, q in pairs]
+    try:
+        if tasks:
+            _, pending = await asyncio.wait(tasks, timeout=max(0, timeout_s))
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            if pending:
+                warnings.append(
+                    f"Search time budget reached; {len(pending)} source queries incomplete"
+                )
+        results = [task.result() if not task.cancelled() else ([], False) for task in tasks]
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
     per_source = [jobs for jobs, _ in results]
 
     # 3. Write-through so the next user's search finds these in the catalog.
     # write_through never raises; a failed catalog write must not fail the search.
-    # Cached groups were already written through by the search that fetched them.
     by_name: dict[str, list[dict]] = {}
-    for (name, _), (group, from_cache) in zip(pairs, results, strict=True):
+    for (name, _, _), (group, from_cache) in zip(pairs, results, strict=True):
         if not from_cache:
             by_name.setdefault(name, []).extend(group)
     await asyncio.gather(

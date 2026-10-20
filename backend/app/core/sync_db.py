@@ -95,8 +95,8 @@ def _get_sync_factory():
                 sync_url = settings.DATABASE_URL.replace("+asyncpg", "+psycopg")
                 _sync_engine = create_engine(
                     sync_url,
-                    pool_size=5,
-                    max_overflow=10,
+                    pool_size=settings.SYNC_DB_POOL_SIZE,
+                    max_overflow=settings.SYNC_DB_MAX_OVERFLOW,
                     pool_pre_ping=True,
                 )
                 event.listen(_sync_engine, "connect", _set_lock_timeout)

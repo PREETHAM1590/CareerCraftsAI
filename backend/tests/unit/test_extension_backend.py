@@ -268,7 +268,12 @@ async def test_pairing_stores_only_a_hash_and_authenticates_the_raw_token():
 
     lookup = MagicMock()
     lookup.scalar_one_or_none.return_value = device
-    db.execute = AsyncMock(return_value=lookup)
+    owner_lookup = MagicMock()
+    owner_lookup.scalar_one_or_none.return_value = SimpleNamespace(
+        policy_accepted_at=object(), deletion_scheduled_for=None
+    )
+    db.execute = AsyncMock(side_effect=[lookup, owner_lookup])
+    db.flush = AsyncMock()
     assert await extension_service.authenticate(db, token) is device
     assert device.last_seen_at is not None
     # A Clerk JWT or anything else is never treated as a device token.
@@ -279,10 +284,30 @@ async def test_pairing_stores_only_a_hash_and_authenticates_the_raw_token():
 async def test_extension_can_revoke_its_own_token():
     from app.api.v1.extension import device_revoke_self
 
-    device = SimpleNamespace(revoked_at=None)
+    device = SimpleNamespace(id=uuid.uuid4(), revoked_at=None)
     db = MagicMock()
     db.commit = AsyncMock()
+    db.execute = AsyncMock()
 
     assert await device_revoke_self(device=device, db=db) == {"status": "revoked"}
     assert device.revoked_at is not None
+    # One UPDATE returns the device's claimed tasks to pending.
+    sql = str(db.execute.await_args.args[0])
+    assert "UPDATE extension_tasks" in sql and "device_id" in sql
     db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_claim_locks_device_row_first_and_flags_redelivery():
+    device = SimpleNamespace(id=uuid.uuid4(), user_id=uuid.uuid4())
+    task = SimpleNamespace(status="claimed", device_id=device.id, claimed_at=None)
+    res = MagicMock()
+    res.scalar_one_or_none.return_value = task
+    db = MagicMock()
+    db.execute = AsyncMock(side_effect=[MagicMock(), res])
+    db.commit = AsyncMock()
+    db.refresh = AsyncMock()
+
+    assert await extension_service.claim_next_task(db, device) is task
+    assert "FOR UPDATE" in str(db.execute.await_args_list[0].args[0])
+    assert task.redelivered is True

@@ -98,7 +98,9 @@ def extract_text(content: bytes, filename: str) -> str:
 
 
 def chunk_text(text: str) -> list[str]:
-    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=app_settings.RAG_CHUNK_SIZE, chunk_overlap=app_settings.RAG_CHUNK_OVERLAP
+    )
     return splitter.split_text(text)
 
 
@@ -295,9 +297,10 @@ def retrieve(
     doc_type: str,
     query: str,
     model_settings,
-    k: int = 5,
+    k: int | None = None,
 ) -> list[Document]:
     """Retrieve top-k relevant chunks."""
+    k = app_settings.RAG_TOP_K if k is None else k
     if doc_type == "resume":
         # A resume the member picked for this run replaces similarity search:
         # Restrict context to that selection regardless of similarity ranking.

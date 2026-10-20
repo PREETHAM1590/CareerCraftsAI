@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, model_validator
 from uuid import UUID
+
+from pydantic import BaseModel, Field, model_validator
 
 
 class JobSearchQuerySchema(BaseModel):
@@ -12,8 +13,8 @@ class JobSearchQuerySchema(BaseModel):
     from preferences/resume in the endpoint.
     """
 
-    titles: list[str] = Field(default_factory=list)
-    locations: list[str] = Field(default_factory=list)
+    titles: list[str] = Field(default_factory=list, max_length=5)
+    locations: list[str] = Field(default_factory=list, max_length=5)
     platforms: list[str] = Field(default_factory=list, max_length=100)
     resume_id: UUID | None = None
     persona_id: UUID | None = None

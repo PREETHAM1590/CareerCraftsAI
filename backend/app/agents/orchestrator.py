@@ -3,10 +3,23 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any, Callable
+from collections.abc import Callable
 
 from langgraph.graph import END, START, StateGraph
 
+# ---- Agent node function imports ----
+from app.agents.auto_apply_pipeline import run_auto_apply_pipeline
+from app.agents.company_research_agent import company_research_node
+from app.agents.cover_letter_agent import cover_letter_node
+from app.agents.email_agent import email_agent_node
+from app.agents.email_monitor_agent import email_monitor_node
+from app.agents.interview_coach_agent import evaluate_answer_node, start_session_node
+from app.agents.interview_prep_agent import interview_prep_agent_node
+from app.agents.job_search import job_search_agent_node
+from app.agents.linkedin_agent import linkedin_agent_node
+from app.agents.linkedin_outreach_agent import linkedin_outreach_agent_node
+from app.agents.resume_agent import resume_agent_node
+from app.agents.salary_agent import salary_report_node
 from app.agents.state import AgentState
 from app.core.event_bus import emit
 
@@ -41,20 +54,6 @@ def _route_task(state: AgentState) -> str:
     task = (state.get("task_type") or state.get("task") or "").strip()
     return TASK_ROUTES.get(task, END)
 
-
-# ---- Agent node function imports ----
-from app.agents.resume_agent import resume_agent_node
-from app.agents.job_search import job_search_agent_node
-from app.agents.cover_letter_agent import cover_letter_node
-from app.agents.linkedin_agent import linkedin_agent_node
-from app.agents.email_agent import email_agent_node
-from app.agents.interview_coach_agent import start_session_node, evaluate_answer_node
-from app.agents.interview_prep_agent import interview_prep_agent_node
-from app.agents.company_research_agent import company_research_node
-from app.agents.salary_agent import salary_report_node
-from app.agents.linkedin_outreach_agent import linkedin_outreach_agent_node
-from app.agents.email_monitor_agent import email_monitor_node
-from app.agents.auto_apply_pipeline import run_auto_apply_pipeline
 
 # ---- Wrapper nodes for agents with non-standard signatures ----
 

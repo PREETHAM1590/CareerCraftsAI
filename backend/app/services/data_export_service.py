@@ -15,7 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import Base
 from app.models.db import Notification, NotificationDelivery, User, UserDocument
-from app.services.account_deletion_service import _MEMORY_DELETES
+from app.services.document_lifecycle import is_text_artifact
+from app.services.memory_lifecycle import MEMORY_DELETES
 
 
 def _json_safe(value: object) -> object:
@@ -66,7 +67,7 @@ async def build_user_data_export(db: AsyncSession, user: User) -> bytes:
 
         # Standalone memory tables are not ORM models. Use the same fixed table
         # ownership registry as erasure; SQL names never come from user input.
-        for table in _MEMORY_DELETES:
+        for table in MEMORY_DELETES:
             exists = (
                 await db.execute(text("SELECT to_regclass(:table)"), {"table": table})
             ).scalar()
@@ -93,6 +94,10 @@ async def build_user_data_export(db: AsyncSession, user: User) -> bytes:
         )
         unavailable = []
         for document in documents:
+            # Generated letters are text artifacts; no binary was uploaded.
+            if is_text_artifact(document):
+                zf.writestr(f"documents/{document.id}.md", document.raw_text)
+                continue
             try:
                 data = download_file(document.storage_path, str(user.id))
             except RuntimeError:

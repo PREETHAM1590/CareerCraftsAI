@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import text
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 pytestmark = pytest.mark.skipif(
@@ -26,13 +27,24 @@ _TABLES = (
 
 
 @pytest.fixture
-async def factory():
+async def factory(monkeypatch):
+    from unittest.mock import AsyncMock
+
     from app.agents.memory.manager import _DDL
+    from app.services import memory_lifecycle
+
+    monkeypatch.setattr(memory_lifecycle, "delete_memory_cache", AsyncMock())
 
     engine = create_async_engine(ASYNC_URL)
     async with engine.begin() as connection:
         # other suites create id/user_id-only stubs of these tables; this one
         # needs the real columns
+        await connection.execute(
+            text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS memory_generation "
+                "integer NOT NULL DEFAULT 0"
+            )
+        )
         for table in _TABLES:
             await connection.execute(text(f"DROP TABLE IF EXISTS {table}"))  # noqa: S608
         for statement in _DDL.split(";"):
@@ -46,6 +58,12 @@ async def factory():
 
 
 async def _seed(db, uid: str):
+    from app.models.db import User
+
+    # Use mapped defaults with both migrated and ORM-created suite schemas.
+    await db.execute(
+        insert(User).values(id=uuid.UUID(uid), email=f"{uid}@example.test").on_conflict_do_nothing()
+    )
     await db.execute(
         text(
             "INSERT INTO agent_memory_learnings (user_id, agent_type, learning) "

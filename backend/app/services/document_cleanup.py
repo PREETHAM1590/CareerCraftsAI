@@ -5,6 +5,7 @@ import logging
 
 from sqlalchemy import text
 
+from app.services.document_lifecycle import is_text_artifact
 from app.services.storage_service import delete_file
 
 logger = logging.getLogger(__name__)
@@ -20,7 +21,7 @@ async def enqueue_document_cleanup(db, doc) -> None:
         {
             "document_id": doc.id,
             "user_id": doc.user_id,
-            "storage_path": doc.storage_path,
+            "storage_path": "" if is_text_artifact(doc) else doc.storage_path,
             "filename": doc.filename,
         },
     )
@@ -65,7 +66,9 @@ async def sweep_document_cleanup(limit: int = 100) -> int:
                 if row is None:
                     await db.rollback()
                     continue
-                await asyncio.to_thread(delete_file, row["storage_path"], str(row["user_id"]))
+                legacy_text_path = f"cover_letters/{row['user_id']}/{document_id}.md"
+                if row["storage_path"] and row["storage_path"] != legacy_text_path:
+                    await asyncio.to_thread(delete_file, row["storage_path"], str(row["user_id"]))
                 exists = (
                     await db.execute(text("SELECT to_regclass('public.langchain_pg_embedding')"))
                 ).scalar()

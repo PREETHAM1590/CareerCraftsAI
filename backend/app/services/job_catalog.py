@@ -120,7 +120,7 @@ async def write_through(raw_jobs: list[dict], platform: str) -> int:
         return 0
 
 
-async def refresh_source(source: Source, query="", force=False) -> tuple[list[dict], str | None]:
+async def refresh_source(source: Source, query="") -> tuple[list[dict], str | None]:
     now = datetime.now(UTC)
     async with AsyncSessionLocal() as db:
         await db.execute(
@@ -307,16 +307,29 @@ def _location_ok(job: dict, locations: list[str]) -> bool:
     return False
 
 
+def _role_patterns(query: dict) -> list[list[str]]:
+    """One conjunction per alternative; share literal matching across Python and SQL."""
+    alternatives = query.get("titles") or [query.get("search_query") or "software engineer"]
+    groups = []
+    for role in alternatives:
+        patterns = []
+        for word in role.lower().split():
+            if word in _STOPWORDS:
+                continue
+            literal = re.escape(word)
+            patterns.append(r"(?<!\w)" + literal + r"(?!\w)" if len(word) <= 2 else literal)
+        if patterns:
+            groups.append(patterns)
+    return groups
+
+
 def matches_query(job: dict, query: dict) -> bool:
     """The same relevance contract for catalog and live results."""
-    terms = (
-        (" ".join(query.get("titles") or []) or query.get("search_query") or "software engineer")
-        .lower()
-        .split()
-    )
-    keywords = [word for word in terms if len(word) > 2 and word not in _STOPWORDS]
+    title = str(job.get("title") or "").lower()
     locations = [str(x) for x in (query.get("locations") or [query.get("location") or ""]) if x]
-    if not all(word in str(job.get("title") or "").lower() for word in keywords):
+    if not any(
+        all(re.search(pattern, title) for pattern in role) for role in _role_patterns(query)
+    ):
         return False
     if not _location_ok(job, locations):
         return False
@@ -423,12 +436,29 @@ async def _catalog_rows_by_id(ids: list[str], source_ids: list[str]) -> list[dic
     return sorted(rows, key=lambda row: order.get(row.get("job_id"), len(order)))
 
 
+# Only generated parameter names are formatted in ({title_predicate}); all query
+# text stays bound as escaped literal regex data.
+_CATALOG_SQL = """SELECT c.data || jsonb_build_object('occurrences',
+            jsonb_agg(jsonb_build_object('source_id',o.source_id,'url',c.url)),
+            'last_seen_at',c.last_seen_at) FROM job_catalog c
+            JOIN job_source_occurrences o ON o.job_id=c.job_id
+            WHERE o.source_id=ANY(:sources) AND c.last_seen_at > :fresh
+            AND (c.posted_at IS NULL OR c.posted_at >= :cutoff)
+            AND ({title_predicate})
+            GROUP BY c.job_id ORDER BY c.posted_at DESC NULLS LAST LIMIT 2000"""
+
+
 async def _search_catalog_db(query: dict, public, live_ids, relevant_of):
-    terms = (
-        (" ".join(query.get("titles") or []) or query.get("search_query") or "software engineer")
-        .lower()
-        .split()
-    )
+    title_predicates = []
+    title_params = {}
+    for role_index, patterns in enumerate(_role_patterns(query)):
+        parts = []
+        for term_index, pattern in enumerate(patterns):
+            name = f"title_{role_index}_{term_index}"
+            parts.append(f"lower(c.title) ~ :{name}")
+            title_params[name] = pattern
+        title_predicates.append("(" + " AND ".join(parts) + ")")
+    title_predicate = " OR ".join(title_predicates) or "FALSE"
     days = query.get("posted_within_days", 30)
     need = int(query.get("max_results") or 10)
 
@@ -438,17 +468,10 @@ async def _search_catalog_db(query: dict, public, live_ids, relevant_of):
                 await db.execute(
                     # ponytail: LIMIT 2000 is a safety ceiling on rows read per search, not a
                     # product cap; page by posted_at if a query ever saturates it.
-                    text("""SELECT c.data || jsonb_build_object('occurrences',
-            jsonb_agg(jsonb_build_object('source_id',o.source_id,'url',c.url)),
-            'last_seen_at',c.last_seen_at) FROM job_catalog c
-            JOIN job_source_occurrences o ON o.job_id=c.job_id
-            WHERE o.source_id=ANY(:sources) AND c.last_seen_at > :fresh
-            AND (c.posted_at IS NULL OR c.posted_at >= :cutoff)
-            AND lower(c.title) LIKE ANY(:terms)
-            GROUP BY c.job_id ORDER BY c.posted_at DESC NULLS LAST LIMIT 2000"""),
+                    text(_CATALOG_SQL.format(title_predicate=title_predicate)),  # nosec B608
                     {
                         "sources": [s.id for s in public] + live_ids,
-                        "terms": ["%" + t + "%" for t in terms if len(t) > 2],
+                        **title_params,
                         "fresh": datetime.now(UTC) - timedelta(days=CATALOG_FRESH_DAYS),
                         "cutoff": datetime.now(UTC) - timedelta(days=days),
                     },

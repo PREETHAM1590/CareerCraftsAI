@@ -141,7 +141,7 @@ async def test_catalog_version_bump(redis):
 def test_query_normalisation_ignores_case_and_word_order():
     a = {"titles": ["Python Developer"], "locations": ["Bangalore", "Remote"]}
     b = {"titles": ["developer python"], "locations": ["remote ", "BANGALORE"]}
-    assert search_cache.terms_of(a) == search_cache.terms_of(b) == ["developer", "python"]
+    assert search_cache.terms_of(a) == search_cache.terms_of(b) == [["developer", "python"]]
     assert search_cache.places_of(a) == search_cache.places_of(b) == ["bangalore", "remote"]
     assert search_cache.terms_of({"titles": ["Java Developer"]}) != search_cache.terms_of(a)
     assert search_cache.query_hash({"x": 1}) != search_cache.query_hash({"x": 2})
@@ -322,3 +322,52 @@ async def test_live_key_keeps_word_order_and_demo_adapter_is_never_cached(redis,
         )
     assert len(seen) == 4
     assert not await redis.keys("*:live:open_apis_keyless:*")
+
+
+def test_catalog_cache_keys_preserve_alternative_role_groups():
+    alternatives = {"titles": ["Python Developer", "Data Engineer"]}
+    reordered = {"titles": ["engineer data", "developer PYTHON"]}
+    combined = {"titles": ["Python Developer Data Engineer"]}
+    normalized = search_cache.terms_of(alternatives)
+    assert normalized == search_cache.terms_of(reordered)
+    assert search_cache.query_hash({"terms": normalized}) != search_cache.query_hash(
+        {"terms": search_cache.terms_of(combined)}
+    )
+
+
+@pytest.mark.asyncio
+async def test_live_role_city_fanout_reuses_each_cached_group(redis, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from app.services import job_catalog
+    from app.services import job_search_service as svc
+
+    calls = []
+
+    def adapter(role, city, count):
+        calls.append((role, city))
+        return [
+            {
+                "title": role,
+                "company": "Acme",
+                "location": city,
+                "url": f"https://example.com/{len(calls)}",
+            }
+        ]
+
+    write = AsyncMock()
+    monkeypatch.setattr(job_catalog, "search_catalog", AsyncMock(return_value=([], [])))
+    monkeypatch.setattr(job_catalog, "write_through", write)
+    monkeypatch.setitem(svc._ADAPTERS, "fake", adapter)
+    query = {
+        "titles": ["Backend Engineer", "Data Scientist"],
+        "locations": ["Bengaluru", "Hyderabad"],
+    }
+    first, warnings = await svc.search_all_platforms(query, ["fake"])
+    assert len(first) == 4 and not warnings
+    second, warnings = await svc.search_all_platforms(query, ["fake"])
+    assert not warnings
+    assert {job["url"] for job in first} == {job["url"] for job in second}
+    assert set(calls) == {(r, c) for r in query["titles"] for c in query["locations"]}
+    assert len(calls) == 4
+    write.assert_awaited_once()

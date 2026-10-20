@@ -24,14 +24,13 @@ import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.applications.answer_resolver import resolve_fields
 from app.applications.models import ApplicationField
 from app.applications.question_normalizer import normalize_question
 from app.applications.schema_extractor import extract_fields
-from app.services.document_lifecycle import RESUME_DOCUMENT_TYPES
 from app.models.db import (
     AgentRun,
     CandidateAnswer,
@@ -40,6 +39,7 @@ from app.models.db import (
     User,
     UserDocument,
 )
+from app.services.document_lifecycle import RESUME_DOCUMENT_TYPES
 
 logger = logging.getLogger(__name__)
 
@@ -92,9 +92,37 @@ async def authenticate(db: AsyncSession, token: str) -> ExtensionDevice | None:
         )
     ).scalar_one_or_none()
     if device is not None:
+        from app.api.v1.deps import require_eligible_owner
+
+        # Persist activity first: read-only device routes never commit.
         device.last_seen_at = datetime.now(UTC)
         await db.commit()
+        # Fence erasure for the rest of the request. FOR KEY SHARE makes erasure's
+        # FOR UPDATE ... SKIP LOCKED pass this owner by, without blocking child FK
+        # checks, ordinary users-row updates or memory_access's NO KEY UPDATE.
+        owner = (
+            await db.execute(
+                select(User)
+                .where(User.id == device.user_id)
+                .with_for_update(read=True, key_share=True)
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        if owner is None:
+            return None
+        require_eligible_owner(owner)
     return device
+
+
+async def revoke_device(db: AsyncSession, device: ExtensionDevice) -> None:
+    """Revoke and return the device's unacknowledged claims to the pending pool."""
+    device.revoked_at = datetime.now(UTC)
+    await db.execute(
+        update(ExtensionTask)
+        .where(ExtensionTask.device_id == device.id, ExtensionTask.status == "claimed")
+        .values(status="pending", device_id=None, claimed_at=None)
+    )
+    await db.commit()
 
 
 async def has_active_device(db: AsyncSession, user_id: uuid.UUID) -> bool:
@@ -128,25 +156,39 @@ def task_view(task: ExtensionTask) -> dict:
 
 
 async def claim_next_task(db: AsyncSession, device: ExtensionDevice) -> ExtensionTask | None:
-    """Oldest pending task of this device's user, claimed atomically so two
-    browsers of the same user never work on one application."""
+    """Recover this device's unacknowledged claim before taking pending work.
+
+    The persisted claim is the retry record: every retry re-signals the workflow.
+    A lost signal or HTTP response therefore cannot strand the task.
+    """
+    # Serialize this device's claims so a locked claimed row can't be skipped
+    # in favour of a second pending task.
+    await db.execute(
+        select(ExtensionDevice.id).where(ExtensionDevice.id == device.id).with_for_update()
+    )
     task = (
         await db.execute(
             select(ExtensionTask)
             .where(
                 ExtensionTask.user_id == device.user_id,
-                ExtensionTask.status == "pending",
+                or_(
+                    ExtensionTask.status == "pending",
+                    and_(ExtensionTask.status == "claimed", ExtensionTask.device_id == device.id),
+                ),
             )
-            .order_by(ExtensionTask.created_at)
+            .order_by((ExtensionTask.status == "claimed").desc(), ExtensionTask.created_at)
             .limit(1)
             .with_for_update(skip_locked=True)
         )
     ).scalar_one_or_none()
     if task is None:
         return None
+    # Status only moves past "claimed" on the first progress event, so a task still
+    # "claimed" here was never acknowledged; the route re-signals but skips the event.
+    task.redelivered = task.status == "claimed"
     task.status = "claimed"
     task.device_id = device.id
-    task.claimed_at = datetime.now(UTC)
+    task.claimed_at = task.claimed_at or datetime.now(UTC)
     await db.commit()
     await db.refresh(task)
     return task
