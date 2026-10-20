@@ -38,6 +38,17 @@ FAMILIES = {
     "google_cse",
     "rss",
     "jsonld",
+    "workday",
+    "personio",
+    "bamboohr",
+    "breezy",
+    "pinpoint",
+    "rippling",
+    "teamtailor",
+    "jobscore",
+    "trakstar",
+    "hibob",
+    "gem",
 }
 
 
@@ -141,6 +152,17 @@ ATS_HOSTS = (
     "icims.com",
     "jobvite.com",
     "bamboohr.com",
+    "myworkdaysite.com",
+    "personio.com",
+    "personio.de",
+    "breezy.hr",
+    "pinpointhq.com",
+    "rippling.com",
+    "teamtailor.com",
+    "jobscore.com",
+    "trakstar.com",
+    "hibob.com",
+    "gem.com",
 )
 _COMPANY_SUFFIX = re.compile(
     r"\b(inc|llc|ltd|limited|pvt|private|corp|corporation|co|gmbh|technologies|technology|"
@@ -542,9 +564,369 @@ def _ashby_salary(job: dict) -> str:
     return ""
 
 
+# ── keyless ATS boards (Workday, Personio, BambooHR, ...) ─────────────────
+
+_WORKDAY_PAGE = 20
+_WORKDAY_MAX_PAGES = 10  # bounds one source to 200 postings per refresh
+_WORKDAY_HOST = re.compile(r"[a-z0-9-]+(?:\.wd\d+)?\.myworkday(?:jobs|site)\.com")
+_WORKDAY_AGO = re.compile(r"(\d+)(\+?)\s*days?\s+ago")
+
+
+def workday_posted(text) -> str | None:
+    """`Posted 3 Days Ago` / `Posted Today` as an ISO date; `30+ Days Ago` and
+    anything unrecognised are unknown rather than guessed."""
+    value = str(text or "").lower()
+    today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    if "yesterday" in value:
+        return (today - timedelta(days=1)).isoformat()
+    if "today" in value:
+        return today.isoformat()
+    match = _WORKDAY_AGO.search(value)
+    if match and not match.group(2):
+        return (today - timedelta(days=int(match.group(1)))).isoformat()
+    return None
+
+
+async def _fetch_workday(source: Source, query: str, cursor: str | None) -> Page:
+    """One page of a Workday CXS board. Tenant is `host|tenant|site`; cursor is
+    the listing offset. Per-job detail requests are skipped (one request per
+    posting is too costly for a refresh), so descriptions are empty."""
+    try:
+        host, tenant, site = source.tenant.split("|")
+    except ValueError:
+        raise ValueError("Workday tenant must be host|tenant|site") from None
+    if not (
+        _WORKDAY_HOST.fullmatch(host)
+        and re.fullmatch(r"[A-Za-z0-9_-]{1,100}", tenant)
+        and re.fullmatch(r"[A-Za-z0-9_-]{1,100}", site)
+    ):
+        raise ValueError("Invalid Workday source")
+    offset = int(cursor or "0")
+    if offset < 0 or offset >= _WORKDAY_PAGE * _WORKDAY_MAX_PAGES:
+        raise ValueError("Pagination limit exceeded")
+    response = await public_get(
+        f"https://{host}/wday/cxs/{tenant}/{site}/jobs",
+        json_body={
+            "appliedFacets": {},
+            "limit": _WORKDAY_PAGE,
+            "offset": offset,
+            "searchText": query or "",
+        },
+    )
+    response.raise_for_status()
+    data = response.json()
+    postings = data.get("jobPostings") or []
+    rows = [
+        {
+            "id": j.get("externalPath"),
+            "title": j.get("title"),
+            "company": tenant,
+            "url": f"https://{host}/en-US/{site}{j.get('externalPath')}",
+            "location": j.get("locationsText"),
+            "posted_at": workday_posted(j.get("postedOn")),
+        }
+        for j in postings
+        if str(j.get("externalPath") or "").startswith("/")
+    ]
+    nxt = offset + _WORKDAY_PAGE
+    # Some tenants report `total` on the first page only (0 afterwards), so a
+    # full page with no total keeps paging until an empty one.
+    total = int(data.get("total") or 0)
+    more = len(postings) == _WORKDAY_PAGE and (not total or nxt < total)
+    more = more and nxt < _WORKDAY_PAGE * _WORKDAY_MAX_PAGES
+    return Page([job for raw in rows if (job := normalize(raw, source))], str(nxt) if more else None)
+
+
+def _rfc822(value) -> str | None:
+    from email.utils import parsedate_to_datetime
+
+    try:
+        return parsedate_to_datetime(value).isoformat() if value else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _xml_root(text: str):
+    from defusedxml import ElementTree
+
+    try:
+        return ElementTree.fromstring(text)
+    except ElementTree.ParseError:
+        return None
+
+
+def parse_personio(xml_text: str, tenant: str) -> list[dict]:
+    root = _xml_root(xml_text)
+    out = []
+    for pos in root.iter("position") if root is not None else []:
+        body = "".join(
+            d.findtext("value") or "" for d in pos.findall("jobDescriptions/jobDescription")
+        )
+        out.append(
+            {
+                "id": pos.findtext("id"),
+                "title": pos.findtext("name"),
+                "company": tenant,
+                "url": f"https://{tenant}.jobs.personio.com/job/{pos.findtext('id')}",
+                "location": pos.findtext("office"),
+                "description": body,
+                "posted_at": pos.findtext("createdAt"),
+            }
+        )
+    return out
+
+
+def parse_teamtailor(xml_text: str, tenant: str) -> list[dict]:
+    root = _xml_root(xml_text)
+    ns = {"tt": "https://teamtailor.com/locations"}
+    out = []
+    for item in root.iter("item") if root is not None else []:
+        places = [n.text for n in item.findall("tt:locations/tt:location/tt:name", ns) if n.text]
+        out.append(
+            {
+                "id": item.findtext("guid") or item.findtext("link"),
+                "title": item.findtext("title"),
+                "company": tenant,
+                "url": (item.findtext("link") or "").strip(),
+                "location": ", ".join(places),
+                "remote": (item.findtext("remoteStatus") or "").strip() == "fully",
+                "description": item.findtext("description"),
+                "posted_at": _rfc822(item.findtext("pubDate")),
+            }
+        )
+    return out
+
+
+def parse_trakstar(xml_text: str, tenant: str) -> list[dict]:
+    root = _xml_root(xml_text)
+    ns = "{https://recruiterbox.com/rss/job/}"
+    out = []
+    for item in root.iter("item") if root is not None else []:
+        link = (item.findtext("link") or "").strip().replace("http://", "https://", 1)
+        out.append(
+            {
+                "id": link.rstrip("/").rsplit("/", 1)[-1],
+                "title": item.findtext("title"),
+                "company": tenant,
+                "url": link,
+                "location": ", ".join(
+                    v
+                    for k in ("City", "State", "Country")
+                    if (v := item.findtext(ns + "location" + k))
+                ),
+                "description": item.findtext("description"),
+                "posted_at": _rfc822(item.findtext("pubDate")),
+            }
+        )
+    return out
+
+
+_KEYLESS_ATS = {
+    "personio",
+    "bamboohr",
+    "breezy",
+    "pinpoint",
+    "rippling",
+    "teamtailor",
+    "jobscore",
+    "trakstar",
+    "hibob",
+    "gem",
+}
+_GEM_LIST = (
+    "query JobBoardList($boardId: String!) { oatsExternalJobPostings(boardId: $boardId) "
+    "{ jobPostings { extId title locations { city isoCountry isRemote } job { locationType } } } }"
+)
+
+
+def _join(*parts) -> str:
+    return ", ".join(str(p) for p in parts if p)
+
+
+async def _fetch_ats_board(source: Source, tenant: str, page: int) -> Page:
+    """Keyless one-request boards. Each returns the whole board (Teamtailor is
+    paged by cursor). BambooHR, Breezy and Rippling list without descriptions:
+    the body costs one more request per posting, which a refresh skips."""
+    family = source.family
+    headers: dict = {}
+    body = None
+    if family == "personio":
+        url = f"https://{tenant}.jobs.personio.com/xml"
+    elif family == "bamboohr":
+        url = f"https://{tenant}.bamboohr.com/careers/list"
+        headers = {"Accept": "application/json"}
+    elif family == "breezy":
+        url = f"https://{tenant}.breezy.hr/json"
+    elif family == "pinpoint":
+        url = f"https://{tenant}.pinpointhq.com/postings.json"
+    elif family == "rippling":
+        url = f"https://ats.rippling.com/api/v1/board/{tenant}/jobs"
+    elif family == "teamtailor":
+        url = f"https://{tenant}.teamtailor.com/jobs.rss?offset={(page - 1) * 100}&per_page=100"
+    elif family == "jobscore":
+        url = f"https://careers.jobscore.com/jobs/{tenant}/feed.json?sort=date&limit=200"
+    elif family == "trakstar":
+        url = f"https://{tenant}.hire.trakstar.com/jobfeeds/{tenant}"
+    elif family == "hibob":
+        url = f"https://{tenant}.careers.hibob.com/api/job-ad"
+        headers = {"Referer": f"https://{tenant}.careers.hibob.com/jobs"}
+    else:  # gem
+        url = "https://jobs.gem.com/api/public/graphql"
+        body = {
+            "operationName": "JobBoardList",
+            "query": _GEM_LIST,
+            "variables": {"boardId": tenant},
+        }
+    response = await public_get(url, headers=headers, json_body=body)
+    response.raise_for_status()
+    next_cursor = None
+    if family == "personio":
+        rows = parse_personio(response.text, tenant)
+        if any(not r["description"] for r in rows):
+            # Posts published only in a non-default locale have an empty body; the
+            # English feed usually has it. Best effort.
+            try:
+                en = await public_get(url + "?language=en")
+                en.raise_for_status()
+                bodies = {r["id"]: r["description"] for r in parse_personio(en.text, tenant)}
+                for r in rows:
+                    r["description"] = r["description"] or bodies.get(r["id"], "")
+            except Exception:  # noqa: BLE001 - the body is optional
+                pass
+    elif family == "teamtailor":
+        rows = parse_teamtailor(response.text, tenant)
+        next_cursor = str(page + 1) if len(rows) >= 100 else None
+    elif family == "trakstar":
+        rows = parse_trakstar(response.text, tenant)
+    elif family == "bamboohr":
+        rows = [
+            {
+                "id": j.get("id"),
+                "title": j.get("jobOpeningName"),
+                "company": tenant,
+                "url": f"https://{tenant}.bamboohr.com/careers/{j.get('id')}",
+                "location": _join(
+                    (j.get("location") or {}).get("city"), (j.get("location") or {}).get("state")
+                ),
+                "remote": bool(j.get("isRemote")) or str(j.get("locationType")) == "1",
+            }
+            for j in response.json().get("result", [])
+        ]
+    elif family == "breezy":
+        rows = [
+            {
+                "id": j.get("id"),
+                "title": j.get("name"),
+                "company": tenant,
+                "url": j.get("url"),
+                "location": _join(
+                    (j.get("location") or {}).get("city"),
+                    ((j.get("location") or {}).get("country") or {}).get("name"),
+                ),
+                "remote": (j.get("location") or {}).get("is_remote"),
+                "posted_at": j.get("published_date"),
+            }
+            for j in response.json()
+        ]
+    elif family == "pinpoint":
+        rows = [
+            {
+                "id": j.get("id"),
+                "title": j.get("title"),
+                "company": tenant,
+                "url": j.get("url"),
+                "location": _join(
+                    (j.get("location") or {}).get("city"), (j.get("location") or {}).get("province")
+                )
+                or (j.get("location") or {}).get("name"),
+                "remote": j.get("workplace_type") == "remote",
+                "description": " ".join(
+                    j.get(k) or ""
+                    for k in (
+                        "description",
+                        "key_responsibilities",
+                        "skills_knowledge_expertise",
+                        "benefits",
+                    )
+                ),
+            }
+            for j in response.json().get("data", [])
+        ]
+    elif family == "rippling":
+        data = response.json()
+        rows = [
+            {
+                "id": j.get("uuid"),
+                "title": j.get("name"),
+                "company": tenant,
+                "url": j.get("url"),
+                "location": (j.get("workLocation") or {}).get("label"),
+            }
+            for j in (data if isinstance(data, list) else data.get("items", []))
+        ]
+    elif family == "jobscore":
+        data = response.json()
+        rows = [
+            {
+                "id": j.get("id"),
+                "title": j.get("title"),
+                "company": data.get("company_name") or tenant,
+                "url": j.get("detail_url"),
+                "location": _join(j.get("city"), j.get("state"))
+                or j.get("country")
+                or j.get("location"),
+                "remote": str(j.get("remote") or "").lower().startswith("yes")
+                and "some" not in str(j.get("remote")).lower(),
+                "description": j.get("description"),
+                "posted_at": j.get("opened_date"),
+            }
+            for j in data.get("jobs", [])
+        ]
+    elif family == "hibob":
+        rows = [
+            {
+                "id": j.get("id"),
+                "title": j.get("title"),
+                "company": tenant,
+                "url": f"https://{tenant}.careers.hibob.com/jobs/{j.get('id')}",
+                "location": _join(j.get("site"), j.get("country")),
+                "remote": str(j.get("workspaceType") or "").lower() == "remote",
+                # Bodies arrive entity-escaped, so unescape before tags are stripped.
+                "description": html.unescape(
+                    " ".join(
+                        j.get(k) or ""
+                        for k in ("description", "responsibilities", "requirements", "benefits")
+                    )
+                ),
+                "posted_at": j.get("publishedAt"),
+            }
+            for j in response.json().get("jobAdDetails", [])
+            if j.get("id")
+        ]
+    else:  # gem
+        data = (response.json().get("data") or {}).get("oatsExternalJobPostings") or {}
+        rows = []
+        for j in data.get("jobPostings") or []:
+            places = j.get("locations") or []
+            rows.append(
+                {
+                    "id": j.get("extId"),
+                    "title": j.get("title"),
+                    "company": tenant,
+                    "url": f"https://jobs.gem.com/{tenant}/{j.get('extId')}",
+                    "location": _join(*(v for p in places for v in (p.get("city"), p.get("isoCountry")))),
+                    "remote": any(p.get("isRemote") for p in places)
+                    or (j.get("job") or {}).get("locationType") == "REMOTE",
+                }
+            )
+    return Page([job for raw in rows[:1000] if (job := normalize(raw, source))], next_cursor)
+
+
 async def fetch_page(source: Source, query: str = "", cursor: str | None = None) -> Page:
     if source.family not in FAMILIES or not source.permitted:
         raise ValueError("Source is not permitted")
+    if source.family == "workday":
+        return await _fetch_workday(source, query, cursor)
     tenant = source.tenant
     lever_host = "api.lever.co"
     if source.family == "lever" and tenant.startswith("eu:"):
@@ -557,6 +939,10 @@ async def fetch_page(source: Source, query: str = "", cursor: str | None = None)
     if page < 1 or page > 10:
         raise ValueError("Pagination limit exceeded")
     headers = {}
+    if family in _KEYLESS_ATS:
+        if not tenant:
+            raise ValueError("Source needs a tenant")
+        return await _fetch_ats_board(source, tenant, page)
     if family == "hn_hiring":
         rows, next_cursor = await _fetch_hn_hiring(page)
         return Page([job for raw in rows if (job := normalize(raw, source))], next_cursor)
