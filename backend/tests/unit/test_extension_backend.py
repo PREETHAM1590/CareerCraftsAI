@@ -268,7 +268,12 @@ async def test_pairing_stores_only_a_hash_and_authenticates_the_raw_token():
 
     lookup = MagicMock()
     lookup.scalar_one_or_none.return_value = device
-    db.execute = AsyncMock(return_value=lookup)
+    owner_lookup = MagicMock()
+    owner_lookup.scalar_one_or_none.return_value = SimpleNamespace(
+        policy_accepted_at=object(), deletion_scheduled_for=None
+    )
+    db.execute = AsyncMock(side_effect=[lookup, owner_lookup])
+    db.flush = AsyncMock()
     assert await extension_service.authenticate(db, token) is device
     assert device.last_seen_at is not None
     # A Clerk JWT or anything else is never treated as a device token.

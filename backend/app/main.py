@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIASGIMiddleware
 
 from app.api.v1 import (
     agent_memory,
@@ -171,6 +172,7 @@ async def _generic_handler(request: Request, exc: Exception) -> JSONResponse:
 # an expired token from a dead network.
 # Execution order: CORS → ApiRequestMiddleware (request ID, security headers,
 # JWT) → route. One pure ASGI layer; see app/core/request_middleware.py.
+app.add_middleware(SlowAPIASGIMiddleware)
 app.add_middleware(ApiRequestMiddleware)
 app.add_middleware(
     CORSMiddleware,
@@ -219,6 +221,7 @@ mount_copilot_chat(app)
 # Bare liveness — no dependency checks, so a slow/degraded DB or Redis can't
 # flap the load balancer's health probe. Use /health for deep diagnostics.
 @app.get("/health/live")
+@limiter.exempt
 async def health_live():
     return {"status": "ok"}
 
@@ -228,6 +231,7 @@ _HEALTH_CACHE_SECONDS = 5.0
 
 
 @app.get("/health")
+@limiter.exempt
 async def health():
     """The deep check opens database, Redis and Temporal connections and is
     public, so a burst of calls shares one result for a few seconds."""

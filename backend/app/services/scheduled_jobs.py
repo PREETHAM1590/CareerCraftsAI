@@ -27,6 +27,8 @@ class JobSearchTrigger(BaseModel):
     search_query: str
     location: str
     max_results: int
+    titles: list[str] = Field(default_factory=list)
+    locations: list[str] = Field(default_factory=list)
     live_browser: bool = False
     work_mode: str = ""
     platforms: list[str] = Field(default_factory=list)
@@ -58,6 +60,8 @@ async def run_job_search(
             "posted_within_days": payload.posted_within_days,
             "search_query": payload.search_query,
             "location": payload.location,
+            "titles": payload.titles,
+            "locations": payload.locations,
             "max_results": payload.max_results,
             "live_browser": payload.live_browser,
             "work_mode": payload.work_mode,

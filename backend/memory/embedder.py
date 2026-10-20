@@ -9,7 +9,7 @@ cache keys include the provider and model that produced the vector.
 import hashlib
 import json
 import logging
-from typing import Optional
+from typing import Optional, Protocol
 
 import redis
 
@@ -38,6 +38,10 @@ def _server_ollama_url() -> str:
     return (settings.EMBEDDING_OLLAMA_URL or "").strip()
 
 
+class EmbeddingProvider(Protocol):
+    async def embed(self, text: str) -> list[float]: ...
+
+
 class MemoryEmbedder:
     """
     Embed text using the user's active LLM provider.
@@ -51,6 +55,7 @@ class MemoryEmbedder:
         user_settings: dict,
         redis_client: Optional[redis.Redis] = None,
     ) -> None:
+        self.user_id = user_settings.get("user_id")
         self.provider: str = user_settings.get("provider", "openai")
         self.api_key: str = user_settings.get("api_key", "")
         self.ollama_url: str = (
@@ -108,12 +113,6 @@ class MemoryEmbedder:
 
         return vec
 
-    async def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        """Embed multiple texts concurrently."""
-        import asyncio
-
-        return await asyncio.gather(*[self.embed(t) for t in texts])
-
     # ------------------------------------------------------------------
     # Internal routing
     # ------------------------------------------------------------------
@@ -147,25 +146,20 @@ class MemoryEmbedder:
         return resp.data[0].embedding
 
     async def _google_embed(self, text: str) -> list[float]:
-        # google.generativeai is a synchronous SDK (blocking network call, no
-        # timeout) — this backend runs as a single Uvicorn worker, so calling
-        # it directly inside this async method froze every request on the
-        # process (including health checks) until it returned or hung.
-        # to_thread keeps the blocking call off the event loop.
-        import asyncio
+        from google import genai
+        from google.genai import types
 
-        import google.generativeai as genai
-
-        def _call() -> dict:
-            genai.configure(api_key=self.api_key)
-            return genai.embed_content(
+        async with genai.Client(
+            api_key=self.api_key, http_options=types.HttpOptions(timeout=15_000)
+        ).aio as client:
+            result = await client.models.embed_content(
                 model=GOOGLE_EMBEDDING_MODEL,
-                content=text,
-                output_dimensionality=GOOGLE_EMBEDDING_DIMENSIONS,
+                contents=text,
+                config=types.EmbedContentConfig(output_dimensionality=GOOGLE_EMBEDDING_DIMENSIONS),
             )
-
-        result = await asyncio.to_thread(_call)
-        return result["embedding"]
+        if not result.embeddings or not result.embeddings[0].values:
+            raise ValueError("Google returned no embedding")
+        return list(result.embeddings[0].values)
 
     async def _ollama_embed(self, text: str) -> list[float]:
         import ollama
@@ -196,7 +190,8 @@ class MemoryEmbedder:
 
     def _cache_key(self, text: str, provider: str, model: str) -> str:
         digest = hashlib.sha256(text.encode()).hexdigest()
-        return f"emb:{provider}:{model}:{digest}"
+        scope = f"memory-emb:{self.user_id}:" if self.user_id else "emb:"
+        return f"{scope}{provider}:{model}:{digest}"
 
     def _pad_to_dims(self, vec: list[float]) -> list[float]:
         """Truncate or zero-pad vector to self.DIMS dimensions."""

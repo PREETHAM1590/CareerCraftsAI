@@ -8,7 +8,6 @@ import {
   ArrowsClockwise,
   ArrowSquareOut,
   CaretRight,
-  Check,
   CircleNotch,
   Clock,
   EnvelopeSimple,

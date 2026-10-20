@@ -14,12 +14,11 @@ Bugs caught:
   3. AES-256-GCM round-trip (confirmed working — regression test included so
      any future change to the crypto layer is caught immediately).
 """
-import uuid
+
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
-
 
 # ---------------------------------------------------------------------------
 # 1. Thinking param: only applied to supported Anthropic models
@@ -34,13 +33,16 @@ def _make_anthropic_settings(model_name: str):
     return s
 
 
-@pytest.mark.parametrize("model_name", [
-    "claude-sonnet-4-6",
-    "claude-sonnet-4-5",
-    "claude-opus-4-8",
-    "claude-opus-4-7",
-    "claude-3-7-sonnet-20250219",
-])
+@pytest.mark.parametrize(
+    "model_name",
+    [
+        "claude-sonnet-4-6",
+        "claude-sonnet-4-5",
+        "claude-opus-4-8",
+        "claude-opus-4-7",
+        "claude-3-7-sonnet-20250219",
+    ],
+)
 def test_thinking_param_applied_to_supported_models(model_name):
     """OLD bug: thinking param always passed → 400 on any non-thinking model.
     NEW: only passed to claude-3-7-sonnet, claude-sonnet-4-x, claude-opus-4-x.
@@ -54,19 +56,22 @@ def test_thinking_param_applied_to_supported_models(model_name):
             _make_llm(settings_obj, "key")
 
         call_kwargs = mock_cls.call_args.kwargs
-        assert "thinking" in call_kwargs, (
-            f"{model_name} should have thinking param but it was absent"
-        )
+        assert (
+            "thinking" in call_kwargs
+        ), f"{model_name} should have thinking param but it was absent"
         assert call_kwargs["thinking"]["type"] == "enabled"
 
 
-@pytest.mark.parametrize("model_name", [
-    "claude-haiku-4-5",
-    "claude-3-haiku-20240307",
-    "claude-3-5-haiku-20241022",
-    "claude-3-opus-20240229",   # original Opus (not Opus 4)
-    "claude-3-sonnet-20240229",
-])
+@pytest.mark.parametrize(
+    "model_name",
+    [
+        "claude-haiku-4-5",
+        "claude-3-haiku-20240307",
+        "claude-3-5-haiku-20241022",
+        "claude-3-opus-20240229",  # original Opus (not Opus 4)
+        "claude-3-sonnet-20240229",
+    ],
+)
 def test_thinking_param_NOT_applied_to_unsupported_models(model_name):
     """Haiku and pre-4.x models must NOT receive the thinking param."""
     from app.core.model_router import _make_llm
@@ -106,8 +111,10 @@ def test_build_llm_raises_429_when_budget_exhausted():
     settings_obj = _make_settings()
 
     with (
-        patch("app.core.model_router._check_budget_sync",
-              side_effect=HTTPException(status_code=429, detail="budget exceeded")),
+        patch(
+            "app.core.model_router._check_budget_sync",
+            side_effect=HTTPException(status_code=429, detail="budget exceeded"),
+        ),
         patch("app.core.model_router.decrypt_api_key", return_value="key"),
         patch("app.core.model_router._make_llm", return_value=MagicMock()),
         patch("app.core.model_router.get_redaction_callback", return_value=MagicMock()),
@@ -145,8 +152,10 @@ def test_build_llm_skips_budget_check_when_no_user_id():
     check_called = []
 
     with (
-        patch("app.core.model_router._check_budget_sync",
-              side_effect=lambda uid: check_called.append(uid)),
+        patch(
+            "app.core.model_router._check_budget_sync",
+            side_effect=lambda uid: check_called.append(uid),
+        ),
         patch("app.core.model_router.decrypt_api_key", return_value="key"),
         patch("app.core.model_router._make_llm", return_value=MagicMock()),
         patch("app.core.model_router.get_redaction_callback", return_value=MagicMock()),
@@ -200,7 +209,7 @@ def test_check_budget_sync_allows_call_when_under_limit():
 
 
 def test_aes_gcm_round_trip_standard_key():
-    from app.core.security import encrypt_api_key, decrypt_api_key
+    from app.core.security import decrypt_api_key, encrypt_api_key
 
     secret = "test-secret-key-32-chars-minimum!!"
     plaintext = "sk-ant-api03-real-looking-key-with-enough-length"
@@ -221,7 +230,8 @@ def test_aes_gcm_unique_ciphertext_per_call():
 
 def test_aes_gcm_tampered_ciphertext_raises():
     import base64
-    from app.core.security import encrypt_api_key, decrypt_api_key
+
+    from app.core.security import decrypt_api_key, encrypt_api_key
 
     secret = "test-secret-key-32-chars-minimum!!"
     encrypted = encrypt_api_key("my-api-key", secret)
@@ -240,8 +250,9 @@ def test_aes_gcm_tampered_ciphertext_raises():
 
 def test_token_tracking_callback_accumulates():
     """TokenTrackingCallback must add tokens to the thread-local accumulator."""
-    from app.core.model_router import TokenTrackingCallback, get_and_reset_tokens
     from langchain_core.outputs import LLMResult
+
+    from app.core.model_router import TokenTrackingCallback, get_and_reset_tokens
 
     cb = TokenTrackingCallback("usr_test")
     result = MagicMock(spec=LLMResult)
@@ -250,8 +261,7 @@ def test_token_tracking_callback_accumulates():
     # Reset accumulator first
     get_and_reset_tokens()
 
-    with patch("app.services.token_budget_service.consume_tokens") as mock_consume:
-        cb.on_llm_end(result)
+    cb.on_llm_end(result)
 
     total = get_and_reset_tokens()
     assert total == 150
@@ -259,8 +269,9 @@ def test_token_tracking_callback_accumulates():
 
 def test_token_tracking_callback_noop_on_zero_tokens():
     """Zero-token response must not increment the accumulator."""
-    from app.core.model_router import TokenTrackingCallback, get_and_reset_tokens
     from langchain_core.outputs import LLMResult
+
+    from app.core.model_router import TokenTrackingCallback, get_and_reset_tokens
 
     cb = TokenTrackingCallback("usr_test")
     result = MagicMock(spec=LLMResult)

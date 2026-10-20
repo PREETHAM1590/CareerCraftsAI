@@ -125,3 +125,32 @@ def test_export_omits_operational_tokens_and_portal_secrets():
     )
     exported = _row_to_dict(credential)
     assert "username_enc" not in exported and "password_enc" not in exported
+
+
+@pytest.mark.asyncio
+async def test_export_preserves_uploaded_cover_letter_bytes(monkeypatch):
+    from app.models.db import UserDocument
+
+    user = User(id=uuid4(), email="uploaded-letter@example.test")
+    document = UserDocument(
+        id=uuid4(),
+        user_id=user.id,
+        doc_type="cover_letter",
+        filename="letter.pdf",
+        storage_path=f"{user.id}/letter.pdf",
+        raw_text="Extracted text",
+    )
+
+    async def execute(query, params=None):
+        result = _empty_execute_result()
+        if "FROM user_documents" in str(query):
+            result.scalars.return_value.all.return_value = [document]
+        return result
+
+    db = AsyncMock()
+    db.execute.side_effect = execute
+    download = MagicMock(return_value=b"%PDF original")
+    monkeypatch.setattr("app.services.storage_service.download_file", download)
+    with zipfile.ZipFile(BytesIO(await build_user_data_export(db, user))) as zf:
+        assert zf.read(f"documents/{document.id}.bin") == b"%PDF original"
+    download.assert_called_once_with(document.storage_path, str(user.id))

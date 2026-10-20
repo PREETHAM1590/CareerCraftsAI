@@ -30,6 +30,7 @@ import redis.asyncio as aioredis
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from app.core.config import settings
+from app.core.rate_limit import limiter
 from app.core.security import decrypt_api_key
 
 logger = logging.getLogger(__name__)
@@ -236,6 +237,7 @@ def _validated_messages(raw_messages: list[dict], *, allow_tools: bool) -> list:
 
 @router.post("/v1/{path:path}", operation_id="proxy_llm_request_post")
 @router.get("/v1/{path:path}", operation_id="proxy_llm_request_get")
+@limiter.exempt
 async def proxy_llm_request(path: str, request: Request) -> Response:
     """Proxy LLM requests — inject real API key at transport layer.
 

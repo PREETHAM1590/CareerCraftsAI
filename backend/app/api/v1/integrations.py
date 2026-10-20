@@ -7,12 +7,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.github import router as github_router
 from app.api.v1.deps import get_current_user, get_db
+from app.api.v1.github import router as github_router
+from app.core.clerk_auth import ClerkIdentityError, get_verified_primary_email
 from app.core.config import settings
 from app.core.rate_limit import limiter
 from app.core.security import decrypt_api_key, encrypt_api_key
-from app.core.clerk_auth import ClerkIdentityError, get_verified_primary_email
 from app.integrations.exceptions import (
     ConnectionNotFoundError,
     IntegrationActionError,
@@ -260,6 +260,7 @@ async def revoke_connection(
 
 
 @router.post("/webhooks/nango", include_in_schema=False)
+@limiter.exempt
 async def nango_webhook(request: Request, db: AsyncSession = Depends(get_db)) -> dict[str, str]:
     if not settings.NANGO_ENABLED:
         raise HTTPException(status_code=503, detail="Integrations are currently disabled")

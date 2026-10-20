@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio.service import RPCError, RPCStatusCode
 
 from app.api.v1.deps import get_current_user, get_db
+from app.core.config import settings
 from app.core.event_bus import publish, stream_events
 from app.core.rate_limit import limiter
 from app.models.db import AgentRun, ApplicationAttempt, User
@@ -64,7 +65,7 @@ class ApproveRequest(BaseModel):
 
 
 @router.post("/run", response_model=dict)
-@limiter.limit("10/minute")
+@limiter.limit(settings.RATE_LIMIT_AGENT_RUN)
 async def run_agent(
     request: Request,
     payload: RunRequest,
@@ -129,7 +130,7 @@ async def stream_agent(
 
 
 @router.post("/{run_id}/approve", response_model=dict)
-@limiter.limit("10/minute")
+@limiter.limit(settings.RATE_LIMIT_AGENT_RUN)
 async def approve_or_cancel(
     run_id: str,
     payload: ApproveRequest,
@@ -253,8 +254,12 @@ async def _signal_if_running(run_id: str, user_id) -> None:
             raise
 
 
+# Companion can poll 12 parent + 12 child runs every three seconds.
+# Keep read-only status capacity separate from mutation limits.
 @router.get("/runs")
+@limiter.limit("600/minute")
 async def list_runs(
+    request: Request,
     status: str | None = None,
     application_id: str | None = None,
     limit: int = 20,
@@ -300,8 +305,10 @@ async def list_runs(
 
 
 @router.get("/runs/{run_id}")
+@limiter.limit("600/minute")
 async def get_run_detail(
     run_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):

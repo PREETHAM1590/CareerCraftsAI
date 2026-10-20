@@ -5,12 +5,11 @@ import json
 import logging
 import threading
 import time
-from contextvars import ContextVar
 from collections.abc import AsyncIterator
+from contextvars import ContextVar
 from typing import Any
 
 import redis.asyncio as aioredis
-from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import RedisError
 
 from app.core.config import settings

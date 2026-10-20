@@ -1,7 +1,7 @@
 "use client";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence, useReducedMotion, type Variants } from "motion/react";
 import {

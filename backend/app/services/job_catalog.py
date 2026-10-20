@@ -120,7 +120,7 @@ async def write_through(raw_jobs: list[dict], platform: str) -> int:
         return 0
 
 
-async def refresh_source(source: Source, query="", force=False) -> tuple[list[dict], str | None]:
+async def refresh_source(source: Source, query="") -> tuple[list[dict], str | None]:
     now = datetime.now(UTC)
     async with AsyncSessionLocal() as db:
         await db.execute(
@@ -309,14 +309,17 @@ def _location_ok(job: dict, locations: list[str]) -> bool:
 
 def matches_query(job: dict, query: dict) -> bool:
     """The same relevance contract for catalog and live results."""
-    terms = (
-        (" ".join(query.get("titles") or []) or query.get("search_query") or "software engineer")
-        .lower()
-        .split()
-    )
-    keywords = [word for word in terms if len(word) > 2 and word not in _STOPWORDS]
+    alternatives = query.get("titles") or [query.get("search_query") or "software engineer"]
+    title = str(job.get("title") or "").lower()
+
+    def matches_role(role: str) -> bool:
+        keywords = [
+            word for word in role.lower().split() if len(word) > 2 and word not in _STOPWORDS
+        ]
+        return all(word in title for word in keywords)
+
     locations = [str(x) for x in (query.get("locations") or [query.get("location") or ""]) if x]
-    if not all(word in str(job.get("title") or "").lower() for word in keywords):
+    if not any(matches_role(role) for role in alternatives):
         return False
     if not _location_ok(job, locations):
         return False

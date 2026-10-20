@@ -1,13 +1,12 @@
 import logging
 
 import httpx
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage
 
-from app.agents._llm_json import call_llm_json
 from app.agents.state import AgentState
 from app.core.config import settings as app_settings
 from app.core.event_bus import emit
-from app.core.sync_db import fetch_model_settings, fetch_user_profile_text, run_coro_sync
+from app.core.sync_db import run_coro_sync
 from app.services.job_search_service import search_all_platforms
 
 logger = logging.getLogger(__name__)
@@ -405,47 +404,6 @@ Job: {title} at {company}
 Description: {description}
 
 Score (0-100):"""
-
-
-def _heuristic_score_job(job: dict, profile: str) -> int:
-    terms = {
-        term.lower().strip(".,:;()[]")
-        for term in profile.split()
-        if len(term.strip(".,:;()[]")) > 2
-        and term.lower() not in {"and", "the", "with", "for", "from"}
-    }
-    haystack = " ".join(
-        str(job.get(key, "")) for key in ("title", "company", "location", "description", "platform")
-    ).lower()
-    overlap = sum(1 for term in terms if term in haystack)
-    score = 45 + min(35, overlap * 10)
-    if "remote" in haystack or "worldwide" in haystack:
-        score += 10
-    if any(level in haystack for level in ("senior", "lead", "principal")):
-        score += 5
-    return min(score, 92)
-
-
-def _score_job(llm, job: dict, profile: str, thinking: str = "") -> int:
-    try:
-        resp = llm.invoke(
-            [
-                HumanMessage(
-                    content=SCORE_PROMPT.format(
-                        profile=profile,
-                        title=job.get("title", ""),
-                        company=job.get("company", ""),
-                        description=str(job.get("description", ""))[:500],
-                    )
-                    + (f"\n\nScoring criteria from analysis:\n{thinking}" if thinking else "")
-                )
-            ]
-        )
-        digits = "".join(c for c in resp.content.strip()[:3] if c.isdigit())
-        return int(digits) if digits else _heuristic_score_job(job, profile)
-    except Exception as exc:
-        logger.warning("Score failed for %s at %s: %s", job.get("title"), job.get("company"), exc)
-        return _heuristic_score_job(job, profile)
 
 
 def _job_listings_to_dicts(job_listings) -> list[dict]:
@@ -1718,9 +1676,10 @@ def _persist_saved_jobs(user_id: str, scored: list[dict]) -> int:
     Failures propagate to the caller, which degrades to a warning (search
     results are still returned).
     """
+    from sqlalchemy import select
+
     from app.core.sync_db import _get_sync_factory, _to_uuid
     from app.models.db import JobApplication
-    from sqlalchemy import select
     from app.services.job_connectors import posted, role_key, url_key
 
     candidates = [

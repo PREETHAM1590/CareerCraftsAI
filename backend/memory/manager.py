@@ -20,7 +20,7 @@ from uuid import UUID
 import asyncpg
 import redis
 
-from memory.embedder import MemoryEmbedder
+from memory.embedder import EmbeddingProvider
 from memory.models import AgentContext, Episode, Learning, Memory
 
 logger = logging.getLogger(__name__)
@@ -73,7 +73,7 @@ class MemoryManager:
         self,
         db_url: str,
         redis_client: redis.Redis,
-        embedder: MemoryEmbedder,
+        embedder: EmbeddingProvider,
     ) -> None:
         self._db_url = db_url
         self.redis = redis_client
@@ -90,7 +90,7 @@ class MemoryManager:
             self._pool = await asyncpg.create_pool(
                 dsn=self._db_url,
                 min_size=1,
-                max_size=10,
+                max_size=2,
                 statement_cache_size=0,
             )
         return self._pool

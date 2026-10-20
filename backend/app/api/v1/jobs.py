@@ -6,7 +6,6 @@ import urllib.parse
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Literal
-from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
@@ -147,13 +146,6 @@ class PrepareApplyBody(BaseModel):
     live_browser: bool = False
 
 
-def is_example_job_url(job_url: str | None) -> bool:
-    if not job_url:
-        return False
-    hostname = urlparse(job_url).hostname or ""
-    return hostname == "example.com" or hostname.endswith(".example.com")
-
-
 # Old and new city names both appear in postings; a filter on either matches both.
 _CITY_PAIRS = (
     ("bengaluru", "bangalore"),
@@ -235,18 +227,6 @@ SKILL_HINTS = (
     "figma",
     "product strategy",
 )
-
-
-def _latest_resume_query(user_id: uuid.UUID):
-    return (
-        select(UserDocument)
-        .where(
-            UserDocument.user_id == user_id,
-            UserDocument.doc_type == "resume",
-        )
-        .order_by(UserDocument.is_primary.desc(), UserDocument.embedded_at.desc().nulls_last())
-        .limit(1)
-    )
 
 
 def _extract_skills_from_resume(resume_text: str | None) -> list[str]:
@@ -764,7 +744,7 @@ async def search_jobs(
     titles = [t.strip() for t in (payload.titles or []) if t.strip()]
     structured_locations = [loc.strip() for loc in (payload.locations or []) if loc.strip()]
     if titles:
-        search_query = " ".join(titles)
+        search_query = " OR ".join(titles)
     if structured_locations:
         location = structured_locations[0]
     # Leave unset so job_search_service uses DEFAULT_PLATFORMS
@@ -788,6 +768,8 @@ async def search_jobs(
         "resume_id": str(resume.id) if resume else None,
         "persona_id": str(persona.id) if persona else None,
         "posted_within_days": payload.posted_within_days,
+        "titles": sorted(set(titles)),
+        "locations": sorted(set(structured_locations)),
         "platforms": sorted(platforms),
         "remote": remote,
     }

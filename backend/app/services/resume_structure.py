@@ -178,10 +178,6 @@ def is_placeholder(value: str | None) -> bool:
     return bool(value) and bool(_PLACEHOLDER.match(value.strip()))
 
 
-def looks_like_dates(value: str) -> bool:
-    return bool(_YEAR.search(value) or _DATE_WORD.search(value))
-
-
 def is_date_range(text: str | None) -> bool:
     """True when ``text`` consists only of date tokens and separators.
 

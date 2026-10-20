@@ -333,3 +333,123 @@ def test_shared_work_mode_treats_hybrid_separately_from_remote():
     row = _job(1, remote="hybrid", location="Bengaluru (hybrid/remote)")
     assert cat.matches_query(row, {"titles": ["Backend"], "remote": "hybrid"})
     assert not cat.matches_query(row, {"titles": ["Backend"], "remote": "remote"})
+
+
+@pytest.mark.asyncio
+async def test_live_search_fans_out_roles_and_cities_with_shared_predicate():
+    seen = []
+
+    def adapter(role, city, count):
+        seen.append((role, city))
+        return [_raw(len(seen)) | {"title": role, "location": city}]
+
+    jobs, warnings = await _search(
+        ["jobspy"],
+        AsyncMock(return_value=([], [])),
+        adapter,
+        AsyncMock(),
+        titles=["Backend Engineer", "Data Scientist"],
+        locations=["Bengaluru", "Hyderabad"],
+    )
+    assert set(seen) == {
+        (role, city)
+        for role in ("Backend Engineer", "Data Scientist")
+        for city in ("Bengaluru", "Hyderabad")
+    }
+    assert len(jobs) == 4 and not warnings
+
+
+@pytest.mark.asyncio
+async def test_overall_budget_preserves_completed_source_results(monkeypatch):
+    import time
+
+    def adapter(role, city, count):
+        if city == "Hyderabad":
+            time.sleep(0.15)
+        return [_raw(1) | {"location": city}]
+
+    monkeypatch.setattr(cat, "search_catalog", AsyncMock(return_value=([], [])))
+    monkeypatch.setattr(cat, "write_through", AsyncMock())
+    monkeypatch.setattr(svc, "_ADAPTERS", {"jobspy": adapter})
+    jobs, warnings = await svc.search_all_platforms(
+        {"titles": ["Backend"], "locations": ["Bengaluru", "Hyderabad"]},
+        ["jobspy"],
+        timeout_s=0.05,
+    )
+    assert [j["location"] for j in jobs] == ["Bengaluru"]
+    assert any("budget" in warning for warning in warnings)
+
+
+def test_timed_out_workers_keep_capacity_across_event_loops(monkeypatch):
+    import asyncio
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    release = threading.Event()
+    started = threading.Event()
+    calls = []
+
+    def adapter(role, city, count):
+        calls.append(city)
+        started.set()
+        assert release.wait(3)
+        return [_raw(1) | {"location": city}]
+
+    monkeypatch.setattr(cat, "search_catalog", AsyncMock(return_value=([], [])))
+    monkeypatch.setattr(cat, "write_through", AsyncMock())
+    monkeypatch.setattr(svc, "_ADAPTERS", {"jobspy": adapter})
+    monkeypatch.setattr(svc, "_ADAPTER_TIMEOUT_SEC", {"jobspy": 0.05})
+    slots = threading.BoundedSemaphore(1)
+    monkeypatch.setattr(svc, "_ADAPTER_SLOTS", slots)
+    query = {"titles": ["Backend"], "locations": ["Bengaluru"]}
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        monkeypatch.setattr(svc, "_ADAPTER_EXECUTOR", executor)
+        try:
+            jobs, warnings = asyncio.run(svc.search_all_platforms(query, ["jobspy"]))
+            assert started.is_set()
+            assert not jobs and any("TimeoutError" in w for w in warnings)
+            # The first event loop is closed, but its worker still owns the slot.
+            jobs, warnings = asyncio.run(svc.search_all_platforms(query, ["jobspy"], timeout_s=0.1))
+            assert not jobs and any("budget" in w for w in warnings)
+            assert calls == ["Bengaluru"]
+            assert not slots.acquire(blocking=False)
+        finally:
+            release.set()
+        # Wait for completion/callback before checking recovery on a third loop.
+        executor.submit(lambda: None).result(timeout=3)
+        jobs, warnings = asyncio.run(svc.search_all_platforms(query, ["jobspy"]))
+        assert len(jobs) == 1 and not warnings
+        assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_adapter_timeout_excludes_waiting_for_shared_capacity(monkeypatch):
+    import asyncio
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    slots = threading.BoundedSemaphore(1)
+    slots.acquire()
+    adapter = MagicMock(return_value=[_raw(1)])
+    monkeypatch.setattr(cat, "search_catalog", AsyncMock(return_value=([], [])))
+    monkeypatch.setattr(cat, "write_through", AsyncMock())
+    monkeypatch.setattr(svc, "_ADAPTERS", {"jobspy": adapter})
+    monkeypatch.setattr(svc, "_ADAPTER_TIMEOUT_SEC", {"jobspy": 0.03})
+    monkeypatch.setattr(svc, "_ADAPTER_SLOTS", slots)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        monkeypatch.setattr(svc, "_ADAPTER_EXECUTOR", executor)
+        search = asyncio.create_task(
+            svc.search_all_platforms(
+                {"titles": ["Backend"], "locations": ["Bengaluru"]},
+                ["jobspy"],
+                timeout_s=2,
+            )
+        )
+        try:
+            await asyncio.sleep(0.1)
+            assert not search.done()
+            adapter.assert_not_called()
+        finally:
+            slots.release()
+        jobs, warnings = await search
+        assert len(jobs) == 1 and not warnings

@@ -24,14 +24,13 @@ import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.applications.answer_resolver import resolve_fields
 from app.applications.models import ApplicationField
 from app.applications.question_normalizer import normalize_question
 from app.applications.schema_extractor import extract_fields
-from app.services.document_lifecycle import RESUME_DOCUMENT_TYPES
 from app.models.db import (
     AgentRun,
     CandidateAnswer,
@@ -40,6 +39,7 @@ from app.models.db import (
     User,
     UserDocument,
 )
+from app.services.document_lifecycle import RESUME_DOCUMENT_TYPES
 
 logger = logging.getLogger(__name__)
 
@@ -92,8 +92,22 @@ async def authenticate(db: AsyncSession, token: str) -> ExtensionDevice | None:
         )
     ).scalar_one_or_none()
     if device is not None:
+        from app.api.v1.deps import require_eligible_owner
+
+        # PostgreSQL NO KEY UPDATE: permits child FK checks, fences erasure.
+        owner = (
+            await db.execute(
+                select(User)
+                .where(User.id == device.user_id)
+                .with_for_update(key_share=True)
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        if owner is None:
+            return None
+        require_eligible_owner(owner)
         device.last_seen_at = datetime.now(UTC)
-        await db.commit()
+        await db.flush()
     return device
 
 
@@ -128,16 +142,22 @@ def task_view(task: ExtensionTask) -> dict:
 
 
 async def claim_next_task(db: AsyncSession, device: ExtensionDevice) -> ExtensionTask | None:
-    """Oldest pending task of this device's user, claimed atomically so two
-    browsers of the same user never work on one application."""
+    """Recover this device's unacknowledged claim before taking pending work.
+
+    The persisted claim is the retry record: every retry re-signals the workflow.
+    A lost signal or HTTP response therefore cannot strand the task.
+    """
     task = (
         await db.execute(
             select(ExtensionTask)
             .where(
                 ExtensionTask.user_id == device.user_id,
-                ExtensionTask.status == "pending",
+                or_(
+                    ExtensionTask.status == "pending",
+                    and_(ExtensionTask.status == "claimed", ExtensionTask.device_id == device.id),
+                ),
             )
-            .order_by(ExtensionTask.created_at)
+            .order_by((ExtensionTask.status == "claimed").desc(), ExtensionTask.created_at)
             .limit(1)
             .with_for_update(skip_locked=True)
         )
@@ -146,7 +166,7 @@ async def claim_next_task(db: AsyncSession, device: ExtensionDevice) -> Extensio
         return None
     task.status = "claimed"
     task.device_id = device.id
-    task.claimed_at = datetime.now(UTC)
+    task.claimed_at = task.claimed_at or datetime.now(UTC)
     await db.commit()
     await db.refresh(task)
     return task

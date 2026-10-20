@@ -57,22 +57,20 @@ async def get_current_user(
     auth_subject = subject_from_payload(payload)
     user = await get_or_provision_user(db, auth_subject, payload)
 
+    require_eligible_owner(user, exempt=(request.method, request.url.path) in _CONSENT_EXEMPT_PATHS)
+    return user
+
+
+CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+def require_eligible_owner(user: User, *, exempt: bool = False) -> None:
+    """Common eligibility policy for session and device credentials."""
     deletion_due = getattr(user, "deletion_scheduled_for", None)
-    if (
-        deletion_due is not None
-        and deletion_due <= datetime.now(UTC)
-        and (request.method, request.url.path) not in _CONSENT_EXEMPT_PATHS
-    ):
+    if deletion_due is not None and deletion_due <= datetime.now(UTC) and not exempt:
         raise HTTPException(status_code=410, detail="Account erasure is in progress")
 
-    if (
-        user.policy_accepted_at is None
-        and (
-            request.method,
-            request.url.path,
-        )
-        not in _CONSENT_EXEMPT_PATHS
-    ):
+    if user.policy_accepted_at is None and not exempt:
         raise HTTPException(
             status_code=403,
             detail={
@@ -80,7 +78,3 @@ async def get_current_user(
                 "message": "Agree to the Terms of Service and Privacy Policy to continue.",
             },
         )
-    return user
-
-
-CurrentUser = Annotated[User, Depends(get_current_user)]

@@ -29,10 +29,16 @@ export async function startAgentRun(taskType: string, context: Record<string, un
 
 export async function waitForAgentRun(runId: string, timeoutMs = 300_000): Promise<AgentRunDetail> {
   const deadline = Date.now() + timeoutMs;
+  let delay = 1_500;
+  let lastStatus: AgentRunDetail["status"] | undefined;
   while (Date.now() < deadline) {
     const { data } = await apiClient.get<AgentRunDetail>(`/agents/runs/${runId}`);
     if (TERMINAL_STATUSES.includes(data.status)) return data;
-    await new Promise((resolve) => window.setTimeout(resolve, 1_500));
+    delay = data.status === lastStatus ? Math.min(8_000, delay * 1.5) : 1_500;
+    lastStatus = data.status;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    await new Promise((resolve) => window.setTimeout(resolve, Math.min(remaining, delay * (0.8 + Math.random() * 0.4))));
   }
   throw new Error(`Agent run did not finish within ${timeoutMs / 1000} seconds`);
 }

@@ -26,13 +26,24 @@ _TABLES = (
 
 
 @pytest.fixture
-async def factory():
+async def factory(monkeypatch):
+    from unittest.mock import AsyncMock
+
     from app.agents.memory.manager import _DDL
+    from app.services import memory_lifecycle
+
+    monkeypatch.setattr(memory_lifecycle, "delete_memory_cache", AsyncMock())
 
     engine = create_async_engine(ASYNC_URL)
     async with engine.begin() as connection:
         # other suites create id/user_id-only stubs of these tables; this one
         # needs the real columns
+        await connection.execute(
+            text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS memory_generation "
+                "integer NOT NULL DEFAULT 0"
+            )
+        )
         for table in _TABLES:
             await connection.execute(text(f"DROP TABLE IF EXISTS {table}"))  # noqa: S608
         for statement in _DDL.split(";"):
@@ -46,6 +57,12 @@ async def factory():
 
 
 async def _seed(db, uid: str):
+    await db.execute(
+        text(
+            "INSERT INTO users(id, email) VALUES (CAST(:u AS uuid), :email) ON CONFLICT DO NOTHING"
+        ),
+        {"u": uid, "email": f"{uid}@example.test"},
+    )
     await db.execute(
         text(
             "INSERT INTO agent_memory_learnings (user_id, agent_type, learning) "
