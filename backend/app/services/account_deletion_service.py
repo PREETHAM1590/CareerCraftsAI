@@ -29,23 +29,6 @@ logger = logging.getLogger(__name__)
 _OPEN_RUN_STATUSES = ("queued", "running", "awaiting_approval")
 # Agent memory tables (created by MemoryManager, so possibly absent) and the
 # statement that clears one member from each.
-_MEMORY_DELETES = {
-    "public.user_memories": "DELETE FROM public.user_memories WHERE user_id = CAST(:uid AS uuid)",
-    "public.agent_episodes": "DELETE FROM public.agent_episodes WHERE user_id = CAST(:uid AS uuid)",
-    "public.memory_access_log": (
-        "DELETE FROM public.memory_access_log WHERE user_id = CAST(:uid AS uuid)"
-    ),
-    "public.agent_memory_episodes": "DELETE FROM public.agent_memory_episodes WHERE user_id = :uid",
-    "public.agent_memory_learnings": (
-        "DELETE FROM public.agent_memory_learnings WHERE user_id = :uid"
-    ),
-    "public.agent_memory_preferences": (
-        "DELETE FROM public.agent_memory_preferences WHERE user_id = :uid"
-    ),
-    "public.agent_memory_procedures": (
-        "DELETE FROM public.agent_memory_procedures WHERE user_id = :uid"
-    ),
-}
 
 
 async def _terminate_workflows(user_id: uuid.UUID) -> int:
@@ -159,10 +142,9 @@ async def _delete_unlinked_rows(user_id: uuid.UUID) -> None:
                 text("DELETE FROM public.document_cleanup_queue WHERE user_id = :uid"),
                 {"uid": user_id},
             )
-        for table, statement in _MEMORY_DELETES.items():
-            exists = await db.execute(text("SELECT to_regclass(:table)"), {"table": table})
-            if exists.scalar():
-                await db.execute(text(statement), {"uid": str(user_id)})
+        from app.services.memory_lifecycle import delete_memory_rows
+
+        await delete_memory_rows(db, user_id)
         await db.commit()
 
 
@@ -174,6 +156,7 @@ async def _delete_redis_keys(user_id: uuid.UUID) -> None:
         f"token_budget:{user_id}:*",
         f"{user_id}:*",
         f"session:{user_id}:*",
+        f"memory-emb:{user_id}:*",
     ):
         keys = [key async for key in redis.scan_iter(match=pattern, count=500)]
         if keys:

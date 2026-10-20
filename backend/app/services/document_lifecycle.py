@@ -30,3 +30,16 @@ async def lock_document_owner(db, owner_id) -> User:
     ):
         raise HTTPException(status_code=403, detail="Account deletion is in progress")
     return owner
+
+
+def is_text_artifact(document) -> bool:
+    """Generated letters live in raw_text; uploaded letters retain their bytes.
+
+    Recognize the exact legacy placeholder path as well as the empty storage
+    path used by new generated artifacts. Neither is a filesystem location.
+    """
+    return (
+        document.doc_type == "cover_letter"
+        and document.raw_text is not None
+        and document.storage_path in ("", f"cover_letters/{document.user_id}/{document.id}.md")
+    )

@@ -41,13 +41,13 @@ async def main() -> None:
         task_queue=settings.TEMPORAL_NOTIFICATION_TASK_QUEUE,
         workflows=NOTIFICATION_WORKFLOWS,
         activities=NOTIFICATION_ACTIVITIES,
-        max_concurrent_activities=settings.TEMPORAL_WORKER_CONCURRENCY,
+        max_concurrent_activities=settings.NOTIFICATION_WORKER_CONCURRENCY,
     )
     email_worker = Worker(
         client,
         task_queue=settings.TEMPORAL_NOTIFICATION_EMAIL_TASK_QUEUE,
         activities=NOTIFICATION_EMAIL_ACTIVITIES,
-        max_concurrent_activities=settings.TEMPORAL_WORKER_CONCURRENCY,
+        max_concurrent_activities=settings.EMAIL_WORKER_CONCURRENCY,
         max_task_queue_activities_per_second=settings.NOTIFICATION_EMAIL_RATE_LIMIT_PER_SECOND,
     )
 

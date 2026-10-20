@@ -16,6 +16,7 @@ import uuid
 from langchain_core.messages import AIMessage
 
 from app.agents._llm_json import call_llm_json
+from app.agents.memory_prompt import memory_prompt
 from app.agents.prompts.cover_letter_prompt import OUTPUT_SCHEMA as CoverLetterOutput
 from app.agents.prompts.cover_letter_prompt import SYSTEM_PROMPT as COVER_SYSTEM_PROMPT
 from app.agents.prompts.cover_letter_prompt import VALID_TONES
@@ -62,7 +63,7 @@ def _store_cover_letter(
                 user_id=_to_uuid(user_id),
                 doc_type="cover_letter",
                 filename=f"cover_letter_{tone}_{doc_id.hex[:8]}.md",
-                storage_path=f"cover_letters/{user_id}/{doc_id}.md",
+                storage_path="",  # Generated text artifact; no binary object.
                 raw_text=parsed.cover_letter_markdown,
                 is_primary=False,
             )
@@ -171,7 +172,8 @@ def cover_letter_node(state: AgentState) -> AgentState:
                     "target_role": ctx.get("target_role", ctx.get("role", "NOT_PROVIDED")),
                 },
                 [context_text] if context_text.strip() else None,
-            ),
+            )
+            + memory_prompt(ctx),
             CoverLetterOutput,
         )
         tokens_used = 0

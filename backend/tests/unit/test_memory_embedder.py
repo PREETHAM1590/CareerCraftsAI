@@ -97,21 +97,23 @@ def test_ollama_url_precedence(monkeypatch, user_url, server_url, expected):
 
 @pytest.mark.asyncio
 async def test_google_embed_uses_gemini_embedding_001_at_768_dims(monkeypatch):
-    seen: dict = {}
+    from google import genai
+    from google.genai import types as genai_types
 
-    def fake_embed_content(**kwargs):
-        seen.update(kwargs)
-        return {"embedding": [0.1] * 768}
-
-    fake_genai = types.SimpleNamespace(
-        configure=lambda api_key: None, embed_content=fake_embed_content
+    client = AsyncMock()
+    client.models.embed_content.return_value = genai_types.EmbedContentResponse(
+        embeddings=[genai_types.ContentEmbedding(values=[0.1] * 768)]
     )
-    monkeypatch.setitem(sys.modules, "google.generativeai", fake_genai)
-    emb = MemoryEmbedder({"provider": "google", "api_key": "g"})
+    client.__aenter__.return_value = client
+    factory = MagicMock(return_value=MagicMock(aio=client))
+    monkeypatch.setattr(genai, "Client", factory)
+    emb = MemoryEmbedder({"provider": "google", "api_key": "synthetic-key"})
     vec = await emb._google_embed("text")
     assert len(vec) == 768
-    assert seen == {
-        "model": "models/gemini-embedding-001",
-        "content": "text",
-        "output_dimensionality": 768,
-    }
+    assert factory.call_args.kwargs["api_key"] == "synthetic-key"
+    assert factory.call_args.kwargs["http_options"].timeout == 15_000
+    args = client.models.embed_content.call_args.kwargs
+    assert args["model"] == "models/gemini-embedding-001"
+    assert args["contents"] == "text"
+    assert args["config"].output_dimensionality == 768
+    client.__aexit__.assert_awaited_once()

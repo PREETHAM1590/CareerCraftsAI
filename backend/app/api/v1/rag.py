@@ -479,6 +479,7 @@ _DRIVE_MIME_BY_EXT = {
     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "doc": "application/msword",
     "txt": "text/plain",
+    "md": "text/markdown",
 }
 
 
@@ -510,7 +511,13 @@ async def save_document_to_drive(
     mime_type = _DRIVE_MIME_BY_EXT.get(ext, "application/octet-stream")
 
     try:
-        content = await asyncio.to_thread(download_file, doc.storage_path, owner_id)
+        from app.services.document_lifecycle import is_text_artifact
+
+        content = (
+            doc.raw_text.encode("utf-8")
+            if is_text_artifact(doc)
+            else await asyncio.to_thread(download_file, doc.storage_path, owner_id)
+        )
     except Exception as exc:
         logger.warning("Drive save: download failed for %s: %s", doc.storage_path, exc)
         raise HTTPException(status_code=502, detail="Could not read the stored document") from exc

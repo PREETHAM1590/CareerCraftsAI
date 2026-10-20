@@ -144,15 +144,16 @@ async def test_linkedin_approval_reports_manual_handoff_without_sending(monkeypa
     db = SimpleNamespace(
         execute=AsyncMock(return_value=SimpleNamespace(scalar_one_or_none=lambda: run))
     )
-    send = AsyncMock()
-    monkeypatch.setattr("app.services.browser_control_service.linkedin_send_connection", send)
     with pytest.raises(HTTPException) as exc:
         await linkedin.approve_outreach(
             run_id, linkedin.OutreachApproveRequest(approved=True), db, SimpleNamespace(id=owner)
         )
     assert exc.value.status_code == 409 and "Copy the draft" in exc.value.detail
     assert run.status == "awaiting_approval"
-    send.assert_not_awaited()
+    assert not hasattr(
+        __import__("app.services.browser_control_service", fromlist=["x"]),
+        "linkedin_send_connection",
+    )
 
 
 async def test_profile_can_clear_optional_fields_without_clearing_omitted_ones():

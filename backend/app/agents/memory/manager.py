@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import asyncpg
@@ -98,9 +97,9 @@ class MemoryManager:
         self._db_url = db_url.replace("postgresql+asyncpg://", "postgresql://")
         self._redis_url = redis_url
         self._pool: asyncpg.Pool | None = None
-        self._redis: Any | None = None          # redis.asyncio.Redis
+        self._redis: Any | None = None  # redis.asyncio.Redis
         self._tables_ready: bool = False
-        self._tables_checked: bool = False      # log once only
+        self._tables_checked: bool = False  # log once only
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -167,7 +166,6 @@ class MemoryManager:
     async def build_agent_context(
         self,
         user_id: str,
-        task_type: str,
         agent_type: str,
         max_episodes: int = 5,
     ) -> dict[str, Any]:
@@ -379,97 +377,13 @@ class MemoryManager:
     # Redis helpers
     # ------------------------------------------------------------------
 
-    async def redis_get(self, key: str) -> str | None:
-        if not self._redis:
-            return None
-        try:
-            return await self._redis.get(key)
-        except Exception as exc:
-            logger.debug("Redis GET %s failed: %s", key, exc)
-            return None
-
-    async def redis_set(self, key: str, value: str, ttl_seconds: int = 86400) -> None:
-        if not self._redis:
-            return
-        try:
-            await self._redis.set(key, value, ex=ttl_seconds)
-        except Exception as exc:
-            logger.debug("Redis SET %s failed: %s", key, exc)
-
     # ------------------------------------------------------------------
     # Episode count since timestamp (for reflection gating)
     # ------------------------------------------------------------------
 
-    async def episode_count_since(
-        self,
-        agent_type: str,
-        since: datetime,
-        user_id: str | None = None,
-    ) -> int:
-        """Count episodes for agent_type after *since* (optionally per-user)."""
-        if not self._tables_ready or not self._pool:
-            return 0
-        try:
-            async with self._pool.acquire() as conn:
-                if user_id:
-                    row = await conn.fetchrow(
-                        "SELECT COUNT(*) AS cnt FROM agent_memory_episodes "
-                        "WHERE agent_type = $1 AND user_id = $2 AND created_at > $3",
-                        agent_type,
-                        user_id,
-                        since,
-                    )
-                else:
-                    row = await conn.fetchrow(
-                        "SELECT COUNT(*) AS cnt FROM agent_memory_episodes "
-                        "WHERE agent_type = $1 AND created_at > $2",
-                        agent_type,
-                        since,
-                    )
-                return int(row["cnt"]) if row else 0
-        except Exception as exc:
-            logger.warning("MemoryManager.episode_count_since failed: %s", exc)
-            return 0
-
     # ------------------------------------------------------------------
     # Recent episodes for reflection
     # ------------------------------------------------------------------
-
-    async def recent_episodes(
-        self,
-        agent_type: str,
-        limit: int = 50,
-        user_id: str | None = None,
-    ) -> list[dict[str, Any]]:
-        if not self._tables_ready or not self._pool:
-            return []
-        try:
-            async with self._pool.acquire() as conn:
-                if user_id:
-                    rows = await conn.fetch(
-                        "SELECT user_id, task_type, strategy, success, "
-                        "context_summary, output_summary, created_at "
-                        "FROM agent_memory_episodes "
-                        "WHERE agent_type = $1 AND user_id = $2 "
-                        "ORDER BY created_at DESC LIMIT $3",
-                        agent_type,
-                        user_id,
-                        limit,
-                    )
-                else:
-                    rows = await conn.fetch(
-                        "SELECT user_id, task_type, strategy, success, "
-                        "context_summary, output_summary, created_at "
-                        "FROM agent_memory_episodes "
-                        "WHERE agent_type = $1 "
-                        "ORDER BY created_at DESC LIMIT $2",
-                        agent_type,
-                        limit,
-                    )
-                return [dict(r) for r in rows]
-        except Exception as exc:
-            logger.warning("MemoryManager.recent_episodes failed: %s", exc)
-            return []
 
     # ------------------------------------------------------------------
     # Preference learning — auto-extract from application history
@@ -488,7 +402,9 @@ class MemoryManager:
                     ON CONFLICT (user_id, preference_key) DO UPDATE SET
                         preference_value = EXCLUDED.preference_value
                     """,
-                    user_id, key, value,
+                    user_id,
+                    key,
+                    value,
                 )
         except Exception as exc:
             logger.warning("MemoryManager.set_preference failed: %s", exc)
@@ -512,17 +428,6 @@ class MemoryManager:
     # Blacklist — companies/roles user rejected or that didn't match
     # ------------------------------------------------------------------
 
-    async def add_to_blacklist(self, user_id: str, item_type: str, value: str) -> None:
-        """Add a company or role to user's blacklist.
-
-        item_type: 'company' or 'role'
-        """
-        key = f"blacklist_{item_type}"
-        existing = await self._get_list_preference(user_id, key)
-        if value.lower() not in [x.lower() for x in existing]:
-            existing.append(value)
-            await self.set_preference(user_id, key, json.dumps(existing))
-
     async def get_blacklist(self, user_id: str) -> dict[str, list[str]]:
         """Get user's blacklisted companies and roles."""
         companies = await self._get_list_preference(user_id, "blacklist_company")
@@ -542,21 +447,6 @@ class MemoryManager:
     # Cross-session context — persistent user profile data
     # ------------------------------------------------------------------
 
-    async def save_user_context(
-        self, user_id: str, target_salary: str = "", preferred_locations: str = "",
-        deal_breakers: str = "", target_roles: str = "",
-    ) -> None:
-        """Save cross-session user context (salary, locations, deal-breakers)."""
-        ctx = {
-            "target_salary": target_salary,
-            "preferred_locations": preferred_locations,
-            "deal_breakers": deal_breakers,
-            "target_roles": target_roles,
-        }
-        for k, v in ctx.items():
-            if v:
-                await self.set_preference(user_id, k, v)
-
     async def get_user_context(self, user_id: str) -> dict[str, str]:
         """Retrieve cross-session context for injection into agent prompts."""
         prefs = await self.get_preferences(user_id)
@@ -570,30 +460,6 @@ class MemoryManager:
     # ------------------------------------------------------------------
     # Post-pipeline memory extraction
     # ------------------------------------------------------------------
-
-    async def extract_from_application(
-        self, user_id: str, company: str, role: str, outcome: str, notes: str = ""
-    ) -> None:
-        """Extract and store memory from a completed job application.
-
-        Called after each pipeline run to build episodic memory.
-        """
-        # Save as episode
-        await self.save_episode(
-            user_id=user_id,
-            agent_type="auto_apply",
-            task_type="job_application",
-            strategy=f"{company}_{role}",
-            success=outcome in ("applied", "interview", "offer"),
-            context_summary=f"Applied to {role} at {company}",
-            output_summary=f"Outcome: {outcome}. {notes}",
-        )
-
-        # Learn from outcome
-        if outcome in ("rejected", "no_response"):
-            await self.upsert_learning(user_id, "auto_apply", f"cold_email_to_{company}", False)
-        elif outcome in ("interview", "offer"):
-            await self.upsert_learning(user_id, "auto_apply", f"approach_for_{role}", True)
 
     # ------------------------------------------------------------------
     # Procedural memory — store successful workflows as reusable patterns
@@ -623,37 +489,10 @@ class MemoryManager:
                         success_count = agent_memory_procedures.success_count + 1,
                         last_used_at = NOW()
                     """,
-                    user_id, agent_type, trigger_desc, json.dumps(workflow),
+                    user_id,
+                    agent_type,
+                    trigger_desc,
+                    json.dumps(workflow),
                 )
         except Exception as exc:
             logger.warning("MemoryManager.save_procedure failed: %s", exc)
-
-    async def get_procedures(
-        self, user_id: str, agent_type: str, limit: int = 5
-    ) -> list[dict]:
-        """Retrieve top procedures for an agent type, ordered by success count.
-
-        Returns list of {trigger_desc, workflow, success_count}.
-        """
-        if not self._tables_ready or not self._pool:
-            return []
-        try:
-            async with self._pool.acquire() as conn:
-                rows = await conn.fetch(
-                    "SELECT trigger_desc, workflow_json, success_count "
-                    "FROM agent_memory_procedures "
-                    "WHERE user_id = $1 AND agent_type = $2 "
-                    "ORDER BY success_count DESC LIMIT $3",
-                    user_id, agent_type, limit,
-                )
-                return [
-                    {
-                        "trigger": r["trigger_desc"],
-                        "workflow": json.loads(r["workflow_json"]),
-                        "success_count": r["success_count"],
-                    }
-                    for r in rows
-                ]
-        except Exception as exc:
-            logger.warning("MemoryManager.get_procedures failed: %s", exc)
-            return []

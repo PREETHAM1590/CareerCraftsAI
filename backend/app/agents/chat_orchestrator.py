@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 import uuid
 from contextvars import ContextVar
 from typing import Any
@@ -476,9 +475,7 @@ def bounded_prompt(messages: list) -> list:
 
 async def _log_turn(
     user_id: str,
-    first_message: str,
     response: AIMessage,
-    started: float,
     *,
     status: str = "completed",
 ):
@@ -524,10 +521,6 @@ async def agent_node(state: MessagesState) -> dict:
     from app.core.database import AsyncSessionLocal
     from app.core.llm_gateway import get_chat_gateway_llm
 
-    first_user = next(
-        (m.content for m in reversed(messages) if getattr(m, "type", "") == "human"), ""
-    )
-    started = time.monotonic()
     status = "completed"
     async with AsyncSessionLocal() as db:
         user = await _get_user(db, user_id)
@@ -556,7 +549,7 @@ async def agent_node(state: MessagesState) -> dict:
                 content="Could not reach your configured model. Try again shortly."
             )
 
-    await _log_turn(user_id, str(first_user), response, started, status=status)
+    await _log_turn(user_id, response, status=status)
     return {"messages": [response]}
 
 

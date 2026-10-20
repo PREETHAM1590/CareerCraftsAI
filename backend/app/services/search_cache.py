@@ -64,10 +64,11 @@ def query_hash(parts: dict[str, Any]) -> str:
     return hashlib.sha256(blob.encode()).hexdigest()[:32]
 
 
-def terms_of(query: dict) -> list[str]:
-    """Search words, order-insensitive: matching requires every word anyway."""
-    text = " ".join(query.get("titles") or []) or query.get("search_query") or "software engineer"
-    return sorted(set(str(text).lower().split()))
+def terms_of(query: dict) -> list[list[str]]:
+    """Canonical OR alternatives, preserving the words grouped within each role."""
+    roles = query.get("titles") or [query.get("search_query") or "software engineer"]
+    groups = {tuple(sorted(set(str(role).lower().split()))) for role in roles}
+    return [list(group) for group in sorted(groups)]
 
 
 def places_of(query: dict) -> list[str]:

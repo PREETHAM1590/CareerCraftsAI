@@ -7,12 +7,10 @@ The LLM only scores via prompts/job_search_prompt in batches of 20.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import uuid
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest
 from langchain_core.messages import HumanMessage
 
 from app.agents.prompts.job_search_prompt import JobMatch, JobSearchOutput
@@ -66,8 +64,6 @@ def _node_patches(**overrides):
     from app.agents import job_search as js
 
     defaults = dict(
-        fetch_model_settings=MagicMock(provider="openai"),
-        fetch_user_profile_text="profile",
         search_all_platforms=([], []),
         call_llm_json=None,
         _persist_saved_jobs=0,
@@ -75,26 +71,20 @@ def _node_patches(**overrides):
     )
     defaults.update(overrides)
     return [
-        patch.object(js, "fetch_model_settings", return_value=defaults["fetch_model_settings"]),
-        patch.object(
-            js, "fetch_user_profile_text", return_value=defaults["fetch_user_profile_text"]
-        ),
         patch.object(js, "search_all_platforms", return_value=defaults["search_all_platforms"]),
         patch.object(js, "emit"),
     ]
 
 
-def test_search_returns_empty_complete_with_warnings_and_no_llm_call():
+def test_search_returns_empty_complete_with_warnings():
     from app.agents import job_search as js
 
     patches = _node_patches(search_all_platforms=([], ["open_apis failed: Timeout"]))
     from unittest.mock import AsyncMock
 
-    with patches[0], patches[1], patches[2], patches[3]:
+    with patches[0], patches[1]:
         with patch("app.services.job_matching.rank_jobs", AsyncMock(return_value=([], []))):
-            with patch.object(js, "call_llm_json") as mock_score:
-                result = js.job_search_agent_node(make_state())
-                mock_score.assert_not_called()
+            result = js.job_search_agent_node(make_state())
     assert result["status"] == "completed"
     assert result["result"]["matches"] == []
     assert result["result"]["top_pick_id"] is None
@@ -110,7 +100,7 @@ def test_45_postings_all_scored_then_ranked_before_truncation():
     matches = [{**jobs[40], "match_score": 99}] + [{**j, "match_score": 50} for j in jobs[:24]]
     rank = AsyncMock(return_value=(matches, []))
     patches = _node_patches(search_all_platforms=(jobs, []))
-    with patches[0], patches[1], patches[2], patches[3]:
+    with patches[0], patches[1]:
         with (
             patch("app.services.job_matching.rank_jobs", rank),
             patch.object(js, "_persist_saved_jobs", return_value=25),
@@ -369,7 +359,6 @@ def test_search_returns_503_when_temporal_is_unreachable(monkeypatch):
 
 
 def test_persist_only_above_threshold_and_idempotent():
-    from app.agents import job_search as js
 
     added: list = []
 

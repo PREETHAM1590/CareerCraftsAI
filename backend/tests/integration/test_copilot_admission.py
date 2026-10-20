@@ -151,8 +151,8 @@ async def test_crashed_chat_slot_expires_and_logging_accumulates(member, monkeyp
                 "total_tokens": 5,
             },
         )
-        await _log_turn(user.clerk_user_id, "Hello", response, 0)
-        await _log_turn(user.clerk_user_id, "Hello", response, 0, status="failed")
+        await _log_turn(user.clerk_user_id, response)
+        await _log_turn(user.clerk_user_id, response, status="failed")
     finally:
         chat_execution_id.reset(token)
     await history.finish_turn(user.id, "new", "wire", execution_id=execution_id)

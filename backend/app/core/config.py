@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
 from typing import Literal
 
@@ -24,6 +23,19 @@ class Settings(BaseSettings):
     # Shared Redis cache for job-search catalog/live results
     # (app/services/search_cache.py). Off = every search computes fresh.
     SEARCH_CACHE_ENABLED: bool = True
+
+    DB_POOL_SIZE: int = Field(default=10, ge=1, le=100)
+    DB_MAX_OVERFLOW: int = Field(default=5, ge=0, le=100)
+    SYNC_DB_POOL_SIZE: int = Field(default=5, ge=1, le=100)
+    SYNC_DB_MAX_OVERFLOW: int = Field(default=0, ge=0, le=100)
+    NOTIFICATION_WORKER_CONCURRENCY: int = Field(default=2, ge=1, le=32)
+    EMAIL_WORKER_CONCURRENCY: int = Field(default=2, ge=1, le=32)
+
+    @model_validator(mode="after")
+    def validate_rag_window(self):
+        if self.RAG_CHUNK_OVERLAP >= self.RAG_CHUNK_SIZE:
+            raise ValueError("RAG_CHUNK_OVERLAP must be smaller than RAG_CHUNK_SIZE")
+        return self
 
     # ── Clerk Auth (primary identity provider) ─────────────────────────
     # Clerk signs session tokens with RS256. Either point CLERK_JWKS_URL at the
@@ -72,27 +84,6 @@ class Settings(BaseSettings):
     # to fall back to the user's configured BYOK model.
     BROWSER_USE_OLLAMA_MODEL: str = "llama3.2"
     BROWSER_USE_OLLAMA_URL: str = ""  # e.g. "http://localhost:11434"
-    # Session limits — cap concurrent Chromium sessions to avoid OOM.
-    # Rule of thumb: floor(VPS_RAM_GB * 1.5); e.g. 4GB VPS → 6, 2GB VPS → 3.
-    BROWSER_USE_MAX_CONCURRENT_SESSIONS: int = 4
-    BROWSER_USE_SESSION_MEM_LIMIT_MB: int = 500
-    # Debug screenshots — save a PNG on every browser task failure.
-    # Mount BROWSER_DEBUG_DIR as a Docker volume for persistence.
-    BROWSER_DEBUG_SCREENSHOTS: bool = False
-    BROWSER_DEBUG_DIR: str = Field(
-        default_factory=lambda: str(Path(tempfile.gettempdir()) / "browser_debug")
-    )
-    # Human-like delay ranges per action type (milliseconds).
-    # Lowering these increases detection risk; raising them slows runs.
-    BROWSER_DELAY_NAVIGATE_MIN_MS: int = 1500  # page navigation
-    BROWSER_DELAY_NAVIGATE_MAX_MS: int = 3500
-    BROWSER_DELAY_FILL_MIN_MS: int = 300  # form field fill
-    BROWSER_DELAY_FILL_MAX_MS: int = 800
-    BROWSER_DELAY_CLICK_MIN_MS: int = 200  # button / link click
-    BROWSER_DELAY_CLICK_MAX_MS: int = 600
-    BROWSER_DELAY_EXTRACT_MIN_MS: int = 500  # wait after page load for extraction
-    BROWSER_DELAY_EXTRACT_MAX_MS: int = 1500
-
     # ── External API keys (all optional) ───────────────────────────────
     # Recruiter email finders and verifiers: bring your own keys. With no
     # verifier key set, no address counts as verified and every one is
@@ -110,7 +101,6 @@ class Settings(BaseSettings):
     # Must be on a domain verified in the Resend account, or every send is rejected.
     RESEND_FROM_EMAIL: str = "noreply@jobagent.ai"
     YOUTUBE_API_KEY: str = ""
-    AGENTQL_API_KEY: str | None = None
     FIRECRAWL_API_KEY: str | None = None
     SEARXNG_URL: str | None = None
     RAPIDAPI_KEY: str | None = None
@@ -138,14 +128,8 @@ class Settings(BaseSettings):
 
     # ── Search providers ───────────────────────────────────────────────
     TAVILY_API_KEY: str | None = None
-    BRAVE_API_KEY: str | None = None
-    SERPAPI_API_KEY: str | None = None
-    BING_SEARCH_API_KEY: str | None = None
-    DUCKDUCKGO_ENABLED: bool = True
-    MOJEEK_ENABLED: bool = True
 
     # ── Agent configuration ────────────────────────────────────────────
-    AGENT_DEFAULT_TIMEOUT_S: int = 60
     AGENT_MAX_CONCURRENT_PER_USER: int = 2
     # ── Application limits (protect the member's accounts on job boards) ──
     # Applications started per rolling 24 hours, the least gap between two,
@@ -240,9 +224,10 @@ class Settings(BaseSettings):
     NANGO_REQUEST_TIMEOUT_S: int = Field(default=15, ge=1, le=60)
 
     # ── RAG configuration ──────────────────────────────────────────────
-    RAG_CHUNK_SIZE: int = 500
-    RAG_CHUNK_OVERLAP: int = 50
-    RAG_TOP_K: int = 5
+    RAG_CHUNK_SIZE: int = Field(default=500, ge=50, le=10000)
+    RAG_CHUNK_OVERLAP: int = Field(default=50, ge=0)
+    # Default k for retrieve() callers that pass no k; agents set their own.
+    RAG_TOP_K: int = Field(default=5, ge=1, le=50)
     EMBEDDING_PROVIDER: str = ""
     # Used only when EMBEDDING_PROVIDER stands in for a chat provider that has
     # no embeddings API (the chat provider's own key is never reused).
@@ -257,7 +242,6 @@ class Settings(BaseSettings):
     RATE_LIMIT_DEFAULT: str = "60/minute"
     RATE_LIMIT_AGENT_RUN: str = "10/minute"
     RATE_LIMIT_UPLOAD: str = "5/minute"
-    RATE_LIMIT_STR: str = "100/minute"
 
     # ── Document storage ───────────────────────────────────────────────
     # Uploaded resumes/documents live on local disk (self-hosted Postgres too —

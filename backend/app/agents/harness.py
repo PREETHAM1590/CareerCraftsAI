@@ -4,7 +4,6 @@ harness.py — AgentHarness wraps the LangGraph orchestrator with:
   1. Memory-based context injection (pre-run)
   2. Episode saving (post-run)
   3. Adaptive strategy selection based on past outcomes
-  4. Reflection loop that improves agent prompts over time
 
 Usage::
 
@@ -28,29 +27,17 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import Callable, Awaitable
-from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from langchain_core.messages import HumanMessage
 
+from app.agents.memory import MemoryManager as HarnessMemoryManager
 from app.agents.orchestrator import orchestrator
 from app.agents.semantic_memory import SemanticMemoryBridge
 from app.agents.state import AgentState
 from app.agents.strategies import TASK_TO_AGENT, strategies_for_task
-from app.agents.memory import MemoryManager as HarnessMemoryManager
 
 logger = logging.getLogger(__name__)
-
-# How many new episodes trigger an early reflection (before 24-h timer fires)
-_REFLECTION_EPISODE_THRESHOLD = 20
-# TTL for reflection timestamp stored in Redis (seconds) — 25 h so it ages out
-_REFLECTION_REDIS_TTL = 90_000
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Reflection-hook type
-# ──────────────────────────────────────────────────────────────────────────────
-ReflectionHook = Callable[[str, list[dict[str, Any]]], Awaitable[None]]
 
 
 class AgentHarness:
@@ -66,7 +53,6 @@ class AgentHarness:
         self._memory = HarnessMemoryManager(db_url=db_url, redis_url=redis_url)
         self._semantic_memory = SemanticMemoryBridge()
         self._initialized = False
-        self._reflection_hooks: list[ReflectionHook] = []
         self._init_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
@@ -86,19 +72,6 @@ class AgentHarness:
     async def close(self) -> None:
         """Release DB pool and Redis connections."""
         await self._memory.close()
-
-    # ------------------------------------------------------------------
-    # External hook registration
-    # ------------------------------------------------------------------
-
-    def add_reflection_hook(self, hook: ReflectionHook) -> None:
-        """
-        Register a callback that is invoked after every episode save.
-
-        The hook receives (agent_type, [episode_dict, ...]) and can perform
-        custom post-processing (e.g. push metrics, send webhooks).
-        """
-        self._reflection_hooks.append(hook)
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -125,7 +98,6 @@ class AgentHarness:
         5. Save episode to memory
         6. If successful, extract and save new memories from output
         7. Update strategy success rates in agent_learnings
-        8. Fire reflection hooks
         9. Return result
         """
         import uuid as _uuid
@@ -134,7 +106,8 @@ class AgentHarness:
         agent_type = TASK_TO_AGENT.get(task_type, task_type)
         start_ts = time.monotonic()
 
-        await self._ensure_initialized()
+        if agent_type == "cover_letter":
+            await self._ensure_initialized()
 
         # Resolve once per run. Keep the ORM row (including only encrypted key
         # material) in state; nodes retain their DB fallback for direct calls.
@@ -150,24 +123,47 @@ class AgentHarness:
         mem_context: dict[str, Any] = {}
         semantic_context: dict[str, Any] = {}
         task_text = _summarise(context, 1000)
-        try:
-            mem_context = await self._memory.build_agent_context(
-                user_id=user_id,
-                task_type=task_type,
-                agent_type=agent_type,
-            )
-        except Exception as exc:
-            logger.warning("Harness: memory context fetch failed, continuing without: %s", exc)
+        from app.services.memory_lifecycle import memory_access
 
-        try:
-            semantic_context = await self._semantic_memory.build_context(
-                user_id=user_id,
-                agent_type=agent_type,
-                task_text=task_text,
-                user_settings=user_settings,
-            )
-        except Exception as exc:
-            logger.warning("Harness: pgvector memory context failed, continuing without: %s", exc)
+        generation = None
+        if agent_type == "cover_letter":
+            try:
+                async with memory_access(user_id) as generation:
+                    pass
+                if generation is not None:
+                    embeddings = await self._semantic_memory.prepare_context(
+                        user_id, task_text, user_settings
+                    )
+                async with memory_access(user_id, generation) as current_generation:
+                    if generation is not None and current_generation is not None:
+                        try:
+                            mem_context = await self._memory.build_agent_context(
+                                user_id=user_id,
+                                agent_type=agent_type,
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "Harness: memory context fetch failed, continuing without: %s", exc
+                            )
+
+                        try:
+                            semantic_context = await self._semantic_memory.build_context(
+                                user_id=user_id,
+                                agent_type=agent_type,
+                                task_text=task_text,
+                                embeddings=embeddings,
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "Harness: pgvector memory context failed, continuing without: %s",
+                                exc,
+                            )
+
+                    else:
+                        generation = None
+            except Exception as exc:
+                generation = None
+                logger.warning("Memory access unavailable: %s", exc)
 
         # ── 2 & 3. Strategy selection & context injection ────────────
         strategy = "standard"
@@ -242,22 +238,17 @@ class AgentHarness:
 
         duration_ms = int((time.monotonic() - start_ts) * 1000)
 
-        # ── 5 & 6. Save episode, extract memories ───────────────────
-        output_summary = ""
-        if result_state:
-            output = result_state.get("result") or result_state.get("pending_action") or {}
-            output_summary = _summarise(output)
-            if success and output:
-                await self._extract_and_save_memories(
-                    user_id=user_id,
-                    agent_type=agent_type,
-                    output=output,
-                )
+        if generation is not None:
+            output = (
+                (result_state.get("result") or result_state.get("pending_action") or {})
+                if result_state
+                else {}
+            )
+            prepared = None
             try:
-                await self._semantic_memory.save_after_run(
+                prepared = await self._semantic_memory.prepare_after_run(
                     user_id=user_id,
                     agent_type=agent_type,
-                    task_type=task_type,
                     context=context,
                     output=output if isinstance(output, dict) else {"output": output},
                     success=success,
@@ -265,49 +256,59 @@ class AgentHarness:
                     user_settings=user_settings,
                 )
             except Exception as exc:
-                logger.warning("Harness: pgvector memory save failed: %s", exc)
+                logger.warning("Memory preparation unavailable: %s", exc)
+            try:
+                async with memory_access(user_id, generation) as current_generation:
+                    if current_generation is not None:
+                        # ── 5 & 6. Save episode, extract memories ───────────────────
+                        output_summary = ""
+                        if result_state:
+                            output = (
+                                result_state.get("result")
+                                or result_state.get("pending_action")
+                                or {}
+                            )
+                            output_summary = _summarise(output)
+                            if success and output:
+                                await self._extract_and_save_memories(
+                                    user_id=user_id,
+                                    agent_type=agent_type,
+                                    output=output,
+                                )
+                            try:
+                                if prepared is not None:
+                                    await self._semantic_memory.save_prepared(prepared)
+                            except Exception as exc:
+                                logger.warning("Harness: pgvector memory save failed: %s", exc)
 
-        context_summary = _summarise(context)
+                        context_summary = _summarise(context)
 
-        try:
-            await self._memory.save_episode(
-                user_id=user_id,
-                agent_type=agent_type,
-                task_type=task_type,
-                strategy=strategy,
-                success=success,
-                context_summary=context_summary,
-                output_summary=output_summary,
-            )
-        except Exception as exc:
-            logger.warning("Harness: save_episode failed: %s", exc)
+                        try:
+                            await self._memory.save_episode(
+                                user_id=user_id,
+                                agent_type=agent_type,
+                                task_type=task_type,
+                                strategy=strategy,
+                                success=success,
+                                context_summary=context_summary,
+                                output_summary=output_summary,
+                            )
+                        except Exception as exc:
+                            logger.warning("Harness: save_episode failed: %s", exc)
 
-        # ── 7. Update strategy success rate ─────────────────────────
-        try:
-            await self._memory.upsert_learning(
-                user_id=user_id,
-                agent_type=agent_type,
-                learning=strategy,
-                success=success,
-            )
-        except Exception as exc:
-            logger.warning("Harness: upsert_learning failed: %s", exc)
+                        # ── 7. Update strategy success rate ─────────────────────────
+                        try:
+                            await self._memory.upsert_learning(
+                                user_id=user_id,
+                                agent_type=agent_type,
+                                learning=strategy,
+                                success=success,
+                            )
+                        except Exception as exc:
+                            logger.warning("Harness: upsert_learning failed: %s", exc)
 
-        # ── 8. Fire reflection hooks ─────────────────────────────────
-        if self._reflection_hooks:
-            episode = {
-                "user_id": user_id,
-                "agent_type": agent_type,
-                "task_type": task_type,
-                "strategy": strategy,
-                "success": success,
-                "output_summary": output_summary,
-            }
-            for hook in self._reflection_hooks:
-                try:
-                    await hook(agent_type, [episode])
-                except Exception as exc:
-                    logger.warning("Harness: reflection hook raised: %s", exc)
+            except Exception as exc:
+                logger.warning("Memory persistence unavailable: %s", exc)
 
         # ── 9. Return result ─────────────────────────────────────────
         return {
@@ -412,9 +413,13 @@ class AgentHarness:
                     if isinstance(item, dict) and (item.get("title") or item.get("role"))
                 ]
                 if companies:
-                    await self._memory.set_preference(user_id, "recent_job_companies", json.dumps(companies))
+                    await self._memory.set_preference(
+                        user_id, "recent_job_companies", json.dumps(companies)
+                    )
                 if roles:
-                    await self._memory.set_preference(user_id, "recent_job_roles", json.dumps(roles))
+                    await self._memory.set_preference(
+                        user_id, "recent_job_roles", json.dumps(roles)
+                    )
 
         if agent_type == "linkedin" and action_type == "linkedin_edits":
             if output.get("headline"):
@@ -451,24 +456,27 @@ class AgentHarness:
                 total = len(statuses)
                 success_count = sum(1 for s in statuses if s in ("draft_saved", "applied"))
                 manual_count = sum(1 for s in statuses if s == "requires_manual")
-                fail_count = sum(1 for s in statuses if s == "failed")
 
                 # Save portal-specific learning so the harness biases strategy selection.
                 # Key format: "portal:<name>:<outcome>" — parsed by _select_strategy.
                 if manual_count == total and total >= 1:
                     # Portal consistently requires manual — don't waste browser sessions
-                    new_learnings.append({
-                        "learning": f"portal:{portal}:requires_manual",
-                        "success_rate": 0.0,
-                        "sample_count": total,
-                    })
+                    new_learnings.append(
+                        {
+                            "learning": f"portal:{portal}:requires_manual",
+                            "success_rate": 0.0,
+                            "sample_count": total,
+                        }
+                    )
                 elif success_count > 0:
                     rate = success_count / total
-                    new_learnings.append({
-                        "learning": f"portal:{portal}:auto_fill_works",
-                        "success_rate": rate,
-                        "sample_count": total,
-                    })
+                    new_learnings.append(
+                        {
+                            "learning": f"portal:{portal}:auto_fill_works",
+                            "success_rate": rate,
+                            "sample_count": total,
+                        }
+                    )
 
             # Save summary for UI / dashboard
             if applications:
@@ -499,153 +507,6 @@ class AgentHarness:
         }
         await self._memory.save_procedure(user_id, agent_type, trigger, workflow)
 
-    # ------------------------------------------------------------------
-    # Reflection
-    # ------------------------------------------------------------------
-
-    async def reflect(
-        self,
-        agent_type: str,
-        llm: Any,
-        user_id: str | None = None,
-    ) -> None:
-        """
-        Analyses recent episodes for this agent_type and extracts patterns:
-        what inputs/contexts led to successful vs failed outcomes.
-        Saves new learnings to agent_learnings table.
-
-        Guard conditions (checked before running):
-          - last reflection was > 24 h ago  OR
-          - > 20 new episodes since last reflection
-
-        Result timestamp stored in Redis: ``reflect:{agent_type}:last_run``
-        """
-        await self._ensure_initialized()
-
-        redis_key = f"reflect:{agent_type}:last_run"
-        now = datetime.now(timezone.utc)
-
-        # ── Check guard conditions ──────────────────────────────────
-        should_reflect = False
-        last_run_str = await self._memory.redis_get(redis_key)
-        if last_run_str is None:
-            should_reflect = True
-        else:
-            try:
-                last_run = datetime.fromisoformat(last_run_str)
-                hours_elapsed = (now - last_run).total_seconds() / 3600
-                if hours_elapsed >= 24:
-                    should_reflect = True
-                else:
-                    # Check episode count since last run
-                    new_count = await self._memory.episode_count_since(
-                        agent_type=agent_type,
-                        since=last_run,
-                        user_id=user_id,
-                    )
-                    if new_count >= _REFLECTION_EPISODE_THRESHOLD:
-                        should_reflect = True
-            except Exception:
-                should_reflect = True  # unparseable timestamp → reflect
-
-        if not should_reflect:
-            logger.debug("Harness.reflect: skipping reflection for %s (guard conditions not met)", agent_type)
-            return
-
-        # ── Fetch recent episodes ────────────────────────────────────
-        episodes = await self._memory.recent_episodes(
-            agent_type=agent_type,
-            limit=50,
-            user_id=user_id,
-        )
-        if not episodes:
-            logger.debug("Harness.reflect: no episodes found for %s", agent_type)
-            await self._memory.redis_set(redis_key, now.isoformat(), _REFLECTION_REDIS_TTL)
-            return
-
-        # ── Build episode summary for the LLM ───────────────────────
-        lines: list[str] = []
-        for ep in episodes[:30]:  # cap tokens
-            outcome = "SUCCESS" if ep.get("success") else "FAILURE"
-            strategy = ep.get("strategy", "unknown")
-            summary = (ep.get("output_summary") or "")[:200]
-            lines.append(f"- [{outcome}] strategy={strategy} | {summary}")
-        episode_text = "\n".join(lines)
-
-        prompt = (
-            f"You are an AI reflection engine for a job-search agent of type '{agent_type}'.\n"
-            f"Below are recent episode outcomes:\n\n"
-            f"{episode_text}\n\n"
-            "Analyse the patterns. Return a JSON array of objects with keys:\n"
-            '  "learning" (string), "success_rate" (float 0–1), "sample_count" (int)\n'
-            "Focus on strategies and context patterns that correlate with SUCCESS vs FAILURE.\n"
-            "Return ONLY the JSON array, no prose."
-        )
-
-        # ── Call LLM ────────────────────────────────────────────────
-        try:
-            from langchain_core.messages import HumanMessage as HM
-
-            response = await asyncio.get_running_loop().run_in_executor(
-                None, lambda: llm.invoke([HM(content=prompt)])
-            )
-            raw = response.content.strip()
-            # Strip markdown fences if present
-            if raw.startswith("```"):
-                raw = raw.split("```")[1]
-                if raw.startswith("json"):
-                    raw = raw[4:]
-            raw_learnings: list[dict[str, Any]] = json.loads(raw)
-
-            # SECURITY: Validate each learning entry against schema (AGENT-002)
-            from pydantic import BaseModel, ValidationError
-
-            class LearningEntry(BaseModel):
-                learning: str
-                success_rate: float
-                sample_count: int
-
-            learnings: list[dict[str, Any]] = []
-            for entry in raw_learnings:
-                try:
-                    validated = LearningEntry(**entry)
-                    learnings.append(validated.model_dump())
-                except (ValidationError, TypeError):
-                    logger.warning("Harness.reflect: discarding invalid learning entry: %s", entry)
-
-            if not learnings:
-                logger.warning("Harness.reflect: all learning entries failed validation")
-                await self._memory.redis_set(redis_key, now.isoformat(), _REFLECTION_REDIS_TTL)
-                return
-        except Exception as exc:
-            logger.warning("Harness.reflect: LLM call or JSON parse failed: %s", exc)
-            await self._memory.redis_set(redis_key, now.isoformat(), _REFLECTION_REDIS_TTL)
-            return
-
-        # ── Persist learnings ────────────────────────────────────────
-        if user_id:
-            await self._memory.save_learnings(
-                user_id=user_id,
-                agent_type=agent_type,
-                learnings=learnings,
-            )
-        else:
-            # Global reflection: save for each unique user seen in episodes
-            seen_users: set[str] = {str(ep["user_id"]) for ep in episodes if ep.get("user_id")}
-            for uid in seen_users:
-                await self._memory.save_learnings(
-                    user_id=uid,
-                    agent_type=agent_type,
-                    learnings=learnings,
-                )
-
-        logger.info(
-            "Harness.reflect: saved %d learnings for agent_type=%s",
-            len(learnings),
-            agent_type,
-        )
-        await self._memory.redis_set(redis_key, now.isoformat(), _REFLECTION_REDIS_TTL)
-
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Singleton (lazy)
@@ -672,13 +533,13 @@ async def get_harness() -> AgentHarness:
             db_url=settings.DATABASE_URL,
             redis_url=settings.REDIS_URL,
         )
-        await _harness_instance._ensure_initialized()
         return _harness_instance
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Private helpers
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 def _summarise(data: Any, max_len: int = 500) -> str:
     """Produce a short text summary of a dict / list / scalar."""

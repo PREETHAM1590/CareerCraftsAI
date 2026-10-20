@@ -1,39 +1,36 @@
-"""
-memory/tests/test_embedder.py — MemoryEmbedder provider routing.
+"""Installed Google SDK uses separate async clients for concurrent members."""
 
-Covers the google.generativeai path specifically: that SDK is synchronous,
-so _google_embed must run it via asyncio.to_thread rather than calling it
-directly on the event loop.
-"""
-
-from __future__ import annotations
-
-import sys
-import types
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
+from google import genai
 
 from memory.embedder import MemoryEmbedder
 
 
 @pytest.mark.asyncio
-async def test_google_embed_offloads_the_blocking_sdk_call(monkeypatch):
-    calls: list[str] = []
+async def test_google_credentials_are_request_scoped(monkeypatch):
+    clients = []
 
-    def fake_configure(api_key: str) -> None:
-        calls.append("configure")
+    def factory(*, api_key, http_options):
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.models.embed_content.return_value = SimpleNamespace(
+            embeddings=[SimpleNamespace(values=[1.0 if api_key == "a" else 2.0])]
+        )
+        clients.append(client)
+        return SimpleNamespace(aio=client)
 
-    def fake_embed_content(model: str, content: str, output_dimensionality: int) -> dict:
-        calls.append("embed_content")
-        assert model == "models/gemini-embedding-001"
-        assert output_dimensionality == 768
-        return {"embedding": [0.1, 0.2, 0.3]}
-
-    fake_genai = types.SimpleNamespace(configure=fake_configure, embed_content=fake_embed_content)
-    monkeypatch.setitem(sys.modules, "google.generativeai", fake_genai)
-
-    embedder = MemoryEmbedder({"provider": "google", "api_key": "test-key"})
-    result = await embedder._google_embed("hello world")
-
-    assert result == [0.1, 0.2, 0.3]
-    assert calls == ["configure", "embed_content"]
+    monkeypatch.setattr(genai, "Client", factory)
+    result = await asyncio.gather(
+        *[
+            MemoryEmbedder({"provider": "google", "api_key": key})._google_embed("hello")
+            for key in ("a", "b")
+        ]
+    )
+    assert result == [[1.0], [2.0]]
+    assert len(clients) == 2
+    for client in clients:
+        client.__aexit__.assert_awaited_once()

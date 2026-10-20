@@ -2,7 +2,7 @@
 controls to forget it. Memory rows are keyed by the member's id as text."""
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import get_current_user, get_db
@@ -37,12 +37,6 @@ _DELETE_ONE = {
     "procedures": text("DELETE FROM agent_memory_procedures WHERE user_id = :uid AND id = :id"),
     "episodes": text("DELETE FROM agent_memory_episodes WHERE user_id = :uid AND id = :id"),
 }
-_DELETE_ALL = {
-    "learnings": text("DELETE FROM agent_memory_learnings WHERE user_id = :uid"),
-    "preferences": text("DELETE FROM agent_memory_preferences WHERE user_id = :uid"),
-    "procedures": text("DELETE FROM agent_memory_procedures WHERE user_id = :uid"),
-    "episodes": text("DELETE FROM agent_memory_episodes WHERE user_id = :uid"),
-}
 
 
 @router.get("")
@@ -63,9 +57,22 @@ async def forget_everything(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    uid = str(current_user.id)
-    for statement in _DELETE_ALL.values():
-        await db.execute(statement, {"uid": uid})
+    from app.services.memory_lifecycle import delete_memory_cache, delete_memory_rows
+
+    owner = (
+        await db.execute(
+            select(User)
+            .where(User.id == current_user.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if owner is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+    owner.memory_generation += 1
+    await delete_memory_rows(db, owner.id)
+    # Fail the request on cache failure; a retry repeats the whole operation.
+    await delete_memory_cache(owner.id)
     await db.commit()
     return {"deleted": "all"}
 

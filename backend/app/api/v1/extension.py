@@ -142,8 +142,7 @@ async def revoke_device(
     ).scalar_one_or_none()
     if device is None:
         raise HTTPException(status_code=404, detail="Device not found")
-    device.revoked_at = datetime.now(UTC)
-    await db.commit()
+    await extension_service.revoke_device(db, device)
     return {"status": "revoked"}
 
 
@@ -254,8 +253,7 @@ async def device_revoke_self(
     device: ExtensionDevice = Depends(get_device), db: AsyncSession = Depends(get_db)
 ):
     """The extension disconnects or re-pairs: retire its own token."""
-    device.revoked_at = datetime.now(UTC)
-    await db.commit()
+    await extension_service.revoke_device(db, device)
     return {"status": "revoked"}
 
 
@@ -270,7 +268,8 @@ async def claim_task(
     if task is None:
         return Response(status_code=204)
     await _signal(task.workflow_id, {"stage": "claimed"})
-    await _record_progress(db, task, "claimed", STAGE_MESSAGES["claimed"])
+    if not getattr(task, "redelivered", False):
+        await _record_progress(db, task, "claimed", STAGE_MESSAGES["claimed"])
     return extension_service.task_view(task)
 
 

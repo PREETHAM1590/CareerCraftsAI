@@ -62,24 +62,3 @@ def record_tokens_sync(user_id: str, tokens: int) -> int:
         return int(new_total)
     finally:
         client.close()
-
-
-async def consume_tokens(user_id: str, tokens: int, limit: int = DEFAULT_DAILY_LIMIT) -> int:
-    """Record token consumption. Raises TokenBudgetExceeded if over limit.
-
-    Returns new total used today.
-    """
-    r = await _get_redis()
-    key = _budget_key(user_id)
-
-    # Atomic increment
-    new_total = await r.incrby(key, tokens)
-
-    # Set TTL on first use (expire at end of day — 24h max)
-    if new_total == tokens:
-        await r.expire(key, 86400)
-
-    if new_total > limit:
-        raise TokenBudgetExceeded(user_id, new_total, limit)
-
-    return new_total

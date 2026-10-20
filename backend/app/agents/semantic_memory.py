@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
@@ -23,6 +24,24 @@ from memory.manager import MemoryManager as PgMemoryManager
 from memory.models import Episode, Learning, Memory
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class PreparedEmbeddings:
+    """In-memory vectors only: fenced DB operations can never call a provider."""
+
+    vectors: dict[str, list[float]]
+
+    async def embed(self, text: str) -> list[float]:
+        return self.vectors[text]
+
+
+@dataclass
+class PreparedRunMemory:
+    episode: Episode
+    learning: Learning
+    memories: list[Memory]
+    embeddings: PreparedEmbeddings
 
 
 class SemanticMemoryBridge:
@@ -60,22 +79,44 @@ class SemanticMemoryBridge:
             logger.debug("Semantic memory model settings unavailable: %s", exc)
             return {}, None
 
-    def _manager(self, resolved_settings: dict[str, Any]) -> PgMemoryManager:
-        redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
-        embedder = MemoryEmbedder(resolved_settings, redis_client=redis_client)
+    def _manager(self, embeddings: PreparedEmbeddings) -> PgMemoryManager:
+        redis_client = redis.from_url(
+            settings.REDIS_URL,
+            decode_responses=True,
+            socket_connect_timeout=2,
+            socket_timeout=2,
+        )
         db_url = settings.DATABASE_URL.replace("+asyncpg", "")
-        return PgMemoryManager(db_url=db_url, redis_client=redis_client, embedder=embedder)
+        return PgMemoryManager(db_url=db_url, redis_client=redis_client, embedder=embeddings)
+
+    async def _prepare_embeddings(self, resolved: dict, texts: list[str]) -> PreparedEmbeddings:
+        # Never read or publish Redis entries here: Forget may run while a
+        # provider is pending. All preparation is ephemeral until fenced writes.
+        embedder = MemoryEmbedder(resolved, redis_client=None)
+        vectors = {}
+        for text in dict.fromkeys(texts):
+            vectors[text] = await embedder.embed(text)
+        return PreparedEmbeddings(vectors)
+
+    async def prepare_context(
+        self, user_id: str, task_text: str, user_settings: dict[str, Any]
+    ) -> PreparedEmbeddings:
+        """Provider work before acquiring the owner fence; bounded in total."""
+        async with asyncio.timeout(30):
+            resolved, _ = await asyncio.to_thread(
+                self._resolve_user_settings, user_id, user_settings
+            )
+            return await self._prepare_embeddings(resolved, [task_text] if task_text else [])
 
     async def build_context(
         self,
         user_id: str,
         agent_type: str,
         task_text: str,
-        user_settings: dict[str, Any],
+        embeddings: PreparedEmbeddings,
     ) -> dict[str, Any]:
         """Build pgvector AgentContext, suitable for injection into state.context."""
-        resolved, _ = self._resolve_user_settings(user_id, user_settings)
-        mgr = self._manager(resolved)
+        mgr = self._manager(embeddings)
         try:
             ctx = await mgr.build_agent_context(UUID(str(user_id)), agent_type, task=task_text)
             data = ctx.model_dump(mode="json")
@@ -94,77 +135,78 @@ class SemanticMemoryBridge:
             return {}
         finally:
             await mgr.close()
+            mgr.redis.close()
 
-    async def save_after_run(
+    async def prepare_after_run(
         self,
         user_id: str,
         agent_type: str,
-        task_type: str,
         context: dict[str, Any],
         output: dict[str, Any],
         success: bool,
         strategy: str,
         user_settings: dict[str, Any],
-    ) -> None:
-        """Save episode, learning, session state, and extracted memories."""
-        resolved, model_settings = self._resolve_user_settings(user_id, user_settings)
-        mgr = self._manager(resolved)
-        uid = UUID(str(user_id))
-        output_summary = _summarise(output, 1500)
-        context_summary = _summarise(context, 1000)
-        outcome = "success" if success else "failure"
+    ) -> PreparedRunMemory:
+        """Extract/encode without a DB transaction, owner lock or persistent cache."""
+        async with asyncio.timeout(30):
+            resolved, model_settings = await asyncio.to_thread(
+                self._resolve_user_settings, user_id, user_settings
+            )
+            uid = UUID(str(user_id))
+            output_summary = _summarise(output, 1500)
+            episode = Episode(
+                user_id=uid,
+                agent_type=agent_type,
+                summary=output_summary or _summarise(context, 1000),
+                input=context,
+                output=output,
+                outcome="success" if success else "failure",
+            )
+            memories = _heuristic_memories(uid, agent_type, output)
+            if success and output_summary and model_settings is not None:
+                try:
+                    from app.core.model_router import build_agent_llm
 
+                    llm = build_agent_llm(model_settings)
+                    extracted = await asyncio.wait_for(
+                        self._extractor.extract_from_agent_output(
+                            user_id=uid,
+                            agent_type=agent_type,
+                            output_text=output_summary,
+                            llm=llm,
+                        ),
+                        timeout=20,
+                    )
+                    memories.extend(extracted[:8])
+                except Exception as exc:
+                    logger.debug("Semantic memory extraction skipped: %s", exc)
+            embeddings = await self._prepare_embeddings(
+                resolved, [episode.summary] + [memory.content for memory in memories]
+            )
+            return PreparedRunMemory(
+                episode=episode,
+                learning=Learning(
+                    agent_type=agent_type, learning=strategy, success_rate=1.0 if success else 0.0
+                ),
+                memories=memories,
+                embeddings=embeddings,
+            )
+
+    async def save_prepared(self, prepared: PreparedRunMemory) -> None:
+        """Only local persistence; caller must hold the matching generation fence."""
+        mgr = self._manager(prepared.embeddings)
         try:
-            mgr.set_session(uid, f"last_{agent_type}_summary", output_summary[:1000])
-            await mgr.save_episode(
-                Episode(
-                    user_id=uid,
-                    agent_type=agent_type,
-                    summary=output_summary or context_summary,
-                    input=context,
-                    output=output,
-                    outcome=outcome,
-                )
+            episode = prepared.episode
+            mgr.set_session(
+                episode.user_id, f"last_{episode.agent_type}_summary", episode.summary[:1000]
             )
-            await mgr.save_learning(
-                Learning(
-                    agent_type=agent_type,
-                    learning=strategy,
-                    success_rate=1.0 if success else 0.0,
-                )
-            )
-
-            for memory in _heuristic_memories(uid, agent_type, output):
+            await mgr.save_episode(episode)
+            await mgr.save_learning(prepared.learning)
+            for memory in prepared.memories:
                 await mgr.save_memory(memory)
-
-            if success and output_summary:
-                llm = None
-                if model_settings is not None:
-                    try:
-                        from app.core.model_router import build_agent_llm
-
-                        llm = build_agent_llm(model_settings)
-                    except Exception as exc:
-                        logger.debug("Semantic memory LLM unavailable: %s", exc)
-                if llm is not None:
-                    try:
-                        extracted = await asyncio.wait_for(
-                            self._extractor.extract_from_agent_output(
-                                user_id=uid,
-                                agent_type=agent_type,
-                                output_text=output_summary,
-                                llm=llm,
-                            ),
-                            timeout=20,
-                        )
-                        for memory in extracted:
-                            await mgr.save_memory(memory)
-                    except Exception as exc:
-                        logger.debug("Semantic memory extraction skipped: %s", exc)
-        except Exception as exc:
-            logger.warning("Semantic memory save failed: %s", exc)
         finally:
             await mgr.close()
+            mgr.redis.close()
 
 
 def _heuristic_memories(user_id: UUID, agent_type: str, output: dict[str, Any]) -> list[Memory]:

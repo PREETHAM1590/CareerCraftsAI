@@ -307,7 +307,6 @@ def salary_report_node(state: AgentState) -> AgentState:
         - On data unavailable: status=completed, result with data_unavailable=True
         - On error: status=failed, error message
     """
-    import asyncio
 
     start_time = time.monotonic()
     run_id = state.get("run_id") or str(uuid.uuid4())
