@@ -453,3 +453,43 @@ async def test_adapter_timeout_excludes_waiting_for_shared_capacity(monkeypatch)
             slots.release()
         jobs, warnings = await search
         assert len(jobs) == 1 and not warnings
+
+
+@pytest.mark.parametrize("role", ["QA", "UX", "PM", "AI", "ML", "C#"])
+def test_short_role_alternatives_never_match_unrelated_jobs(role):
+    query = {"titles": [role, "Backend Engineer"]}
+    assert cat.matches_query(_job(1, title=f"Senior {role} Engineer"), query)
+    assert cat.matches_query(_job(2, title="Backend Engineer"), query)
+    assert not cat.matches_query(_job(3, title="Financial Analyst"), query)
+    assert not cat.matches_query(_job(4, title=f"prefix{role}suffix"), query)
+    assert not cat.matches_query(
+        _job(5, title="Software Engineer"), {"titles": [f"{role} Engineer"]}
+    )
+
+
+def test_stopword_only_role_does_not_disable_other_alternatives():
+    query = {"titles": ["the job", "Backend Engineer"]}
+    assert not cat.matches_query(_job(1, title="Financial Analyst"), query)
+    assert cat.matches_query(_job(2, title="Backend Engineer"), query)
+
+
+@pytest.mark.asyncio
+async def test_catalog_sql_prefilter_keeps_short_role_alternatives():
+    db = MagicMock()
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = [
+        _job(1, title="QA Analyst"),
+        _job(2, title="Backend Engineer"),
+    ]
+    db.execute = AsyncMock(return_value=result)
+    session = MagicMock()
+    session.__aenter__ = AsyncMock(return_value=db)
+    session.__aexit__ = AsyncMock(return_value=False)
+    with patch.object(cat, "AsyncSessionLocal", lambda: session):
+        jobs, _ = await cat.search_catalog(
+            {"titles": ["QA", "Backend Engineer"]}, [], live_platforms=["jobspy"]
+        )
+    assert db.execute.await_args.args[1]["title_0_0"] == r"(?<!\w)qa(?!\w)"
+    assert db.execute.await_args.args[1]["title_1_0"] == "backend"
+    assert db.execute.await_args.args[1]["title_1_1"] == "engineer"
+    assert {job["title"] for job in jobs} == {"QA Analyst", "Backend Engineer"}

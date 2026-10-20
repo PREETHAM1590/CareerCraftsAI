@@ -307,19 +307,29 @@ def _location_ok(job: dict, locations: list[str]) -> bool:
     return False
 
 
+def _role_patterns(query: dict) -> list[list[str]]:
+    """One conjunction per alternative; share literal matching across Python and SQL."""
+    alternatives = query.get("titles") or [query.get("search_query") or "software engineer"]
+    groups = []
+    for role in alternatives:
+        patterns = []
+        for word in role.lower().split():
+            if word in _STOPWORDS:
+                continue
+            literal = re.escape(word)
+            patterns.append(r"(?<!\w)" + literal + r"(?!\w)" if len(word) <= 2 else literal)
+        if patterns:
+            groups.append(patterns)
+    return groups
+
+
 def matches_query(job: dict, query: dict) -> bool:
     """The same relevance contract for catalog and live results."""
-    alternatives = query.get("titles") or [query.get("search_query") or "software engineer"]
     title = str(job.get("title") or "").lower()
-
-    def matches_role(role: str) -> bool:
-        keywords = [
-            word for word in role.lower().split() if len(word) > 2 and word not in _STOPWORDS
-        ]
-        return all(word in title for word in keywords)
-
     locations = [str(x) for x in (query.get("locations") or [query.get("location") or ""]) if x]
-    if not any(matches_role(role) for role in alternatives):
+    if not any(
+        all(re.search(pattern, title) for pattern in role) for role in _role_patterns(query)
+    ):
         return False
     if not _location_ok(job, locations):
         return False
@@ -427,11 +437,16 @@ async def _catalog_rows_by_id(ids: list[str], source_ids: list[str]) -> list[dic
 
 
 async def _search_catalog_db(query: dict, public, live_ids, relevant_of):
-    terms = (
-        (" ".join(query.get("titles") or []) or query.get("search_query") or "software engineer")
-        .lower()
-        .split()
-    )
+    title_predicates = []
+    title_params = {}
+    for role_index, patterns in enumerate(_role_patterns(query)):
+        parts = []
+        for term_index, pattern in enumerate(patterns):
+            name = f"title_{role_index}_{term_index}"
+            parts.append(f"lower(c.title) ~ :{name}")
+            title_params[name] = pattern
+        title_predicates.append("(" + " AND ".join(parts) + ")")
+    title_predicate = " OR ".join(title_predicates) or "FALSE"
     days = query.get("posted_within_days", 30)
     need = int(query.get("max_results") or 10)
 
@@ -441,17 +456,19 @@ async def _search_catalog_db(query: dict, public, live_ids, relevant_of):
                 await db.execute(
                     # ponytail: LIMIT 2000 is a safety ceiling on rows read per search, not a
                     # product cap; page by posted_at if a query ever saturates it.
-                    text("""SELECT c.data || jsonb_build_object('occurrences',
+                    # Only fixed SQL and generated parameter names are interpolated.
+                    # All query text remains bound, escaped literal regex data.
+                    text(f"""SELECT c.data || jsonb_build_object('occurrences',
             jsonb_agg(jsonb_build_object('source_id',o.source_id,'url',c.url)),
             'last_seen_at',c.last_seen_at) FROM job_catalog c
             JOIN job_source_occurrences o ON o.job_id=c.job_id
             WHERE o.source_id=ANY(:sources) AND c.last_seen_at > :fresh
             AND (c.posted_at IS NULL OR c.posted_at >= :cutoff)
-            AND lower(c.title) LIKE ANY(:terms)
-            GROUP BY c.job_id ORDER BY c.posted_at DESC NULLS LAST LIMIT 2000"""),
+            AND ({title_predicate})
+            GROUP BY c.job_id ORDER BY c.posted_at DESC NULLS LAST LIMIT 2000"""),  # noqa: S608
                     {
                         "sources": [s.id for s in public] + live_ids,
-                        "terms": ["%" + t + "%" for t in terms if len(t) > 2],
+                        **title_params,
                         "fresh": datetime.now(UTC) - timedelta(days=CATALOG_FRESH_DAYS),
                         "cutoff": datetime.now(UTC) - timedelta(days=days),
                     },

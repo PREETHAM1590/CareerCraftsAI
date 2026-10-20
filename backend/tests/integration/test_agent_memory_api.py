@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import text
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 pytestmark = pytest.mark.skipif(
@@ -57,11 +58,11 @@ async def factory(monkeypatch):
 
 
 async def _seed(db, uid: str):
+    from app.models.db import User
+
+    # Use mapped defaults with both migrated and ORM-created suite schemas.
     await db.execute(
-        text(
-            "INSERT INTO users(id, email) VALUES (CAST(:u AS uuid), :email) ON CONFLICT DO NOTHING"
-        ),
-        {"u": uid, "email": f"{uid}@example.test"},
+        insert(User).values(id=uuid.UUID(uid), email=f"{uid}@example.test").on_conflict_do_nothing()
     )
     await db.execute(
         text(

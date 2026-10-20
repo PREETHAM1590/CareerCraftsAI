@@ -250,3 +250,58 @@ async def test_device_fence_allows_child_fk_checks_but_blocks_erasure(factory):
                 )
             )
             await asyncio.wait_for(other.commit(), timeout=2)
+
+
+@pytest.mark.parametrize(
+    ("role", "distractor"),
+    [
+        ("AI", "Retail Associate"),
+        ("C#", "C#embedded Specialist"),
+        ("QA Engineer", "Engineer"),
+        ("Backend Engineer", "Frontend Engineer"),
+        ("100% Engineer", "1000 Engineer"),
+        ("data_scientist", "dataXscientist"),
+        ("x' OR 1=1 --", "Unrelated Engineer"),
+    ],
+)
+async def test_role_catalog_filter_applies_before_candidate_limit(
+    factory, monkeypatch, role, distractor
+):
+    from app.services import job_catalog
+
+    monkeypatch.setattr(job_catalog, "AsyncSessionLocal", factory)
+    # Use the actual catalog schema; the rest of this migration changes unrelated tables.
+    migration = Path("../supabase/migrations/20261001091000_b_job_catalog.sql").read_text()
+    catalog_schema = migration.split("CREATE TABLE public.job_match_embeddings", 1)[0]
+    async with factory() as db:
+        for statement in catalog_schema.split(";"):
+            if statement.strip():
+                await db.execute(text(statement))
+        await db.execute(text("INSERT INTO job_source_health(source_id) VALUES ('live:jobspy')"))
+        # More recent substring matches must not consume the 2,000-row candidate cap.
+        await db.execute(
+            text("""INSERT INTO job_catalog(job_id,url,title,company,posted_at,data)
+            SELECT 'noise-' || n, 'https://example.test/noise/' || n, :title, 'Synthetic', now(),
+                jsonb_build_object('job_id','noise-' || n,'title',CAST(:title AS text),
+                    'company','Synthetic','url','https://example.test/noise/' || n,
+                    'location','Remote','remote','remote')
+            FROM generate_series(1, 2001) AS n"""),
+            {"title": distractor},
+        )
+        await db.execute(
+            text("""INSERT INTO job_catalog(job_id,url,title,company,posted_at,data)
+            VALUES ('target','https://example.test/target',:title,'Synthetic',
+                now()-interval '1 day',
+                jsonb_build_object('job_id','target','title',CAST(:title AS text),
+                    'company','Synthetic','url','https://example.test/target',
+                    'location','Remote','remote','remote'))"""),
+            {"title": f"{role} Engineer"},
+        )
+        await db.execute(text("""INSERT INTO job_source_occurrences(job_id,source_id)
+            SELECT job_id, 'live:jobspy' FROM job_catalog"""))
+        await db.commit()
+    jobs, warnings = await job_catalog.search_catalog(
+        {"titles": [role]}, [], live_platforms=["jobspy"]
+    )
+    assert not warnings
+    assert [job["job_id"] for job in jobs] == ["target"]
