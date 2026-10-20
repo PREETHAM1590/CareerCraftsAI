@@ -1,11 +1,13 @@
 "use client";
 import { useEffect, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { getClerkAuthToken } from "@/lib/clerk-token";
 import { useAgentStore } from "@/store/agentStore";
 import { apiClient, API_BASE_URL } from "@/lib/api";
 
 export function useAgentStream(runId: string | null) {
   const { addEvent, setRunStatus, setCheckpoint, setComplete, setError, setNeedsVerification } = useAgentStore();
+  const queryClient = useQueryClient();
   const abortRef = useRef<AbortController | null>(null);
   const retryRef = useRef(0);
 
@@ -17,6 +19,13 @@ export function useAgentStream(runId: string | null) {
     let disposed = false;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     let polling = false;
+    let tick = 0;
+    // Run events change the runs lists, approvals badge, notifications and per-run queries.
+    const refresh = () => {
+      for (const key of [["agent-runs"], ["pending-approvals"], ["notifications"], ["job-search-outcome", id], ["copilot-run", id]]) {
+        void queryClient.invalidateQueries({ queryKey: key });
+      }
+    };
     let terminal = false;
     const pollController = new AbortController();
     if (!useAgentStore.getState().runs[id]) useAgentStore.getState().initRun(id);
@@ -45,7 +54,11 @@ export function useAgentStream(runId: string | null) {
       finally { polling = false; }
     }
     void reconcile();
-    const pollTimer = setInterval(() => void reconcile(), 3000);
+    // DB reconcile every 3s while the stream is down; every 15s (5th tick) while it is healthy.
+    const pollTimer = setInterval(() => {
+      if (useAgentStore.getState().streamLive && ++tick % 5 !== 0) return;
+      void reconcile();
+    }, 3000);
 
     async function connect() {
       if (disposed || terminal || !currentOwner()) return;
@@ -68,6 +81,7 @@ export function useAgentStream(runId: string | null) {
 
         if (disposed || terminal || !currentOwner()) { await res.body.cancel(); return; }
         retryRef.current = 0;
+        if (currentOwner()) useAgentStore.getState().setStreamLive(true);
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buf = "";
@@ -98,6 +112,7 @@ export function useAgentStream(runId: string | null) {
                 try {
                   const data = JSON.parse(dataBuffer);
                   addEvent(id, eventType, data);
+                  if (["checkpoint", "complete", "cancelled", "expired", "approved", "error"].includes(eventType)) refresh();
                   if (eventType === "checkpoint") {
                     setCheckpoint(id, data);
                   } else if (eventType === "complete") {
@@ -128,16 +143,19 @@ export function useAgentStream(runId: string | null) {
           retryRef.current += 1;
            retryTimer = setTimeout(connect, Math.pow(2, retryRef.current) * 1000);
         }
+      } finally {
+        if (currentOwner()) useAgentStore.getState().setStreamLive(false);
       }
     }
 
     connect();
     return () => {
       disposed = true;
+      useAgentStore.getState().setStreamLive(false);
       pollController.abort();
       clearInterval(pollTimer);
       if (retryTimer) clearTimeout(retryTimer);
       abortRef.current?.abort();
     };
-  }, [runId, addEvent, setRunStatus, setCheckpoint, setComplete, setError, setNeedsVerification]);
+  }, [runId, queryClient, addEvent, setRunStatus, setCheckpoint, setComplete, setError, setNeedsVerification]);
 }

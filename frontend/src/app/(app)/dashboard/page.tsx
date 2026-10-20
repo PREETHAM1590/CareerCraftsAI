@@ -54,7 +54,7 @@ import {
 } from "@/components/vanguard";
 import { apiClient, getApiErrorMessage } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { useAgentStore } from "@/store/agentStore";
+import { useAgentStore, usePollMs } from "@/store/agentStore";
 
 interface AgentResults {
   applications: number;
@@ -283,13 +283,14 @@ export default function DashboardPage() {
     },
   });
 
+  const approvalsPollMs = usePollMs(10_000, 30_000);
   const { data: pendingApprovals = [] } = useQuery<PendingApproval[]>({
     queryKey: ["pending-approvals"],
     queryFn: async () => {
       const { data } = await apiClient.get("/agents/runs?status=awaiting_approval&limit=100");
       return ((Array.isArray(data) ? data : data.runs ?? []) as PendingApproval[]).filter((r) => r.status === "awaiting_approval");
     },
-    refetchInterval: 10000,
+    refetchInterval: approvalsPollMs,
   });
 
   const { data: resumeData } = useQuery<{

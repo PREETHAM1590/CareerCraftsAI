@@ -1,6 +1,7 @@
 "use client";
 import { createContext, useCallback, useContext, useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import { useQueries, type Query } from "@tanstack/react-query";
+import { usePollMs } from "@/store/agentStore";
 import { apiClient } from "@/lib/api";
 import { companionActivity, conversationRunIds, defaultCompanion, readCompanion, type ActivityMessage, type ActivityRun, type CompanionPreferences, type CompanionActivity } from "@/lib/copilot-activity";
 
@@ -35,10 +36,11 @@ export function CompanionProvider({ ownerId, children }: { ownerId: string; chil
     try { localStorage.setItem(storageKey, JSON.stringify(next)); setSaveError(""); } catch { setSaveError("Preferences cannot be saved in this browser."); }
   }, [storageKey]);
   const ids = conversationRunIds(chat.messages);
+  const pollMs = usePollMs(3000, 15_000);
   const runQuery = (id: string) => ({
     queryKey: ["copilot-run", id],
     queryFn: async (): Promise<ActivityRun> => (await apiClient.get(`/agents/runs/${id}`)).data,
-    refetchInterval: (query: Query<ActivityRun>) => ["completed", "failed", "cancelled", "expired"].includes(query.state.data?.status ?? "") ? false as const : 3000,
+    refetchInterval: (query: Query<ActivityRun>) => ["completed", "failed", "cancelled", "expired"].includes(query.state.data?.status ?? "") ? false as const : pollMs,
   });
   const queries = useQueries({ queries: ids.map(runQuery) });
   const parents = queries.flatMap(query => query.data ? [query.data] : []);

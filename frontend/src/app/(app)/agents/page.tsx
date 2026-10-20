@@ -58,7 +58,7 @@ import {
 } from "@/components/vanguard";
 import { apiClient } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { useAgentStore } from "@/store/agentStore";
+import { useAgentStore, usePollMs } from "@/store/agentStore";
 
 // The four purpose groups. Colour encodes what an agent *does* — shared tint
 // means shared job — but stays inside the brand's neutral + single-green
@@ -215,13 +215,14 @@ export default function AgentsPage() {
     onError: () => toast.error("Could not queue the agent. Check your context, model settings, and active-run limit."),
   });
 
+  const runsPollMs = usePollMs(5000, 60_000);
   const { data: runs = [], isLoading: runsLoading } = useQuery<AgentRun[]>({
     queryKey: ["agent-runs"],
     queryFn: async () => {
       const { data } = await apiClient.get("/agents/runs?limit=10");
       return Array.isArray(data) ? data : data.runs ?? [];
     },
-    refetchInterval: 5000,
+    refetchInterval: runsPollMs,
   });
 
   const { data: ragDocs = [] } = useQuery<RagDocument[]>({
