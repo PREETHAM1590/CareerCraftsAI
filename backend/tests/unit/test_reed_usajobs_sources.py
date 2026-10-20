@@ -116,7 +116,11 @@ USAJOBS_PAYLOAD = {
                     "PublicationStartDate": "2026-10-01",
                     "ApplicationCloseDate": "2026-10-31",
                     "PositionRemuneration": [
-                        {"MinimumRange": "80000", "MaximumRange": "120000", "RateIntervalCode": "PA"}
+                        {
+                            "MinimumRange": "80000",
+                            "MaximumRange": "120000",
+                            "RateIntervalCode": "PA",
+                        }
                     ],
                     "UserArea": {"Details": {"JobSummary": "Maintain Python services."}},
                 },
@@ -197,7 +201,9 @@ def test_reed_date_parses_day_first_and_rejects_junk():
 
 def test_reed_and_usajobs_catalogued_and_registered():
     assert {"reed", "usajobs"} <= connectors.FAMILIES
-    rows = json.loads((Path(connectors.__file__).parent / "job_sources.json").read_text(encoding="utf-8"))
+    rows = json.loads(
+        (Path(connectors.__file__).parent / "job_sources.json").read_text(encoding="utf-8")
+    )
     by_id = {r["id"]: r for r in rows}
     for source_id, family in (("reed:uk", "reed"), ("usajobs:us", "usajobs")):
         assert by_id[source_id]["family"] == family

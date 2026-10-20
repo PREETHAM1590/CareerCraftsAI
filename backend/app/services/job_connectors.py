@@ -1320,8 +1320,11 @@ async def fetch_page(source: Source, query: str = "", cursor: str | None = None)
                 "posted_at": _reed_date(j.get("date")),
                 "expires_at": _reed_date(j.get("expirationDate")),
                 "salary_text": (
-                    f"{j.get('currency') or ''} {j.get('minimumSalary')}–{j.get('maximumSalary')}".strip()
-                    if j.get("minimumSalary")
+                    (
+                        f"{j.get('currency') or ''} "
+                        f"{j.get('minimumSalary')}–{j.get('maximumSalary')}"
+                    ).strip()
+                    if j.get("minimumSalary") and j.get("maximumSalary")
                     else ""
                 ),
             }
@@ -1341,12 +1344,17 @@ async def fetch_page(source: Source, query: str = "", cursor: str | None = None)
                     "company": j.get("OrganizationName"),
                     "url": j.get("PositionURI"),
                     "location": j.get("PositionLocationDisplay"),
-                    "description": ((j.get("UserArea") or {}).get("Details") or {}).get("JobSummary"),
+                    "description": ((j.get("UserArea") or {}).get("Details") or {}).get(
+                        "JobSummary"
+                    ),
                     "posted_at": j.get("PublicationStartDate"),
                     "expires_at": j.get("ApplicationCloseDate"),
                     "salary_text": (
-                        f"${pay.get('MinimumRange')}–{pay.get('MaximumRange')} {pay.get('RateIntervalCode') or ''}".strip()
-                        if pay.get("MinimumRange")
+                        (
+                            f"${pay.get('MinimumRange')}–{pay.get('MaximumRange')} "
+                            f"{pay.get('RateIntervalCode') or ''}"
+                        ).strip()
+                        if pay.get("MinimumRange") and pay.get("MaximumRange")
                         else ""
                     ),
                 }
