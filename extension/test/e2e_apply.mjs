@@ -364,16 +364,18 @@ const SCENARIOS = [
     verify: greenhouseSubmitted,
   },
   {
-    name: "Greenhouse form revealed by an in-page Apply button",
+    // An unknown in-page Apply button may submit on its own, so CareerCraft
+    // never presses it: the task fails and the person opens the form.
+    name: "In-page Apply button is left for the person",
     url: `https://boards.greenhouse.io:${sitePort}/acme/jobs/2`,
     platform: "greenhouse",
     formHost: "boards.greenhouse.io",
+    refuses: true,
     async answer(page) {
-      await page.waitForFunction(() => !document.getElementById("application").hidden, null, { timeout: 20000 });
-      check(true, "pressed Apply to reveal the form");
-      await answerGreenhouse(page);
+      await waitUntil(async () => task.status === "failed", 20000, "failed outcome");
+      check(await page.evaluate(() => document.getElementById("application").hidden), "did not press the in-page Apply button");
+      check(submissions.length === 0, "nothing submitted");
     },
-    verify: greenhouseSubmitted,
   },
   {
     name: "Workday: Apply → Apply Manually → sign-in → steps → Review → Submit",
@@ -483,6 +485,11 @@ try {
       check(true, "app wake → task claimed → job page opened in a new tab");
 
       await scenario.answer(page);
+      if (scenario.refuses) {
+        await page.close();
+        await worker.evaluate(() => chrome.storage.session.clear()).catch(() => {});
+        continue;
+      }
       check(submissions.length === 0, "nothing submitted before review");
       await panelClick(page, `[data-role="primary"]`);
 

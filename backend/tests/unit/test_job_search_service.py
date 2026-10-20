@@ -7,6 +7,8 @@ The LLM only scores via prompts/job_search_prompt in batches of 20.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import uuid
 from unittest.mock import MagicMock, patch
 
@@ -377,8 +379,10 @@ def test_persist_only_above_threshold_and_idempotent():
 
         def execute(self, *a, **k):
             class R:
-                def scalar_one_or_none(inner):
-                    return "exists" if self.store.get("seen") else None
+                def all(inner):
+                    url = _job(0)["url"]
+                    row = SimpleNamespace(job_url=url, company="x", role="y", location="")
+                    return [row] if self.store.get("seen") else []
 
             return R()
 

@@ -34,6 +34,7 @@ FAMILIES = {
     "jooble",
     "hn_hiring",
     "getro",
+    "jobicy",
     "google_cse",
     "rss",
     "jsonld",
@@ -175,7 +176,10 @@ def _merge(old: dict, new: dict) -> dict:
     )
     merged = dict(primary)
     merged["occurrences"] = list(
-        {item["source_id"]: item for item in old["occurrences"] + new["occurrences"]}.values()
+        {
+            item["source_id"]: item
+            for item in old.get("occurrences", []) + new.get("occurrences", [])
+        }.values()
     )
     dates = [d for d in (old.get("posted_at"), new.get("posted_at")) if d]
     merged["posted_at"] = min(dates) if dates else None
@@ -184,23 +188,46 @@ def _merge(old: dict, new: dict) -> dict:
     return merged
 
 
+def url_key(url: str) -> str:
+    """`canonical_url`, or the lowercased URL when it can't be canonicalized
+    (live scrapers emit http/blank URLs; those must not crash a merge)."""
+    try:
+        return canonical_url(url)
+    except ValueError:
+        return (url or "").strip().lower().rstrip("/")
+
+
+def merge_duplicates(jobs: list[dict]) -> list[dict]:
+    """Merge the same job seen twice: first by URL, then by role across boards
+    (see `role_key`). Earlier entries keep their id unless only the later one
+    is the ATS original."""
+    by_url: dict[str, dict] = {}
+    loose: list[dict] = []
+    for job in jobs:
+        key = url_key(job.get("url") or "")
+        if not key:
+            loose.append(dict(job))
+        else:
+            by_url[key] = _merge(by_url[key], job) if key in by_url else dict(job)
+    by_role: dict[str, dict] = {}
+    for i, job in enumerate([*by_url.values(), *loose]):
+        # Without a company and title there is no role to match on.
+        key = role_key(job) if job.get("company") and job.get("title") else f"#{i}"
+        by_role[key] = _merge(by_role[key], job) if key in by_role else job
+    return list(by_role.values())
+
+
 def dedupe(jobs: list[dict], days=30, now=None) -> list[dict]:
-    """Drop expired and old jobs, then merge duplicates: first by URL, then by
-    role across boards (see `role_key`)."""
+    """Drop expired and old jobs, then `merge_duplicates`."""
     now = now or datetime.now(UTC)
     cutoff = now - timedelta(days=days)
-    by_url: dict[str, dict] = {}
+    fresh = []
     for job in jobs:
         date, expiry = posted(job.get("posted_at")), posted(job.get("expires_at"))
         if (date and date < cutoff) or (expiry and expiry <= now):
             continue
-        key = canonical_url(job["url"])
-        by_url[key] = _merge(by_url[key], job) if key in by_url else dict(job)
-    by_role: dict[str, dict] = {}
-    for job in by_url.values():
-        key = role_key(job)
-        by_role[key] = _merge(by_role[key], job) if key in by_role else job
-    return list(by_role.values())
+        fresh.append(job)
+    return merge_duplicates(fresh)
 
 
 class JobPostingParser(HTMLParser):
@@ -502,10 +529,29 @@ async def _fetch_hn_hiring(page: int) -> tuple[list[dict], str | None]:
     return rows, str(page + 1) if more else None
 
 
+def _ashby_salary(job: dict) -> str:
+    """`USD 120000–150000` from the Salary component of the first compensation tier."""
+    for tier in (job.get("compensation") or {}).get("compensationTiers") or []:
+        for c in tier.get("components") or []:
+            kind = c.get("componentType") or c.get("type")
+            if kind == "Salary" and (c.get("minValue") or c.get("maxValue")):
+                lo, hi = (
+                    f"{v:g}" if isinstance(v, (int, float)) else v
+                    for v in (c.get("minValue"), c.get("maxValue"))
+                )
+                span = f"{lo}–{hi}" if lo and hi else f"{lo or hi}"
+                return f"{c.get('currencyCode') or ''} {span}".strip()
+    return ""
+
+
 async def fetch_page(source: Source, query: str = "", cursor: str | None = None) -> Page:
     if source.family not in FAMILIES or not source.permitted:
         raise ValueError("Source is not permitted")
     tenant = source.tenant
+    lever_host = "api.lever.co"
+    if source.family == "lever" and tenant.startswith("eu:"):
+        # Lever EU boards live on a separate host: tenant "eu:board".
+        tenant, lever_host = tenant[3:], "api.eu.lever.co"
     if tenant and not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", tenant):
         raise ValueError("Invalid source tenant")
     family = source.family
@@ -524,12 +570,14 @@ async def fetch_page(source: Source, query: str = "", cursor: str | None = None)
         return Page([job for raw in rows if (job := normalize(raw, source))], next_cursor)
     urls = {
         "greenhouse": f"https://boards-api.greenhouse.io/v1/boards/{tenant}/jobs?content=true",
-        "lever": f"https://api.lever.co/v0/postings/{tenant}?mode=json&limit=100&skip={(page-1)*100}",
-        "ashby": f"https://api.ashbyhq.com/posting-api/job-board/{tenant}",
+        "lever": f"https://{lever_host}/v0/postings/{tenant}?mode=json&limit=100&skip={(page-1)*100}",
+        "ashby": f"https://api.ashbyhq.com/posting-api/job-board/{tenant}?includeCompensation=true",
         "workable": f"https://{tenant}.workable.com/spi/v3/jobs?state=published",
         "smartrecruiters": f"https://api.smartrecruiters.com/v1/companies/{tenant}/postings?limit=100&offset={(page-1)*100}",
         "recruitee": f"https://{tenant}.recruitee.com/api/offers/",
         "remotive": "https://remotive.com/api/remote-jobs",
+        "jobicy": "https://jobicy.com/api/v2/remote-jobs?"
+        + urlencode({"count": 50, **({"tag": query} if query else {})}),
         "remoteok": "https://remoteok.com/api",
         "arbeitnow": f"https://www.arbeitnow.com/api/job-board-api?page={page}",
         "himalayas": f"https://himalayas.app/jobs/api?limit=100&offset={(page-1)*100}",
@@ -639,6 +687,29 @@ async def fetch_page(source: Source, query: str = "", cursor: str | None = None)
                 "remote": j.get("isRemote"),
                 "description": j.get("descriptionPlain"),
                 "posted_at": j.get("publishedAt"),
+                "salary_text": _ashby_salary(j),
+            }
+            for j in data.get("jobs", [])
+        ]
+    elif family == "jobicy":
+        rows = [
+            {
+                "id": j.get("id"),
+                "title": j.get("jobTitle"),
+                "company": j.get("companyName"),
+                "url": j.get("url"),
+                "location": j.get("jobGeo") or "Worldwide",
+                "remote": True,
+                "description": j.get("jobDescription") or j.get("jobExcerpt"),
+                "posted_at": j.get("pubDate"),
+                "salary_text": (
+                    (
+                        f"{j.get('salaryCurrency') or ''} "
+                        f"{j.get('annualSalaryMin')}–{j.get('annualSalaryMax')}"
+                    ).strip()
+                    if j.get("annualSalaryMin") and j.get("annualSalaryMax")
+                    else ""
+                ),
             }
             for j in data.get("jobs", [])
         ]

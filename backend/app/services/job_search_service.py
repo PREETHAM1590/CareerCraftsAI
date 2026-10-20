@@ -39,14 +39,22 @@ JOB_KEYS = (
 
 
 def _stable_id(url: str, title: str, company: str, location: str = "") -> str:
-    seed = url.strip().lower() or f"{title.strip()}|{company.strip()}|{location.strip()}".lower()
-    return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
+    """Same id the catalog gives this URL (job_connectors.normalize), so a job
+    seen live and in the catalog is one job."""
+    from app.services.job_connectors import url_key
+
+    seed = url_key(url) or f"{title.strip()}|{company.strip()}|{location.strip()}".lower()
+    return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:32]
 
 
 def _normalize(raw: dict, platform: str) -> dict:
+    from app.services.job_connectors import url_key
+
     title = str(raw.get("title") or "").strip()
     company = str(raw.get("company") or "").strip()
-    url = str(raw.get("job_url") or raw.get("url") or "").strip()
+    raw_url = str(raw.get("job_url") or raw.get("url") or "").strip()
+    # Tracking params stripped; http/odd URLs pass through unchanged.
+    url = url_key(raw_url) if raw_url.lower().startswith("https://") else raw_url
     location = str(raw.get("location") or "").strip()
     return {
         "job_id": _stable_id(url, title, company, location),
@@ -60,18 +68,6 @@ def _normalize(raw: dict, platform: str) -> dict:
         "posted_at": raw.get("posted_at"),
         "description": str(raw.get("description", raw.get("jd_text", ""))),
     }
-
-
-def _dedupe(jobs: list[dict]) -> list[dict]:
-    seen: set[str] = set()
-    out: list[dict] = []
-    for job in jobs:
-        key = job["url"] or f"{job['title']}|{job['company']}|{job['location']}".lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(job)
-    return out
 
 
 # ── Platform adapters (all sync, run in threads; lazy imports avoid cycles) ──
@@ -285,5 +281,9 @@ async def search_all_platforms(
         *(write_through(g, n) for n, g in by_name.items() if g and n not in NO_CATALOG)
     )
 
-    jobs = _dedupe(catalog_jobs + [job for group in per_source for job in group])
+    # Catalog rows go first so they keep their ids; a LinkedIn/Indeed copy of a
+    # catalog role (different URL, same company+title+place) folds into it.
+    from app.services.job_connectors import merge_duplicates
+
+    jobs = merge_duplicates(catalog_jobs + [job for group in per_source for job in group])
     return [job for job in jobs if matches_query(job, query)], warnings

@@ -1711,14 +1711,17 @@ def _normalize_platforms(platforms: list[str] | None) -> list[str] | None:
 def _persist_saved_jobs(user_id: str, scored: list[dict]) -> int:
     """Persist matches with score >= SAVE_MIN_SCORE as saved applications.
 
-    Idempotent on (user_id, job_url): existing rows are skipped. Returns the
-    number of newly created rows. Failures propagate to the caller, which
-    degrades to a warning (search results are still returned).
+    Idempotent per user on the canonical job URL *and* on the role (company +
+    title + place, see `role_key`), so the same job reached through a tracking
+    URL or another board is not saved twice. Soft-deleted rows count, so a
+    removed job is not re-added. Returns the number of newly created rows.
+    Failures propagate to the caller, which degrades to a warning (search
+    results are still returned).
     """
     from app.core.sync_db import _get_sync_factory, _to_uuid
     from app.models.db import JobApplication
     from sqlalchemy import select
-    from app.services.job_connectors import posted
+    from app.services.job_connectors import posted, role_key, url_key
 
     candidates = [
         j for j in scored if (j.get("match_score") or 0) >= SAVE_MIN_SCORE and j.get("url")
@@ -1728,15 +1731,33 @@ def _persist_saved_jobs(user_id: str, scored: list[dict]) -> int:
     factory = _get_sync_factory()
     saved = 0
     with factory() as session:
+        # ponytail: check-then-insert, no DB unique index — two concurrent runs
+        # for one user can still race; add a partial unique index once existing
+        # duplicates are cleaned up.
+        rows = session.execute(
+            select(
+                JobApplication.job_url,
+                JobApplication.company,
+                JobApplication.role,
+                JobApplication.location,
+            )
+            .where(JobApplication.user_id == _to_uuid(user_id))
+            .execution_options(include_deleted=True)
+        ).all()
+        seen_urls = {url_key(r.job_url) for r in rows if r.job_url}
+        seen_roles = {
+            role_key({"company": r.company, "title": r.role, "location": r.location or ""})
+            for r in rows
+            if r.company not in (None, "", "Unknown") and r.role not in (None, "", "Unknown")
+        }
         for job in candidates:
-            exists = session.execute(
-                select(JobApplication.id).where(
-                    JobApplication.user_id == _to_uuid(user_id),
-                    JobApplication.job_url == job["url"],
-                ).execution_options(include_deleted=True)
-            ).scalar_one_or_none()
-            if exists is not None:
+            url = url_key(job["url"])
+            role = role_key(job) if job.get("company") and job.get("title") else None
+            if url in seen_urls or (role and role in seen_roles):
                 continue
+            seen_urls.add(url)
+            if role:
+                seen_roles.add(role)
             red_flags = job.get("red_flags") or []
             session.add(
                 JobApplication(
