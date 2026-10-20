@@ -44,6 +44,8 @@ All optional — features gracefully degrade if not set.
 |---|---|---|---|
 | `HUNTER_API_KEY` | [hunter.io](https://hunter.io) | Recruiter outreach, EmailAgent, LeadsAgent | Finds recruiter email addresses by domain + name. |
 | `JOOBLE_API_KEY` | [jooble.org](https://jooble.org/api/about) | Job discovery | Enables the Jooble source (India). Inactive without a key. |
+| `REED_API_KEY` | [reed.co.uk/developers](https://www.reed.co.uk/developers) | Job discovery | Enables the Reed source (UK). Inactive without a key. |
+| `USAJOBS_API_KEY`, `USAJOBS_USER_AGENT` | [developer.usajobs.gov](https://developer.usajobs.gov) | Job discovery | Enables the USAJobs source (US federal). `USAJOBS_USER_AGENT` is the email you registered with. Inactive without both. |
 | `CAREERJET_API_KEY`, `CAREERJET_USER_IP` | [Careerjet partners](https://www.careerjet.com/partners/api) | Job discovery | Enables the Careerjet source (India). Inactive without a key. |
 | `GOOGLE_CSE_API_KEY`, `GOOGLE_CSE_ID` | [Programmable Search](https://programmablesearch.google.com/) | Job discovery | Enables the `google:*` sources, which search for postings on Greenhouse, Lever, Ashby and Workday. Inactive without both. Free quota is 100 queries a day; each source uses one per day. |
 | `FUNDING_FEEDS` | Startup-news RSS (default: Inc42, YourStory) | Job ranking | JSON list of feeds. Headlines like "Acme raises $5M" mark Acme as recently funded for 45 days and add a small ranking bonus. `[]` turns it off. |

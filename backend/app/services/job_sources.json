@@ -1102,6 +1102,24 @@
     "policy": "public API; stop on denial"
   },
   {
+    "id": "reed:uk",
+    "family": "reed",
+    "tenant": "",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "Reed official job API (UK); needs REED_API_KEY, inert without it",
+    "policy": "official API; stop on denial"
+  },
+  {
+    "id": "usajobs:us",
+    "family": "usajobs",
+    "tenant": "",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "USAJobs official search API (US federal); needs USAJOBS_API_KEY and USAJOBS_USER_AGENT, inert without them",
+    "policy": "official API; registered contact email in User-Agent; stop on denial"
+  },
+  {
     "id": "careerjet:in",
     "family": "careerjet",
     "tenant": "en_IN",
@@ -1117,5 +1135,140 @@
     "permitted": true,
     "provenance": "official public job API",
     "policy": "attribution and outbound original link; respect terms and cache policy"
+  },
+  {
+    "id": "workday:nvidia",
+    "family": "workday",
+    "tenant": "nvidia.wd5.myworkdayjobs.com|nvidia|NVIDIAExternalCareerSite",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "board slug named in the MIT-licensed freehire repo; not yet live-validated",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:accenture",
+    "family": "workday",
+    "tenant": "accenture.wd103.myworkdayjobs.com|accenture|AccentureCareers",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "board slug named in the MIT-licensed freehire repo; not yet live-validated",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "personio:4screen",
+    "family": "personio",
+    "tenant": "4screen",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "board slug named in the MIT-licensed freehire repo; not yet live-validated",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "personio:tonies",
+    "family": "personio",
+    "tenant": "tonies",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "board slug named in the MIT-licensed freehire repo; not yet live-validated",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "hibob:qogita",
+    "family": "hibob",
+    "tenant": "qogita",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "board slug named in the MIT-licensed freehire repo; not yet live-validated",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "hibob:unique",
+    "family": "hibob",
+    "tenant": "unique",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "board slug named in the MIT-licensed freehire repo; not yet live-validated",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "teamtailor:orbioworld",
+    "family": "teamtailor",
+    "tenant": "orbioworld",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "board slug named in the MIT-licensed freehire repo; not yet live-validated",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "teamtailor:tantor",
+    "family": "teamtailor",
+    "tenant": "tantor",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "board slug named in the MIT-licensed freehire repo; not yet live-validated",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "teamtailor:bryter",
+    "family": "teamtailor",
+    "tenant": "bryter",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "board slug named in the MIT-licensed freehire repo; not yet live-validated",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "breezy:agbo",
+    "family": "breezy",
+    "tenant": "agbo",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "board slug named in the MIT-licensed freehire repo; not yet live-validated",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "pinpoint:lbresearch",
+    "family": "pinpoint",
+    "tenant": "lbresearch",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "board slug named in the MIT-licensed freehire repo; not yet live-validated",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "pinpoint:kastcard",
+    "family": "pinpoint",
+    "tenant": "kastcard",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "board slug named in the MIT-licensed freehire repo; not yet live-validated",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "bamboohr:sortitt",
+    "family": "bamboohr",
+    "tenant": "sortitt",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "board slug named in the MIT-licensed freehire repo; not yet live-validated",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "bamboohr:321theagency",
+    "family": "bamboohr",
+    "tenant": "321theagency",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "board slug named in the MIT-licensed freehire repo; not yet live-validated",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "jobscore:ierustechnologiesinc",
+    "family": "jobscore",
+    "tenant": "ierustechnologiesinc",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "board slug named in the MIT-licensed freehire repo; not yet live-validated",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
   }
 ]
