@@ -90,9 +90,7 @@ def test_persist_dedup():
     existing = [_row("https://boards.greenhouse.io/acme/jobs/1")]
     n, _ = _persist(existing, [_cand("https://boards.greenhouse.io/acme/jobs/1/?utm_source=x")])
     assert n == 0  # tracking variant
-    n, _ = _persist(
-        existing, [_cand("https://www.linkedin.com/jobs/view/9", location="Remote")]
-    )
+    n, _ = _persist(existing, [_cand("https://www.linkedin.com/jobs/view/9", location="Remote")])
     assert n == 0  # same role, other board
     c = _cand("https://a.com/new", company="Other", title="Dev", location="Pune")
     n, _ = _persist([], [c, dict(c, url="https://b.com/new")])

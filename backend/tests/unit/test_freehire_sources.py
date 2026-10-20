@@ -24,13 +24,26 @@ def _capture(monkeypatch, payload):
 @pytest.mark.asyncio
 async def test_ashby_requests_and_maps_salary(monkeypatch):
     job = {
-        "id": "a1", "title": "Engineer", "jobUrl": "https://jobs.ashbyhq.com/acme/a1",
-        "location": "Remote", "descriptionPlain": "Build.",
-        "compensation": {"compensationTiers": [{"components": [
-            {"componentType": "Equity", "minValue": 1, "maxValue": 2},
-            {"componentType": "Salary", "currencyCode": "USD",
-             "minValue": 120000, "maxValue": 150000},
-        ]}]},
+        "id": "a1",
+        "title": "Engineer",
+        "jobUrl": "https://jobs.ashbyhq.com/acme/a1",
+        "location": "Remote",
+        "descriptionPlain": "Build.",
+        "compensation": {
+            "compensationTiers": [
+                {
+                    "components": [
+                        {"componentType": "Equity", "minValue": 1, "maxValue": 2},
+                        {
+                            "componentType": "Salary",
+                            "currencyCode": "USD",
+                            "minValue": 120000,
+                            "maxValue": 150000,
+                        },
+                    ]
+                }
+            ]
+        },
     }
     unpaid = {**job, "id": "a2", "jobUrl": "https://jobs.ashbyhq.com/acme/a2", "compensation": None}
     urls = _capture(monkeypatch, {"jobs": [job, unpaid]})
@@ -53,12 +66,25 @@ async def test_lever_eu_prefix_uses_eu_host_and_us_is_default(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_jobicy_maps_jobs_and_passes_tag(monkeypatch):
-    urls = _capture(monkeypatch, {"jobs": [{
-        "id": 7, "url": "https://jobicy.com/jobs/7", "jobTitle": "Python Dev",
-        "companyName": "Acme", "jobGeo": "Europe", "jobExcerpt": "Short",
-        "pubDate": "2026-10-01 10:00:00", "annualSalaryMin": 50000,
-        "annualSalaryMax": 70000, "salaryCurrency": "EUR",
-    }]})
+    urls = _capture(
+        monkeypatch,
+        {
+            "jobs": [
+                {
+                    "id": 7,
+                    "url": "https://jobicy.com/jobs/7",
+                    "jobTitle": "Python Dev",
+                    "companyName": "Acme",
+                    "jobGeo": "Europe",
+                    "jobExcerpt": "Short",
+                    "pubDate": "2026-10-01 10:00:00",
+                    "annualSalaryMin": 50000,
+                    "annualSalaryMax": 70000,
+                    "salaryCurrency": "EUR",
+                }
+            ]
+        },
+    )
     page = await connectors.fetch_page(Source(id="jobicy", family="jobicy"), query="python")
     assert urls[0] == "https://jobicy.com/api/v2/remote-jobs?count=50&tag=python"
     job = page.jobs[0]
@@ -67,7 +93,11 @@ async def test_jobicy_maps_jobs_and_passes_tag(monkeypatch):
 
 
 def test_catalog_has_jobicy_and_weworkremotely():
-    sources = {s["id"]: s for s in json.loads(
-        (Path(connectors.__file__).parent / "job_sources.json").read_text(encoding="utf-8"))}
+    sources = {
+        s["id"]: s
+        for s in json.loads(
+            (Path(connectors.__file__).parent / "job_sources.json").read_text(encoding="utf-8")
+        )
+    }
     assert sources["jobicy"]["refresh_hours"] == 12 and sources["jobicy"]["permitted"]
     assert sources["rss:weworkremotely"]["url"] == "https://weworkremotely.com/remote-jobs.rss"
