@@ -49,6 +49,8 @@ FAMILIES = {
     "trakstar",
     "hibob",
     "gem",
+    "reed",
+    "usajobs",
 }
 
 
@@ -637,6 +639,14 @@ async def _fetch_workday(source: Source, query: str, cursor: str | None) -> Page
     return Page([job for raw in rows if (job := normalize(raw, source))], str(nxt) if more else None)
 
 
+def _reed_date(value) -> str | None:
+    # Reed dates are day/month/year strings, which posted() does not parse.
+    try:
+        return datetime.strptime(str(value), "%d/%m/%Y").replace(tzinfo=UTC).isoformat()
+    except ValueError:
+        return None
+
+
 def _rfc822(value) -> str | None:
     from email.utils import parsedate_to_datetime
 
@@ -1021,6 +1031,28 @@ async def fetch_page(source: Source, query: str = "", cursor: str | None = None)
             raise ValueError("Jooble credentials are not configured")
         url = f"https://jooble.org/api/{settings.JOOBLE_API_KEY}"
         jooble_body = {"keywords": query or "", "location": tenant, "page": page}
+    elif family == "reed":
+        if not settings.REED_API_KEY:
+            raise ValueError("Reed credentials are not configured")
+        url = "https://www.reed.co.uk/api/1.0/search?" + urlencode(
+            {"keywords": query or "", "resultsToTake": 100, "resultsToSkip": (page - 1) * 100}
+        )
+        headers["Authorization"] = (
+            "Basic " + base64.b64encode(f"{settings.REED_API_KEY}:".encode()).decode()
+        )
+    elif family == "usajobs":
+        if not settings.USAJOBS_API_KEY or not settings.USAJOBS_USER_AGENT:
+            raise ValueError("USAJobs credentials are not configured")
+        url = "https://data.usajobs.gov/api/search?" + urlencode(
+            {"Keyword": query or "", "ResultsPerPage": 500, "Page": page}
+        )
+        headers.update(
+            {
+                "Host": "data.usajobs.gov",
+                "User-Agent": settings.USAJOBS_USER_AGENT,
+                "Authorization-Key": settings.USAJOBS_API_KEY,
+            }
+        )
     else:
         url = urls[family]
     response = await public_get(
@@ -1268,6 +1300,52 @@ async def fetch_page(source: Source, query: str = "", cursor: str | None = None)
             for j in data.get("jobs", [])
         ]
         next_cursor = str(page + 1) if page < int(data.get("pages") or 0) else None
+    elif family == "reed":
+        rows = [
+            {
+                "id": j.get("jobId"),
+                "title": j.get("jobTitle"),
+                "company": j.get("employerName"),
+                "url": j.get("jobUrl"),
+                "location": j.get("locationName"),
+                "description": j.get("jobDescription"),
+                "posted_at": _reed_date(j.get("date")),
+                "expires_at": _reed_date(j.get("expirationDate")),
+                "salary_text": (
+                    f"{j.get('currency') or ''} {j.get('minimumSalary')}–{j.get('maximumSalary')}".strip()
+                    if j.get("minimumSalary")
+                    else ""
+                ),
+            }
+            for j in data.get("results", [])
+        ]
+        next_cursor = str(page + 1) if page * 100 < int(data.get("totalResults") or 0) else None
+    elif family == "usajobs":
+        search = data.get("SearchResult") or {}
+        rows = []
+        for item in search.get("SearchResultItems", []):
+            j = item.get("MatchedObjectDescriptor") or {}
+            pay = (j.get("PositionRemuneration") or [{}])[0]
+            rows.append(
+                {
+                    "id": item.get("MatchedObjectId"),
+                    "title": j.get("PositionTitle"),
+                    "company": j.get("OrganizationName"),
+                    "url": j.get("PositionURI"),
+                    "location": j.get("PositionLocationDisplay"),
+                    "description": ((j.get("UserArea") or {}).get("Details") or {}).get("JobSummary"),
+                    "posted_at": j.get("PublicationStartDate"),
+                    "expires_at": j.get("ApplicationCloseDate"),
+                    "salary_text": (
+                        f"${pay.get('MinimumRange')}–{pay.get('MaximumRange')} {pay.get('RateIntervalCode') or ''}".strip()
+                        if pay.get("MinimumRange")
+                        else ""
+                    ),
+                }
+            )
+        next_cursor = (
+            str(page + 1) if page * 500 < int(search.get("SearchResultCountAll") or 0) else None
+        )
     elif family == "rss":
         rows = parse_rss(response.text, url)
     elif family == "jsonld":
