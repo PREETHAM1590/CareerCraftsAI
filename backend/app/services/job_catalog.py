@@ -436,6 +436,18 @@ async def _catalog_rows_by_id(ids: list[str], source_ids: list[str]) -> list[dic
     return sorted(rows, key=lambda row: order.get(row.get("job_id"), len(order)))
 
 
+# Only generated parameter names are formatted in ({title_predicate}); all query
+# text stays bound as escaped literal regex data.
+_CATALOG_SQL = """SELECT c.data || jsonb_build_object('occurrences',
+            jsonb_agg(jsonb_build_object('source_id',o.source_id,'url',c.url)),
+            'last_seen_at',c.last_seen_at) FROM job_catalog c
+            JOIN job_source_occurrences o ON o.job_id=c.job_id
+            WHERE o.source_id=ANY(:sources) AND c.last_seen_at > :fresh
+            AND (c.posted_at IS NULL OR c.posted_at >= :cutoff)
+            AND ({title_predicate})
+            GROUP BY c.job_id ORDER BY c.posted_at DESC NULLS LAST LIMIT 2000"""
+
+
 async def _search_catalog_db(query: dict, public, live_ids, relevant_of):
     title_predicates = []
     title_params = {}
@@ -456,16 +468,7 @@ async def _search_catalog_db(query: dict, public, live_ids, relevant_of):
                 await db.execute(
                     # ponytail: LIMIT 2000 is a safety ceiling on rows read per search, not a
                     # product cap; page by posted_at if a query ever saturates it.
-                    # Only fixed SQL and generated parameter names are interpolated.
-                    # All query text remains bound, escaped literal regex data.
-                    text(f"""SELECT c.data || jsonb_build_object('occurrences',
-            jsonb_agg(jsonb_build_object('source_id',o.source_id,'url',c.url)),
-            'last_seen_at',c.last_seen_at) FROM job_catalog c
-            JOIN job_source_occurrences o ON o.job_id=c.job_id
-            WHERE o.source_id=ANY(:sources) AND c.last_seen_at > :fresh
-            AND (c.posted_at IS NULL OR c.posted_at >= :cutoff)
-            AND ({title_predicate})
-            GROUP BY c.job_id ORDER BY c.posted_at DESC NULLS LAST LIMIT 2000"""),  # noqa: S608
+                    text(_CATALOG_SQL.format(title_predicate=title_predicate)),  # nosec B608
                     {
                         "sources": [s.id for s in public] + live_ids,
                         **title_params,
