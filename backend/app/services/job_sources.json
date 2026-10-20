@@ -952,6 +952,15 @@
     "policy": "official public board API; stop on denial; no browser fallback"
   },
   {
+    "id": "jobicy",
+    "family": "jobicy",
+    "tenant": "",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "public remote jobs API",
+    "policy": "attribution and outbound original link; respect terms and cache policy"
+  },
+  {
     "id": "remotive",
     "family": "remotive",
     "tenant": "",
