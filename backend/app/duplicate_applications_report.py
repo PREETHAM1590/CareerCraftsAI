@@ -29,10 +29,8 @@ def duplicate_groups(rows) -> list[list]:
         parent[i] = i
         keys = [f"u:{url_key(row.job_url)}"] if row.job_url else []
         if row.company not in (None, "", "Unknown") and row.role not in (None, "", "Unknown"):
-            keys.append(
-                "r:"
-                + role_key({"company": row.company, "title": row.role, "location": row.location or ""})
-            )
+            role = {"company": row.company, "title": row.role, "location": row.location or ""}
+            keys.append("r:" + role_key(role))
         for key in keys:
             if key in first_by_key:
                 parent[find(i)] = find(first_by_key[key])

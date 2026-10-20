@@ -701,7 +701,10 @@ async def fetch_page(source: Source, query: str = "", cursor: str | None = None)
                 "description": j.get("jobDescription") or j.get("jobExcerpt"),
                 "posted_at": j.get("pubDate"),
                 "salary_text": (
-                    f"{j.get('salaryCurrency') or ''} {j.get('annualSalaryMin')}–{j.get('annualSalaryMax')}".strip()
+                    (
+                        f"{j.get('salaryCurrency') or ''} "
+                        f"{j.get('annualSalaryMin')}–{j.get('annualSalaryMax')}"
+                    ).strip()
                     if j.get("annualSalaryMin") and j.get("annualSalaryMax")
                     else ""
                 ),

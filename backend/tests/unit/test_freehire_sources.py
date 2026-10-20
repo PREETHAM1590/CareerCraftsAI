@@ -28,10 +28,12 @@ async def test_ashby_requests_and_maps_salary(monkeypatch):
         "location": "Remote", "descriptionPlain": "Build.",
         "compensation": {"compensationTiers": [{"components": [
             {"componentType": "Equity", "minValue": 1, "maxValue": 2},
-            {"componentType": "Salary", "currencyCode": "USD", "minValue": 120000, "maxValue": 150000},
+            {"componentType": "Salary", "currencyCode": "USD",
+             "minValue": 120000, "maxValue": 150000},
         ]}]},
     }
-    urls = _capture(monkeypatch, {"jobs": [job, {**job, "id": "a2", "jobUrl": "https://jobs.ashbyhq.com/acme/a2", "compensation": None}]})
+    unpaid = {**job, "id": "a2", "jobUrl": "https://jobs.ashbyhq.com/acme/a2", "compensation": None}
+    urls = _capture(monkeypatch, {"jobs": [job, unpaid]})
     page = await connectors.fetch_page(Source(id="ashby:acme", family="ashby", tenant="acme"))
     assert urls[0].endswith("/acme?includeCompensation=true")
     assert page.jobs[0]["salary_text"] == "USD 120000–150000"
