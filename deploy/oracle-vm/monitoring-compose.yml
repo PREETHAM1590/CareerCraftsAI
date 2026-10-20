@@ -1,8 +1,9 @@
-# Host + container resource monitoring for the APP VM: Prometheus scrapes
+# Host + container monitoring for the APP VM: Prometheus scrapes
 # node-exporter (host CPU/RAM/disk/network) and cAdvisor (per-container),
-# Grafana shows them. Everything listens on 127.0.0.1 only — open Grafana
-# through an SSH tunnel, like the Temporal UI:
-#
+# Alloy ships every container's logs to Loki, Grafana shows both.
+# Everything listens on 127.0.0.1 only; Grafana is published as
+# https://grafana.careercraftsai.me by the host nginx
+# (monitoring/nginx-grafana.conf), or via a tunnel:
 #   ssh -N -L 19300:127.0.0.1:19300 oraclevm   then http://localhost:19300
 #
 # Start (from deploy/oracle-vm):
@@ -63,6 +64,32 @@ services:
     mem_limit: 256m
     restart: unless-stopped
 
+  loki:
+    image: grafana/loki:3.5.3
+    network_mode: host
+    command: -config.file=/etc/loki/loki.yml
+    volumes:
+      - ./monitoring/loki.yml:/etc/loki/loki.yml:ro
+      - loki-data:/loki
+    mem_limit: 384m
+    restart: unless-stopped
+
+  # Tails every container's logs from the Docker socket into Loki.
+  alloy:
+    image: grafana/alloy:v1.10.1
+    network_mode: host
+    command:
+      - run
+      - --server.http.listen-addr=127.0.0.1:19320
+      - --storage.path=/var/lib/alloy
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./monitoring/alloy.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy-data:/var/lib/alloy
+    mem_limit: 192m
+    restart: unless-stopped
+
   grafana:
     image: grafana/grafana-oss:12.1.0
     network_mode: host
@@ -70,6 +97,12 @@ services:
     environment:
       GF_SERVER_HTTP_ADDR: 127.0.0.1
       GF_SERVER_HTTP_PORT: "19300"
+      # Served publicly by the host nginx (TLS via certbot); Grafana's own
+      # login is the gate, so no basic auth in front of it.
+      GF_SERVER_ROOT_URL: https://grafana.careercraftsai.me/
+      GF_SERVER_DOMAIN: grafana.careercraftsai.me
+      GF_SECURITY_COOKIE_SECURE: "true"
+      GF_SECURITY_DISABLE_GRAVATAR: "true"
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_ANALYTICS_REPORTING_ENABLED: "false"
@@ -84,3 +117,5 @@ services:
 volumes:
   prometheus-data:
   grafana-data:
+  loki-data:
+  alloy-data:

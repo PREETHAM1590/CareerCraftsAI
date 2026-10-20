@@ -1,0 +1,53 @@
+// Ship every container's stdout/stderr to Loki, labelled by compose
+// project and service (e.g. project="careercraft-isolated", service="backend").
+
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "containers" {
+  targets = []
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "project"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+}
+
+loki.source.docker "containers" {
+  host          = "unix:///var/run/docker.sock"
+  targets       = discovery.docker.containers.targets
+  relabel_rules = discovery.relabel.containers.rules
+  forward_to    = [loki.process.levels.receiver]
+}
+
+// Pull a log level out of common formats so Grafana can filter by it.
+loki.process "levels" {
+  stage.regex {
+    expression = "(?i)\\b(?P<level>debug|info|warning|warn|error|critical|fatal)\\b"
+  }
+  // One label value per level whatever the case ("INFO" and "info").
+  stage.template {
+    source   = "level"
+    template = "{{ ToLower .Value }}"
+  }
+  stage.labels {
+    values = { level = "" }
+  }
+  forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://127.0.0.1:19310/loki/api/v1/push"
+  }
+}
