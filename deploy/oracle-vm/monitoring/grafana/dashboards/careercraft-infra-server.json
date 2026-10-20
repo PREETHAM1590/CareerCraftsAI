@@ -248,7 +248,7 @@
    },
    "targets": [
     {
-     "expr": "node_load1{instance=\"infra-vm\"} / count(node_cpu_seconds_total{instance=\"infra-vm\",mode=\"idle\"})",
+     "expr": "sum by (instance) (node_load1{instance=\"infra-vm\"}) / count by (instance) (node_cpu_seconds_total{instance=\"infra-vm\",mode=\"idle\"})",
      "refId": "A",
      "legendFormat": "",
      "datasource": {

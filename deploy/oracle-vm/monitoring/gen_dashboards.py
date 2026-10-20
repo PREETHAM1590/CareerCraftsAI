@@ -170,7 +170,9 @@ def host_section(d, i, name):
     )
     d.stat(
         "Load 1m / cores",
-        f"node_load1{{{sel}}} / count(node_cpu_seconds_total{{{sel}," f'mode="idle"}})',
+        # Both sides by instance, or the divisor has no labels to match on.
+        f"sum by (instance) (node_load1{{{sel}}}) / "
+        f'count by (instance) (node_cpu_seconds_total{{{sel},mode="idle"}})',
         12,
         4,
         "percentunit",

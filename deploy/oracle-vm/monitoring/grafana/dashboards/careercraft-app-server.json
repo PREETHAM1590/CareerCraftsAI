@@ -248,7 +248,7 @@
    },
    "targets": [
     {
-     "expr": "node_load1{instance=\"app-vm\"} / count(node_cpu_seconds_total{instance=\"app-vm\",mode=\"idle\"})",
+     "expr": "sum by (instance) (node_load1{instance=\"app-vm\"}) / count by (instance) (node_cpu_seconds_total{instance=\"app-vm\",mode=\"idle\"})",
      "refId": "A",
      "legendFormat": "",
      "datasource": {
