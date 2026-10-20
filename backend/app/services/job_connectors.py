@@ -535,8 +535,10 @@ def _ashby_salary(job: dict) -> str:
         for c in tier.get("components") or []:
             kind = c.get("componentType") or c.get("type")
             if kind == "Salary" and (c.get("minValue") or c.get("maxValue")):
-                lo, hi = (f"{v:g}" if isinstance(v, (int, float)) else v
-                          for v in (c.get("minValue"), c.get("maxValue")))
+                lo, hi = (
+                    f"{v:g}" if isinstance(v, (int, float)) else v
+                    for v in (c.get("minValue"), c.get("maxValue"))
+                )
                 span = f"{lo}–{hi}" if lo and hi else f"{lo or hi}"
                 return f"{c.get('currencyCode') or ''} {span}".strip()
     return ""
