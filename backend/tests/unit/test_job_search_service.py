@@ -380,8 +380,10 @@ def test_persist_only_above_threshold_and_idempotent():
         def execute(self, *a, **k):
             class R:
                 def all(inner):
+                    url = _job(0)["url"]
+                    row = SimpleNamespace(job_url=url, company="x", role="y", location="")
                     return (
-                        [SimpleNamespace(job_url=_job(0)["url"], company="x", role="y", location="")]
+                        [row]
                         if self.store.get("seen")
                         else []
                     )
