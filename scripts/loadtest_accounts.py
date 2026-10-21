@@ -31,6 +31,7 @@ import argparse
 import base64
 import json
 import os
+import signal
 import sys
 import time
 import urllib.error
@@ -41,6 +42,11 @@ CLERK_API = "https://api.clerk.com/v1"
 TEMPLATE = "loadtest"
 # Clerk's Cloudflare front rejects urllib's default "Python-urllib" agent (1010).
 USER_AGENT = "careercraft-loadtest-accounts/1.0"
+ACCOUNT_DEADLINE_S = 60
+
+
+def _account_timeout(_signum, _frame):
+    raise RuntimeError(f"no answer within {ACCOUNT_DEADLINE_S} s; skipped")
 
 
 def read_env(paths):
@@ -202,8 +208,11 @@ def create(args, env):
         for u in loadtest_users(secret)
     }
     tokens, failures = [], 0
+    signal.signal(signal.SIGALRM, _account_timeout)
     for n in range(1, args.count + 1):
         email = f"loadtest-{n:04d}@{args.domain}"
+        # Per-read timeouts can't stop a connection that keeps trickling bytes.
+        signal.alarm(ACCOUNT_DEADLINE_S)
         try:
             user_id = existing.get(email)
             if not user_id:
@@ -243,6 +252,8 @@ def create(args, env):
             print(f"{email}: {exc}", file=sys.stderr)
             if failures >= 5 and not tokens:
                 sys.exit("stopping: the first accounts all failed")
+        finally:
+            signal.alarm(0)
         print(f"\r{len(tokens)} ready, {failures} failed", end="", file=sys.stderr)
         time.sleep(0.2)  # Clerk Backend API: stay well under 100 requests / 10 s
     # Owner-only: these are live bearer tokens for an hour.
