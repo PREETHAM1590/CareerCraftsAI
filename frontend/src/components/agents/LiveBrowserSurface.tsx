@@ -4,7 +4,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, type KeyboardEvent 
 
 export type BrowserSurfaceHandle = { flush: () => Promise<void> };
 type Props = {
-  screen: { base64: string; width: number; height: number };
+  screen: { base64: string; width: number; height: number; mime?: string };
   disabled: boolean;
   send: (operation: string, parameters: Record<string, unknown>) => Promise<unknown>;
   refresh: () => Promise<void>;
@@ -82,7 +82,7 @@ export const LiveBrowserSurface = forwardRef<BrowserSurfaceHandle, Props>(functi
   return <div>
     <div className="browser-screen relative overflow-hidden rounded-2xl bg-muted ring-1 ring-foreground/[0.08] focus-within:ring-2 focus-within:ring-primary">
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={`data:image/png;base64,${screen.base64}`} alt="Live view of your private browser" className="block w-full" />
+      <img src={`data:${screen.mime ?? "image/png"};base64,${screen.base64}`} alt="Live view of your private browser" className="block w-full" />
       <textarea ref={capture} aria-label="Live browser: click a field and type" aria-describedby="browser-keyboard-help"
         className="absolute inset-0 h-full w-full resize-none cursor-text opacity-0" disabled={disabled}
         autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false}

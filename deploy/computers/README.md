@@ -1,5 +1,81 @@
 # Private on-demand computers
 
+## Production (careercraftsai.me)
+
+Host: SSH alias `24gb1` (Oracle A1, 4 OCPU / 24 GB, Ubuntu 26.04), checkout of
+this directory at `~/careercraft-computers/deploy/computers`, secrets in the
+root-only `/opt/careercraft-secrets/computers.env`.
+
+- **Isolation: gVisor.** Every user's browser runs under `runsc`
+  (`COMPUTER_RUNTIME`, default `runsc`), a user-space kernel between untrusted
+  pages and the host. Install it once:
+  `apt-get install runsc` from the gvisor.dev apt repository, `runsc install`,
+  `systemctl restart docker`.
+- **Egress by address.** Docker's embedded DNS (127.0.0.11) does not answer
+  inside gVisor containers, so browsers dial the Squid proxy at its pinned IP
+  `172.31.250.10` (see `compose.yml`, `harden-computer.mjs`). Squid resolves
+  sites itself and still denies private ranges and the metadata endpoint.
+- **No test fixture.** `test-portal` runs only with `--profile test`, and its
+  Squid exception is built in only with `ALLOW_TEST_PORTAL=1`.
+- **Link to the app.** The APP VM's `sandbox-tunnel` service (in
+  `deploy/oracle-vm/compose.yml`) forwards its loopback `127.0.0.1:14312` to the
+  relay, as the dedicated `sandboxtunnel` account (`nologin`). Its key carries
+  `restrict,port-forwarding,permitopen="127.0.0.1:14312",command="/bin/false"`,
+  and `/etc/ssh/sshd_config.d/70-sandboxtunnel.conf` enforces the same for the
+  account: `AllowTcpForwarding local`, `PermitOpen 127.0.0.1:14312`,
+  `PermitListen none`, `PermitTTY no`, `ForceCommand /bin/false` (per-key
+  `permitopen` alone does not stop `-R`). `backend.env` carries
+  `SANDBOX_RELAY_URL=http://127.0.0.1:14312` and the relay token.
+
+### Capacity (measured 2026-10-22 on 24gb1, gVisor)
+
+`loadtest_computers.py`: N users at once, each starting a computer, opening real
+job boards, polling a screenshot every 4 s and reading agent snapshots.
+
+| Concurrent users | Navigate p50 | Screenshot p50 / p95 | Snapshot p95 | Failures |
+|---|---|---|---|---|
+| 12 | 15 s | 0.6 s / 3.8 s | 3.8 s | 0 |
+| 16 | 18–26 s | 0.9–3.2 s / 4.7–9.3 s | 11–17 s | 0 |
+| 20 | 32 s | 5.8 s / 16 s | 24 s | 4 |
+| 24 | 29 s | 7.0 s / 18 s | 34 s | 10 |
+
+CPU is the limit (4 cores at 100% from 12 browsers); memory is ~400 MB per
+browser. Production: `SANDBOX_MAX_SESSIONS=16`, `COMPUTER_MEMORY_BYTES=1073741824`.
+For comparison, runc at 12 users: navigate p50 2.7 s, screenshot p50 0.09 s;
+gVisor's syscall interception costs roughly 4-6x in latency (no KVM on A1).
+
+### Changing the internal network
+
+`careercraft-sandbox-computers` has a fixed name and subnet (`172.31.250.0/24`,
+egress at `.10`). A host created before the subnet was pinned keeps its old
+network; recreate it once:
+
+```sh
+E=/opt/careercraft-secrets/computers.env
+sudo docker ps -aq --filter name=sandbox-computer-u | xargs -r sudo docker rm -f
+sudo docker compose --env-file $E down
+sudo docker network rm careercraft-sandbox-computers 2>/dev/null || true
+sudo docker compose --env-file $E up -d supervisor relay egress
+```
+
+```sh
+E=/opt/careercraft-secrets/computers.env
+sudo docker compose --env-file $E build computer-image
+sudo docker compose --env-file $E build private-computer-image supervisor relay egress
+sudo docker compose --env-file $E up -d supervisor relay egress
+# Verification, test mode: set ALLOW_TEST_PORTAL=1 in $E, then
+#   sudo docker compose --env-file $E build egress
+#   sudo docker compose --env-file $E --profile test up -d egress test-portal
+# run verify*.py inside the relay container (see below), and switch back
+# without touching supervisor/relay (live computers keep running):
+#   set ALLOW_TEST_PORTAL=0 in $E, then
+#   sudo docker compose --env-file $E --profile test rm -sf test-portal
+#   sudo docker compose --env-file $E build egress
+#   sudo docker compose --env-file $E up -d egress
+```
+
+## Test deployment
+
 Test deployment: SSH alias `24gb`, isolated directory `~/careercraft-sandbox`.
 The local CareerCraft app stays at http://localhost:18180/copilot. Its backend
 and Temporal worker reach the relay through an SSH tunnel on their private
@@ -9,9 +85,10 @@ OpenBot source is pinned to `b6932d31a8d6e7896c15139dfc27a6c6911deb27`.
 Build the base before the private computer image. Retain the upstream license.
 
 ```sh
+# .env here also sets ALLOW_TEST_PORTAL=1, or verify*.py cannot reach the fixture
 docker compose --env-file .env build computer-image
 docker compose --env-file .env build private-computer-image supervisor relay egress
-docker compose --env-file .env up -d supervisor relay egress test-portal
+docker compose --env-file .env --profile test up -d supervisor relay egress test-portal
 ```
 
 Create `.env` outside source control with independent random 32-byte secrets:

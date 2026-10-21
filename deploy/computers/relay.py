@@ -84,6 +84,10 @@ async def supervisor(bot, verb):
 
 async def ensure(user_id, enable=False):
     bot = identity(user_id)
+    # The global lock covers only the slot check and reservation. Container
+    # start-up and the readiness wait run outside it: held across them, every
+    # user's every action queued behind one lock (latency grew linearly with
+    # concurrent users).
     async with allocation_lock:
         with database() as db:
             row = db.execute(
@@ -96,20 +100,23 @@ async def ensure(user_id, enable=False):
             count = db.execute(
                 "SELECT count(*) FROM sessions WHERE running=1"
             ).fetchone()[0]
-            if (not row or not row["running"]) and count >= MAX_SESSIONS:
+            reserved = not row or not row["running"]
+            was_enabled = bool(row and row["enabled"])
+            if reserved and count >= MAX_SESSIONS:
                 raise HTTPException(
                     429, "All sandbox slots are busy; retry when a slot is available"
                 )
+            # Reserve before releasing the lock, so concurrent starts count it.
+            db.execute(
+                "INSERT INTO sessions(user_id,enabled,running,touched) VALUES (?,1,1,?) ON CONFLICT(user_id) DO UPDATE SET enabled=1,running=1,touched=excluded.touched",
+                (user_id, time.time()),
+            )
+    try:
         state = await supervisor(bot, "ensure")
         expected = f"http://careercraft-sandbox-computer-{bot}:4100"
         if state.get("url") != expected:
             raise HTTPException(
                 503, "Supervisor returned an unexpected computer address"
-            )
-        with database() as db:
-            db.execute(
-                "INSERT INTO sessions(user_id,enabled,running,touched) VALUES (?,1,1,?) ON CONFLICT(user_id) DO UPDATE SET enabled=1,running=1,touched=excluded.touched",
-                (user_id, time.time()),
             )
         # Container creation returns before its HTTP listener is ready. Retry
         # only this read; never retry a dispatched browser action.
@@ -124,17 +131,36 @@ async def ensure(user_id, enable=False):
                 if exc.status_code != 503 or attempt == 29:
                     raise
                 await asyncio.sleep(0.5)
-        return bot
+    except BaseException:
+        if reserved:
+            # The supervisor may have created a container that never became
+            # ready: stop it before freeing the slot, or it runs uncounted.
+            # If the stop fails the slot stays reserved (the reaper retries).
+            await supervisor(bot, "stop")
+            with database() as db:
+                db.execute(
+                    "UPDATE sessions SET running=0,enabled=? WHERE user_id=?",
+                    (int(was_enabled), user_id),
+                )
+        raise
+    if reserved:
+        # A slow start must not count against the idle lease it just got.
+        with database() as db:
+            db.execute(
+                "UPDATE sessions SET touched=? WHERE user_id=?", (time.time(), user_id)
+            )
+    return bot
 
 
 async def stop(user_id, disable):
-    async with allocation_lock:
-        await supervisor(identity(user_id), "stop")
-        with database() as db:
-            db.execute(
-                "UPDATE sessions SET running=0,enabled=CASE WHEN ? THEN 0 ELSE enabled END WHERE user_id=?",
-                (disable, user_id),
-            )
+    # Callers hold this user's lock. No global lock: freeing a slot cannot
+    # overshoot MAX_SESSIONS, and a stop (profile flush) takes seconds.
+    await supervisor(identity(user_id), "stop")
+    with database() as db:
+        db.execute(
+            "UPDATE sessions SET running=0,enabled=CASE WHEN ? THEN 0 ELSE enabled END WHERE user_id=?",
+            (disable, user_id),
+        )
 
 
 async def reap():

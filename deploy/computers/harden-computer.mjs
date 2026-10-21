@@ -94,5 +94,38 @@ const profilesPath = path.replace(/index\.ts$/, 'profiles.ts');
 let profiles = await readFile(profilesPath, 'utf8');
 const proxyAnchor = 'const proxy = egressFor(botId, process.env);';
 if (profiles.split(proxyAnchor).length !== 2) throw new Error('Review changed browser egress contract');
-profiles = profiles.replace(proxyAnchor, 'const proxy = {server:"http://egress:3128",bypass:"<-loopback>"};');
+// By address, not the name "egress": Docker's embedded DNS (127.0.0.11) does not
+// answer inside gVisor (runsc) containers. compose.yml pins egress to this IP.
+profiles = profiles.replace(proxyAnchor, 'const proxy = {server:"http://172.31.250.10:3128",bypass:"<-loopback>"};');
 await writeFile(profilesPath, profiles);
+
+// Screen refreshes poll a screenshot every 4 s per open panel. PNG encoding of a
+// 1280x800 page dominated CPU under load and made each frame large; JPEG q70
+// (what the screencast already uses) is far cheaper and smaller. `mime` lets
+// the app render either format.
+const index = await readFile(path, 'utf8');
+const shotAnchor = 'const buffer = await target.screenshot({ type: "png" });';
+const shotBody = 'base64: buffer.toString("base64"),';
+if (index.split(shotAnchor).length !== 2 || index.split(shotBody).length !== 2) {
+  throw new Error('Review changed screenshot contract');
+}
+await writeFile(
+  path,
+  index
+    .replace(shotAnchor, 'const buffer = await target.screenshot({ type: "jpeg", quality: 70 });')
+    .replace(shotBody, `${shotBody} mime: "image/jpeg",`),
+);
+
+// Background work every Chromium does for a desktop user (translate, media
+// routing, optimisation hints, sync) costs CPU in every concurrent computer and
+// serves no job application. Safe Browsing and CRLSet updates stay on.
+let launchProfiles = await readFile(profilesPath, 'utf8');
+const flagsAnchor = '  "--disable-dev-shm-usage",';
+if (launchProfiles.split(flagsAnchor).length !== 2) throw new Error('Review changed launch flags');
+launchProfiles = launchProfiles.replace(flagsAnchor, `${flagsAnchor}
+  "--disable-default-apps",
+  "--disable-sync",
+  "--no-first-run",
+  "--metrics-recording-only",
+  "--disable-features=Translate,MediaRouter,OptimizationHints,AutofillServerCommunication,InterestFeedContentSuggestions",`);
+await writeFile(profilesPath, launchProfiles);

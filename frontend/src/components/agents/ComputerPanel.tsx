@@ -10,7 +10,7 @@ import { Desktop, Globe, LockKey, CursorClick, Moon, ArrowRight, CaretDown, Arro
 
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 
-type Screen = { base64: string; width: number; height: number; url: string };
+type Screen = { base64: string; width: number; height: number; url: string; mime?: string };
 type Snapshot = { snapshotId: number; computer_run: string; elements: { ref: string; role: string; name: string }[] };
 type SavedLogin = { id: string; origin: string; label: string };
 
@@ -25,7 +25,7 @@ export function ComputerPanel() {
   const [error, setError] = useState("");
   // Polling failures, kept apart from action errors and cleared by the next good poll.
   const [statusError, setStatusError] = useState("");
-  const [url, setUrl] = useState("http://test-portal/");
+  const [url, setUrl] = useState("");
   const [controlId, setControlId] = useState<string | null>(null);
   const [privateText, setPrivateText] = useState("");
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
@@ -54,7 +54,9 @@ export function ComputerPanel() {
   useEffect(() => {
     let disposed = false;
     let timer: ReturnType<typeof setTimeout>;
+    let polling = false; // one poll at a time, even when the tab regains focus mid-poll
     async function poll() {
+      polling = true;
       let delay = 4000;
       try {
         const state = (await apiClient.get("/computer")).data;
@@ -64,6 +66,11 @@ export function ComputerPanel() {
         if (state.available === false) {
           // Re-check slowly so the workspace appears once a relay is set up.
           delay = 60000;
+        } else if (state.running && document.hidden) {
+          // Nobody can see the screen: skip the frame (each one costs the
+          // computers host CPU) and check back less often.
+          setRunning(true);
+          delay = 15000;
         } else if (state.running) {
           setRunning(true);
           const next = await action("screenshot");
@@ -75,11 +82,15 @@ export function ComputerPanel() {
         // Availability stays as it was: a failed poll neither reveals nor hides controls.
         if (!disposed) setStatusError(getApiErrorMessage(e, "Computer service unavailable."));
       }
+      polling = false;
       if (!disposed) timer = setTimeout(poll, delay);
     }
+    // Coming back to the tab refreshes the screen at once instead of after the slow interval.
+    function onVisible() { if (!document.hidden && !disposed && !polling) { clearTimeout(timer); void poll(); } }
+    document.addEventListener("visibilitychange", onVisible);
     void poll();
     void refreshLogins().catch(() => {});
-    return () => { disposed = true; clearTimeout(timer); };
+    return () => { disposed = true; clearTimeout(timer); document.removeEventListener("visibilitychange", onVisible); };
   }, []);
 
   if (available !== true) {
@@ -121,10 +132,10 @@ export function ComputerPanel() {
       try { await action("human/navigate", { url }); setSnapshot(null); }
       finally { if (!controlId) await action("control/release", { requestId }); }
     }); }}>
-      <Input leading={<Globe size={17} weight="light" />} trayClassName="flex-1" aria-label="Career page URL" value={url} onChange={e => setUrl(e.target.value)} />
+      <Input leading={<Globe size={17} weight="light" />} trayClassName="flex-1" aria-label="Career page URL" required placeholder="https://careers.example.com" value={url} onChange={e => setUrl(e.target.value)} />
       <IslandButton size="sm" tone="ghost" disabled={busy || !running} type="submit">Open</IslandButton>
     </form>
-    <p className="truncate px-1 text-[11px] text-muted-foreground" title={screen?.url}>{screen?.url || "Resume to explore a career page. A test employer is ready for you."}</p>
+    <p className="truncate px-1 text-[11px] text-muted-foreground" title={screen?.url}>{screen?.url || "Resume, then open a career page."}</p>
     <div className="flex flex-wrap items-center gap-2">
       <IslandButton size="sm" tone="ghost" disabled={busy || !running} onClick={() => perform(async () => {
         if (controlId) { await action("control/release", { requestId: controlId }); setControlId(null); }
@@ -145,7 +156,7 @@ export function ComputerPanel() {
       })); }}>
       {/* The authenticated response stays in memory; no public screenshot URL. */}
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={`data:image/png;base64,${screen.base64}`} alt="Live view of your private browser" className="block w-full" />
+      <img src={`data:${screen.mime ?? "image/png"};base64,${screen.base64}`} alt="Live view of your private browser" className="block w-full" />
     </button> : <div className="flex aspect-[8/5] flex-col items-center justify-center gap-4 rounded-2xl bg-muted/40 px-6 text-center ring-1 ring-foreground/[0.06]"><span className="grid h-16 w-16 place-items-center rounded-[22px] bg-card shadow-bezel-core text-muted-foreground">{running ? <Desktop size={30} weight="light" /> : <Moon size={30} weight="light" />}</span><div><h3 className="text-sm font-medium">{running ? "Opening your browser" : "Your workspace is resting"}</h3><p className="mx-auto mt-2 max-w-64 text-xs leading-5 text-muted-foreground">{running ? "The live view will appear here shortly." : "Resume when you need it. Your browser session stays saved while it sleeps."}</p></div></div>}
 
     {controlId && <details className="rounded-2xl bg-primary/[0.04] p-4 ring-1 ring-primary/10"><summary className="cursor-pointer text-xs text-muted-foreground">Alternative private input</summary><form className="mt-3 space-y-3" onSubmit={e => { e.preventDefault(); void perform(async () => {
