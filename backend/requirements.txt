@@ -93,7 +93,8 @@ psutil>=5.9.0
 # Transitive deps with known advisories below these floors.
 # Audited 2026-10-21 with `pip-audit`.
 aiohttp>=3.14.4        # PYSEC-2026-2104..2113, 3545..3547 (14 advisories); CVE-2026-111063/111064
-pillow>=13.0.0         # PYSEC-2026-2253..2257, 3451..3454, 3493..3496; CVE-2026-112395..112899 (8)
+pillow>=13.0.0         # PYSEC-2026-2253..2257, 3451..3454, 3493..3496;
+                       # CVE-2026-112395, -112397, -112400, -112404, -112895, -112896, -112897, -112899
 h2>=4.4.1              # PYSEC-2026-3628
 httplib2>=0.32.0       # PYSEC-2026-3444
 mcp>=1.30.0,<2         # PYSEC-2026-3481/3482/3483 — 2.x is a breaking major
