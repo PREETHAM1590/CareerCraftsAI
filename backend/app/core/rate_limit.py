@@ -1,7 +1,9 @@
 import logging
+from collections import OrderedDict
 
 from fastapi import Request
 from slowapi import Limiter
+from slowapi import middleware as _slowapi_middleware
 from slowapi.middleware import SlowAPIASGIMiddleware, _ASGIMiddlewareResponder
 from slowapi.util import get_remote_address
 
@@ -70,3 +72,35 @@ class StreamingSafeSlowAPIMiddleware(SlowAPIASGIMiddleware):
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
         await _StreamingSafeResponder(self.app)(scope, receive, send)
+
+
+# slowapi's ASGI middleware finds each request's handler by matching every route
+# (153 here, no early exit) before FastAPI routes the request again: ~16% of the
+# request path's Python time under load. Routes are fixed after startup, so the
+# answer for a method + path never changes; remember it.
+_route_handlers: OrderedDict[tuple, object] = OrderedDict()
+_ROUTE_CACHE_MAX = 4096
+_slowapi_find_route_handler = _slowapi_middleware._find_route_handler
+
+
+def _cached_find_route_handler(routes, scope):
+    # id(routes): each app's route list gets its own entries.
+    key = (
+        id(routes),
+        scope["type"],
+        scope.get("method"),
+        scope.get("root_path", ""),
+        scope["path"],
+    )
+    try:
+        _route_handlers.move_to_end(key)
+        return _route_handlers[key]
+    except KeyError:
+        handler = _slowapi_find_route_handler(routes, scope)
+        _route_handlers[key] = handler
+        if len(_route_handlers) > _ROUTE_CACHE_MAX:
+            _route_handlers.popitem(last=False)  # least recently used
+        return handler
+
+
+_slowapi_middleware._find_route_handler = _cached_find_route_handler
