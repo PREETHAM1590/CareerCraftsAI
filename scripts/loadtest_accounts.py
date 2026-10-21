@@ -43,6 +43,7 @@ TEMPLATE = "loadtest"
 # Clerk's Cloudflare front rejects urllib's default "Python-urllib" agent (1010).
 USER_AGENT = "careercraft-loadtest-accounts/1.0"
 ACCOUNT_DEADLINE_S = 60
+TOKEN_LIFETIME_S = 3 * 3600  # covers account setup plus a full ramp run
 STALL_PAUSE_S = 60
 _STEP = ["start"]  # the step in progress, for the stall message
 
@@ -157,25 +158,52 @@ def loadtest_users(secret):
 
 
 def ensure_template(secret):
+    template = {
+        "name": TEMPLATE,
+        "claims": {"email": "{{user.primary_email_address}}"},
+        "lifetime": TOKEN_LIFETIME_S,
+        "allowed_clock_skew": 5,
+    }
     status, templates, _ = call("GET", f"{CLERK_API}/jwt_templates", token=secret)
-    if status == 200 and any(t.get("name") == TEMPLATE for t in templates):
-        return
-    status, body, _ = call(
-        "POST",
-        f"{CLERK_API}/jwt_templates",
-        token=secret,
-        body={
-            "name": TEMPLATE,
-            "claims": {"email": "{{user.primary_email_address}}"},
-            "lifetime": 3600,
-            "allowed_clock_skew": 5,
-        },
+    current = next(
+        (t for t in (templates if status == 200 else []) if t.get("name") == TEMPLATE),
+        None,
     )
+    if current and current.get("lifetime") == TOKEN_LIFETIME_S:
+        return
+    method, url = (
+        ("PATCH", f"{CLERK_API}/jwt_templates/{current['id']}")
+        if current
+        else ("POST", f"{CLERK_API}/jwt_templates")
+    )
+    status, body, _ = call(method, url, token=secret, body=template)
     if status not in (200, 201):
-        sys.exit(f"creating the JWT template failed: HTTP {status} {body}")
+        sys.exit(f"saving the JWT template failed: HTTP {status} {body}")
 
 
-def session_token(secret, fapi, user_id):
+def mint(secret, session_id):
+    _STEP[0] = "template token"
+    status, minted, _ = call(
+        "POST",
+        f"{CLERK_API}/sessions/{session_id}/tokens/{TEMPLATE}",
+        token=secret,
+        body={},
+    )
+    if status != 200 or not minted.get("jwt"):
+        raise RuntimeError(f"template token: HTTP {status} {minted}")
+    return minted["jwt"]
+
+
+def session_token(secret, fapi, user_id, sign_in=True):
+    # An account signed in earlier still has an active session (Clerk keeps them
+    # up to 7 days): mint from it. New sign-ins are what Clerk throttles.
+    _STEP[0] = "active session"
+    query = urllib.parse.urlencode({"user_id": user_id, "status": "active"})
+    status, sessions, _ = call("GET", f"{CLERK_API}/sessions?{query}", token=secret)
+    if status == 200 and sessions:
+        return mint(secret, sessions[0]["id"])
+    if not sign_in:
+        raise RuntimeError("no active session (--refresh skips new sign-ins)")
     _STEP[0] = "sign-in token"
     status, ticket, _ = call(
         "POST",
@@ -195,16 +223,7 @@ def session_token(secret, fapi, user_id):
     session_id = (signin.get("response") or {}).get("created_session_id")
     if status != 200 or not session_id:
         raise RuntimeError(f"ticket sign-in: HTTP {status} {str(signin)[:300]}")
-    _STEP[0] = "template token"
-    status, minted, _ = call(
-        "POST",
-        f"{CLERK_API}/sessions/{session_id}/tokens/{TEMPLATE}",
-        token=secret,
-        body={},
-    )
-    if status != 200 or not minted.get("jwt"):
-        raise RuntimeError(f"template token: HTTP {status} {minted}")
-    return minted["jwt"]
+    return mint(secret, session_id)
 
 
 def create(args, env):
@@ -214,7 +233,7 @@ def create(args, env):
         u["email_addresses"][0]["email_address"]: u["id"]
         for u in loadtest_users(secret)
     }
-    # Owner-only (live bearer tokens for an hour), written as each one is minted
+    # Owner-only (live bearer tokens for TOKEN_LIFETIME_S), written as each one is minted
     # so a dropped SSH session or a stall never loses the accounts already made.
     fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     os.chmod(args.out, 0o600)  # an existing file keeps its old mode otherwise
@@ -228,6 +247,8 @@ def create(args, env):
         try:
             _STEP[0] = "create user"
             user_id = existing.get(email)
+            if not user_id and args.refresh:
+                raise RuntimeError("not created yet (--refresh only reuses accounts)")
             if not user_id:
                 status, user, _ = call(
                     "POST",
@@ -248,7 +269,7 @@ def create(args, env):
                 if status not in (200, 201):
                     raise RuntimeError(f"create user: HTTP {status} {user}")
                 user_id = user["id"]
-            jwt = session_token(secret, fapi, user_id)
+            jwt = session_token(secret, fapi, user_id, sign_in=not args.refresh)
             _STEP[0] = "consent"
             status, consent, _ = call(
                 "POST", f"{args.api}/users/me/consent", token=jwt, body={}
@@ -277,7 +298,10 @@ def create(args, env):
         print(f"\r{ready} ready, {failures} failed", end="", file=sys.stderr)
         time.sleep(0.2)  # Clerk Backend API: stay well under 100 requests / 10 s
     out.close()
-    print(f"\nwrote {ready} tokens to {args.out} (valid 1 hour)", file=sys.stderr)
+    print(
+        f"\nwrote {ready} tokens to {args.out} (valid {TOKEN_LIFETIME_S // 3600} h)",
+        file=sys.stderr,
+    )
 
 
 def delete(args, env):
@@ -307,6 +331,11 @@ def main():
     parser.add_argument("--api", default="https://api.careercraftsai.me/api/v1")
     parser.add_argument("--env-file", action="append", required=True)
     parser.add_argument("--out", default="tokens.txt")
+    parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="only mint fresh tokens from existing accounts' active sessions",
+    )
     args = parser.parse_args()
     env = read_env(args.env_file)
     if "CLERK_SECRET_KEY" not in env or not (
