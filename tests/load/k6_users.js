@@ -43,6 +43,12 @@ const memberOrdinal = (id) =>
   Math.floor(id * MEMBER_SHARE) > Math.floor((id - 1) * MEMBER_SHARE) ? Math.floor(id * MEMBER_SHARE) - 1 : -1;
 
 const peakMembers = Math.floor(Math.max(...USERS) * MEMBER_SHARE);
+if (TOKENS.length && !/^https:\/\//.test(API) && !/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?\//.test(API)) {
+  throw new Error(`API must be https:// (or http://localhost) when sending member tokens: ${API}`);
+}
+if (!__ENV.ALLOW_TOKEN_REUSE && new Set(TOKENS).size < TOKENS.length) {
+  throw new Error("TOKENS_FILE repeats a token; one account per member needs distinct tokens.");
+}
 if (peakMembers > TOKENS.length && !__ENV.ALLOW_TOKEN_REUSE) {
   throw new Error(
     `Need ${peakMembers} tokens for ${peakMembers} concurrent members (max(USERS) ${Math.max(...USERS)} x MEMBER_SHARE ${MEMBER_SHARE}) ` +
@@ -73,6 +79,8 @@ function thresholds() {
   for (const n of USERS) {
     out[`http_req_failed{step:${n}}`] = [{ threshold: "rate<0.05", abortOnFail: true, delayAbortEval: "30s" }];
     out[`checks{step:${n}}`] = [{ threshold: "rate>0.95", abortOnFail: true, delayAbortEval: "30s" }];
+    // Members' API checks on their own: page successes can't hide a broken API.
+    out[`checks{step:${n},kind:api}`] = [{ threshold: "rate>0.95", abortOnFail: true, delayAbortEval: "30s" }];
     out[`http_req_duration{step:${n},kind:page}`] = [
       { threshold: "p(95)<3000", abortOnFail: true, delayAbortEval: "30s" },
     ];
@@ -183,7 +191,9 @@ function api(paths, token, step) {
       },
     })),
   );
-  for (const r of responses) check(r, { "api 2xx": (x) => x.status >= 200 && x.status < 300 }, { step });
+  for (const r of responses) {
+    check(r, { "api 2xx": (x) => x.status >= 200 && x.status < 300 }, { step, kind: "api" });
+  }
 }
 
 function member(ordinal) {

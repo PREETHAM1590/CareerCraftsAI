@@ -235,8 +235,10 @@ def create(args, env):
     }
     # Owner-only (live bearer tokens for TOKEN_LIFETIME_S), written as each one is minted
     # so a dropped SSH session or a stall never loses the accounts already made.
-    fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    os.chmod(args.out, 0o600)  # an existing file keeps its old mode otherwise
+    # A fresh 0600 file, renamed over args.out at the end: an existing file may
+    # already be open by someone else, and chmod never revokes that descriptor.
+    partial = f"{args.out}.partial-{os.getpid()}"
+    fd = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     out = os.fdopen(fd, "w", encoding="utf-8")
     ready, failures = 0, 0
     signal.signal(signal.SIGALRM, _account_timeout)
@@ -281,6 +283,14 @@ def create(args, env):
                 )
             if status != 200:
                 raise RuntimeError(f"consent: HTTP {status} {consent}")
+            # Consent is exempt from the deletion check, so a reused account can
+            # still be scheduled for erasure; the reaper would remove it mid-run.
+            if consent.get("deletion_scheduled_for"):
+                status, body, _ = call(
+                    "POST", f"{args.api}/users/me/cancel-deletion", token=jwt
+                )
+                if status != 200:
+                    raise RuntimeError(f"cancel pending deletion: HTTP {status} {body}")
             out.write(jwt + "\n")
             out.flush()
             ready += 1
@@ -288,6 +298,8 @@ def create(args, env):
             failures += 1
             print(f"\n{email}: {exc}", file=sys.stderr)
             if failures >= 5 and not ready:
+                out.close()
+                os.unlink(partial)
                 sys.exit("stopping: the first accounts all failed")
             if "no answer within" in str(exc):
                 # Clerk throttles production sign-ins by stalling connections;
@@ -298,6 +310,7 @@ def create(args, env):
         print(f"\r{ready} ready, {failures} failed", end="", file=sys.stderr)
         time.sleep(0.2)  # Clerk Backend API: stay well under 100 requests / 10 s
     out.close()
+    os.replace(partial, args.out)
     print(
         f"\nwrote {ready} tokens to {args.out} (valid {TOKEN_LIFETIME_S // 3600} h)",
         file=sys.stderr,
