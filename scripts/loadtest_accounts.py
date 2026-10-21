@@ -38,6 +38,8 @@ import urllib.request
 
 CLERK_API = "https://api.clerk.com/v1"
 TEMPLATE = "loadtest"
+# Clerk's Cloudflare front rejects urllib's default "Python-urllib" agent (1010).
+USER_AGENT = "careercraft-loadtest-accounts/1.0"
 
 
 def read_env(paths):
@@ -53,7 +55,11 @@ def read_env(paths):
 
 def call(method, url, *, token=None, body=None, form=None, headers=None):
     """JSON request with retry on 429/5xx; returns (status, json, response headers)."""
-    data, all_headers = None, {"Accept": "application/json", **(headers or {})}
+    data, all_headers = None, {
+        "Accept": "application/json",
+        "User-Agent": USER_AGENT,
+        **(headers or {}),
+    }
     if token:
         all_headers["Authorization"] = f"Bearer {token}"
     if body is not None:
