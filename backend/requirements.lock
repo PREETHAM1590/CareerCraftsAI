@@ -475,7 +475,7 @@ pymupdf==1.28.2
     # via -r requirements.txt
 pyparsing==3.3.3
     # via httplib2
-pypdf==6.19.0
+pypdf==6.21.2
     # via -r requirements.txt
 pytest==9.1.1
     # via
