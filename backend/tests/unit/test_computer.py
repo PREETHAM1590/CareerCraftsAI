@@ -257,3 +257,20 @@ async def test_unknown_outcome_is_never_replanned():
         with pytest.raises(TimeoutError):
             await agent.continue_step(run, pending)
     plan.assert_not_called()
+
+
+def test_unconfigured_sandbox_reports_unavailable_but_actions_still_refuse(monkeypatch):
+    from app.services import computer_service
+
+    monkeypatch.setattr(computer_service.settings, "SANDBOX_RELAY_URL", "")
+    monkeypatch.setattr(computer_service.settings, "SANDBOX_RELAY_TOKEN", "")
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=uuid.uuid4())
+    client = TestClient(app)
+
+    status = client.get("/computer")
+    assert status.status_code == 200
+    assert status.json() == {"available": False, "running": False}
+    # The page shows "not available"; anything that needs the relay still fails.
+    assert client.post("/computer/stop").status_code == 503

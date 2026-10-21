@@ -18,6 +18,8 @@ export function ComputerPanel() {
   const [expanded, setExpanded] = useState(false);
   const surface = useRef<BrowserSurfaceHandle>(null);
   const [running, setRunning] = useState(false);
+  // false: this site has no sandbox relay, so there is no computer to show.
+  const [available, setAvailable] = useState(true);
   const [screen, setScreen] = useState<Screen | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -54,6 +56,7 @@ export function ComputerPanel() {
       try {
         const state = (await apiClient.get("/computer")).data;
         if (disposed) return;
+        if (state.available === false) { setAvailable(false); return; } // nothing to poll
         setRunning(state.running);
         if (state.running) {
           const next = await action("screenshot");
@@ -68,6 +71,14 @@ export function ComputerPanel() {
     void refreshLogins().catch(() => {});
     return () => { disposed = true; clearTimeout(timer); };
   }, []);
+
+  if (!available) {
+    return <Bezel className="computer-workspace" coreClassName="overflow-hidden"><section aria-label="Computer workspace" className="flex items-center gap-3 p-4 sm:p-5">
+      <span className="grid h-10 w-10 place-items-center rounded-2xl bg-muted text-muted-foreground"><Desktop size={22} weight="light" /></span>
+      <div><h2 className="text-base font-semibold tracking-tight">Your computer</h2>
+        <p role="status" className="mt-1 text-xs text-muted-foreground">Not available yet. The live browser workspace isn&apos;t switched on for this site.</p></div>
+    </section></Bezel>;
+  }
 
   const workspace = <Bezel className={`computer-workspace ${expanded ? "computer-expanded" : ""}`} coreClassName="overflow-hidden"><section aria-label="Computer workspace" className="space-y-4 p-4 sm:p-5">
     <div className="flex flex-wrap items-center justify-between gap-3">

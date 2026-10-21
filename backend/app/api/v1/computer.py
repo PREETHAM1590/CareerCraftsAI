@@ -38,6 +38,10 @@ router = APIRouter(prefix="/computer", tags=["computer"], route_class=PrivateInp
 
 @router.get("")
 async def status(user: User = Depends(get_current_user)):
+    if not service.is_configured():
+        # Not deployed on this site yet: a state the page shows, not a server
+        # error. Start, stop and actions still answer 503.
+        return {"available": False, "running": False}
     return await service.relay(user.id)
 
 
