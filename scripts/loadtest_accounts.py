@@ -29,6 +29,7 @@ delete   asks the API to schedule erasure of each account (DELETE /users/me, the
 import argparse
 import base64
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -219,7 +220,10 @@ def create(args, env):
                 sys.exit("stopping: the first accounts all failed")
         print(f"\r{len(tokens)} ready, {failures} failed", end="", file=sys.stderr)
         time.sleep(0.2)  # Clerk Backend API: stay well under 100 requests / 10 s
-    with open(args.out, "w", encoding="utf-8") as handle:
+    # Owner-only: these are live bearer tokens for an hour.
+    fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.chmod(args.out, 0o600)  # an existing file keeps its old mode otherwise
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
         handle.write("\n".join(tokens) + "\n")
     print(f"\nwrote {len(tokens)} tokens to {args.out} (valid 1 hour)", file=sys.stderr)
 

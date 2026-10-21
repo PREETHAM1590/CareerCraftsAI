@@ -71,9 +71,11 @@ function currentStep() {
 function thresholds() {
   const out = { http_req_failed: [{ threshold: "rate<0.05", abortOnFail: true, delayAbortEval: "60s" }] };
   for (const n of USERS) {
-    out[`http_req_failed{step:${n}}`] = [{ threshold: "rate<0.05", abortOnFail: true }];
-    out[`checks{step:${n}}`] = [{ threshold: "rate>0.95", abortOnFail: true }];
-    out[`http_req_duration{step:${n},kind:page}`] = [{ threshold: "p(95)<3000", abortOnFail: true }];
+    out[`http_req_failed{step:${n}}`] = [{ threshold: "rate<0.05", abortOnFail: true, delayAbortEval: "30s" }];
+    out[`checks{step:${n}}`] = [{ threshold: "rate>0.95", abortOnFail: true, delayAbortEval: "30s" }];
+    out[`http_req_duration{step:${n},kind:page}`] = [
+      { threshold: "p(95)<3000", abortOnFail: true, delayAbortEval: "30s" },
+    ];
     out[`http_req_duration{step:${n},kind:api}`] = ["p(95)<3000"];
   }
   return out;
@@ -116,6 +118,8 @@ export function setup() {
   return { assets };
 }
 
+let returning = false; // per VU: has this person browsed before?
+
 const think = (lo, hi) => sleep(lo + Math.random() * (hi - lo));
 
 function page(path, data, firstVisit, step) {
@@ -143,7 +147,10 @@ export function user(data) {
 
 function visitor(data) {
   const step = currentStep();
-  const firstVisit = Math.random() < 0.6;
+  // A VU is one person: 60% arrive with an empty cache, and only their first
+  // journey downloads assets; later journeys are a returning, cached browser.
+  const firstVisit = !returning && Math.random() < 0.6;
+  returning = true;
   page("/", data, firstVisit, step);
   think(3, 10);
   page("/pricing", data, firstVisit, currentStep());
@@ -152,6 +159,8 @@ function visitor(data) {
   think(5, 15);
 }
 
+// What a dashboard load requests: the onboarding guard (/users/me), the topbar
+// bell (/notifications) and the dashboard page's own five queries.
 const DASHBOARD = [
   "/users/me",
   "/users/me/stats",
@@ -160,7 +169,6 @@ const DASHBOARD = [
   "/agents/runs?status=awaiting_approval&limit=100",
   "/metrics/agent",
   "/rag/documents?doc_type=resume",
-  "/integrations",
 ];
 
 function api(paths, token, step) {
