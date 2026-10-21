@@ -25,8 +25,9 @@ services:
       COMPUTER_MEMORY_BYTES: ${COMPUTER_MEMORY_BYTES:-1073741824}
       # gVisor (runsc) for every user's browser: a user-space kernel between
       # untrusted pages and the host. Install it on the host first (see README).
-      # Unset defaults to runsc; an explicitly empty value uses Docker's runc.
-      COMPUTER_RUNTIME: ${COMPUTER_RUNTIME-runsc}
+      # Unset or blank means runsc, so a typo can't silently drop isolation;
+      # opting out takes an explicit COMPUTER_RUNTIME=runc.
+      COMPUTER_RUNTIME: ${COMPUTER_RUNTIME:-runsc}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     networks: [control, computers]

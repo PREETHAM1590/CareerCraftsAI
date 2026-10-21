@@ -132,10 +132,10 @@ export function ComputerPanel() {
       try { await action("human/navigate", { url }); setSnapshot(null); }
       finally { if (!controlId) await action("control/release", { requestId }); }
     }); }}>
-      <Input leading={<Globe size={17} weight="light" />} trayClassName="flex-1" aria-label="Career page URL" placeholder="https://careers.example.com" value={url} onChange={e => setUrl(e.target.value)} />
+      <Input leading={<Globe size={17} weight="light" />} trayClassName="flex-1" aria-label="Career page URL" required placeholder="https://careers.example.com" value={url} onChange={e => setUrl(e.target.value)} />
       <IslandButton size="sm" tone="ghost" disabled={busy || !running} type="submit">Open</IslandButton>
     </form>
-    <p className="truncate px-1 text-[11px] text-muted-foreground" title={screen?.url}>{screen?.url || "Resume to explore a career page. A test employer is ready for you."}</p>
+    <p className="truncate px-1 text-[11px] text-muted-foreground" title={screen?.url}>{screen?.url || "Resume, then open a career page."}</p>
     <div className="flex flex-wrap items-center gap-2">
       <IslandButton size="sm" tone="ghost" disabled={busy || !running} onClick={() => perform(async () => {
         if (controlId) { await action("control/release", { requestId: controlId }); setControlId(null); }

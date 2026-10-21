@@ -93,10 +93,12 @@ def run_step(n):
 
     users = [str(uuid.uuid4()) for _ in range(n)]
     deadline = time.monotonic() + HOLD_SECONDS
-    with concurrent.futures.ThreadPoolExecutor(max_workers=n) as pool:
-        list(pool.map(lambda u: member(u, deadline, record), users))
-    for user in users:  # free the slots and storage for the next step
-        timed(lambda user=user: client.delete(f"/users/{user}"))
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=n) as pool:
+            list(pool.map(lambda u: member(u, deadline, record), users))
+    finally:  # free slots and storage even if a run fails or is interrupted
+        for user in users:
+            timed(lambda user=user: client.delete(f"/users/{user}"))
     report = {"users": n}
     for kind in ("start", "navigate", "screenshot", "snapshot"):
         rows = [s for s in samples if s[0] == kind]

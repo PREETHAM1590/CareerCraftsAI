@@ -101,6 +101,7 @@ async def ensure(user_id, enable=False):
                 "SELECT count(*) FROM sessions WHERE running=1"
             ).fetchone()[0]
             reserved = not row or not row["running"]
+            was_enabled = bool(row and row["enabled"])
             if reserved and count >= MAX_SESSIONS:
                 raise HTTPException(
                     429, "All sandbox slots are busy; retry when a slot is available"
@@ -131,10 +132,23 @@ async def ensure(user_id, enable=False):
                     raise
                 await asyncio.sleep(0.5)
     except BaseException:
-        if reserved:  # the computer never came up: give the slot back
+        if reserved:
+            # The supervisor may have created a container that never became
+            # ready: stop it before freeing the slot, or it runs uncounted.
+            # If the stop fails the slot stays reserved (the reaper retries).
+            await supervisor(bot, "stop")
             with database() as db:
-                db.execute("UPDATE sessions SET running=0 WHERE user_id=?", (user_id,))
+                db.execute(
+                    "UPDATE sessions SET running=0,enabled=? WHERE user_id=?",
+                    (int(was_enabled), user_id),
+                )
         raise
+    if reserved:
+        # A slow start must not count against the idle lease it just got.
+        with database() as db:
+            db.execute(
+                "UPDATE sessions SET touched=? WHERE user_id=?", (time.time(), user_id)
+            )
     return bot
 
 
