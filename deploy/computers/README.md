@@ -51,6 +51,7 @@ egress at `.10`). A host created before the subnet was pinned keeps its old
 network; recreate it once:
 
 ```sh
+E=/opt/careercraft-secrets/computers.env
 sudo docker ps -aq --filter name=sandbox-computer-u | xargs -r sudo docker rm -f
 sudo docker compose --env-file $E down
 sudo docker network rm careercraft-sandbox-computers 2>/dev/null || true
@@ -65,8 +66,12 @@ sudo docker compose --env-file $E up -d supervisor relay egress
 # Verification, test mode: set ALLOW_TEST_PORTAL=1 in $E, then
 #   sudo docker compose --env-file $E build egress
 #   sudo docker compose --env-file $E --profile test up -d egress test-portal
-# run verify*.py inside the relay container (see below), and switch back:
-# ALLOW_TEST_PORTAL=0, rebuild egress, `--profile test down`, `up -d ...`.
+# run verify*.py inside the relay container (see below), and switch back
+# without touching supervisor/relay (live computers keep running):
+#   set ALLOW_TEST_PORTAL=0 in $E, then
+#   sudo docker compose --env-file $E --profile test rm -sf test-portal
+#   sudo docker compose --env-file $E build egress
+#   sudo docker compose --env-file $E up -d egress
 ```
 
 ## Test deployment
