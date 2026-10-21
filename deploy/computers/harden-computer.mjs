@@ -94,5 +94,7 @@ const profilesPath = path.replace(/index\.ts$/, 'profiles.ts');
 let profiles = await readFile(profilesPath, 'utf8');
 const proxyAnchor = 'const proxy = egressFor(botId, process.env);';
 if (profiles.split(proxyAnchor).length !== 2) throw new Error('Review changed browser egress contract');
-profiles = profiles.replace(proxyAnchor, 'const proxy = {server:"http://egress:3128",bypass:"<-loopback>"};');
+// By address, not the name "egress": Docker's embedded DNS (127.0.0.11) does not
+// answer inside gVisor (runsc) containers. compose.yml pins egress to this IP.
+profiles = profiles.replace(proxyAnchor, 'const proxy = {server:"http://172.31.250.10:3128",bypass:"<-loopback>"};');
 await writeFile(profilesPath, profiles);

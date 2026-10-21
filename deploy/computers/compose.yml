@@ -22,7 +22,7 @@ services:
       COMPUTER_IMAGE: careercraft-computer:b6932d3-private-login
       COMPUTER_BROWSER_MODE: headless
       COMPUTER_NETWORK: careercraft-sandbox-computers
-      COMPUTER_MEMORY_BYTES: '1073741824'
+      COMPUTER_MEMORY_BYTES: ${COMPUTER_MEMORY_BYTES:-1073741824}
       # gVisor (runsc) for every user's browser: a user-space kernel between
       # untrusted pages and the host. Install it on the host first (see README).
       # Unset defaults to runsc; an explicitly empty value uses Docker's runc.
@@ -43,7 +43,7 @@ services:
       COMPUTER_SUPERVISOR_TOKEN: ${COMPUTER_SUPERVISOR_TOKEN:?required}
       COMPUTER_TOKEN: ${COMPUTER_TOKEN:?required}
       SANDBOX_RELAY_TOKEN: ${SANDBOX_RELAY_TOKEN:?required}
-      SANDBOX_MAX_SESSIONS: '8'
+      SANDBOX_MAX_SESSIONS: ${SANDBOX_MAX_SESSIONS:-8}
       SANDBOX_IDLE_SECONDS: '90'
     volumes:
       - relay-state:/state
@@ -75,7 +75,10 @@ services:
       dockerfile: egress.Dockerfile
       args:
         ALLOW_TEST_PORTAL: ${ALLOW_TEST_PORTAL:-0}
-    networks: [computers, outbound]
+    networks:
+      computers:
+        ipv4_address: 172.31.250.10  # browsers dial this; see harden-computer.mjs
+      outbound: {}
     restart: unless-stopped
     mem_limit: 128m
 networks:
@@ -83,6 +86,9 @@ networks:
   computers:
     name: careercraft-sandbox-computers
     internal: true
+    ipam:
+      config:
+        - subnet: 172.31.250.0/24
   outbound: {}
 volumes:
   relay-state:

@@ -1,5 +1,42 @@
 # Private on-demand computers
 
+## Production (careercraftsai.me)
+
+Host: SSH alias `24gb1` (Oracle A1, 4 OCPU / 24 GB, Ubuntu 26.04), checkout of
+this directory at `~/careercraft-computers/deploy/computers`, secrets in the
+root-only `/opt/careercraft-secrets/computers.env`.
+
+- **Isolation: gVisor.** Every user's browser runs under `runsc`
+  (`COMPUTER_RUNTIME`, default `runsc`), a user-space kernel between untrusted
+  pages and the host. Install it once:
+  `apt-get install runsc` from the gvisor.dev apt repository, `runsc install`,
+  `systemctl restart docker`.
+- **Egress by address.** Docker's embedded DNS (127.0.0.11) does not answer
+  inside gVisor containers, so browsers dial the Squid proxy at its pinned IP
+  `172.31.250.10` (see `compose.yml`, `harden-computer.mjs`). Squid resolves
+  sites itself and still denies private ranges and the metadata endpoint.
+- **No test fixture.** `test-portal` runs only with `--profile test`, and its
+  Squid exception is built in only with `ALLOW_TEST_PORTAL=1`.
+- **Link to the app.** The APP VM's `sandbox-tunnel` service (in
+  `deploy/oracle-vm/compose.yml`) forwards its loopback `127.0.0.1:14312` to the
+  relay. Its key is restricted in `24gb1`'s `authorized_keys` to
+  `restrict,port-forwarding,permitopen="127.0.0.1:14312",command="/bin/false"`.
+  `backend.env` carries `SANDBOX_RELAY_URL=http://127.0.0.1:14312` and the token.
+- **Capacity** (`SANDBOX_MAX_SESSIONS`, `COMPUTER_MEMORY_BYTES` in the env file)
+  comes from `loadtest_computers.py`; see the load test report in the PR.
+
+```sh
+E=/opt/careercraft-secrets/computers.env
+sudo docker compose --env-file $E build computer-image
+sudo docker compose --env-file $E build private-computer-image supervisor relay egress
+sudo docker compose --env-file $E up -d supervisor relay egress
+# Verification, test mode: ALLOW_TEST_PORTAL=1 in $E, rebuild egress, then
+# sudo docker compose --env-file $E --profile test up -d test-portal
+# and run verify*.py inside the relay container (see below).
+```
+
+## Test deployment
+
 Test deployment: SSH alias `24gb`, isolated directory `~/careercraft-sandbox`.
 The local CareerCraft app stays at http://localhost:18180/copilot. Its backend
 and Temporal worker reach the relay through an SSH tunnel on their private

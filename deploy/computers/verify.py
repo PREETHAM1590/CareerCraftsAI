@@ -248,7 +248,14 @@ try:
         state = client.get(f"/users/{idle}").json()
         if not state["running"]:
             break
-        call(idle, "screenshot")
+        # The reaper may stop it between the status read and this screenshot.
+        shot = client.post(
+            f"/users/{idle}/action",
+            json={"operation": "screenshot", "parameters": {}, "actor": "human"},
+        )
+        if shot.status_code == 409:
+            break
+        assert shot.status_code == 200, shot.text[:180]
         time.sleep(4)
     assert not client.get(f"/users/{idle}").json()["running"]
     call(idle, "screenshot", expected=409)
