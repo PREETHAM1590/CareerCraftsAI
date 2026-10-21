@@ -5,6 +5,10 @@
 Host: SSH alias `24gb1` (Oracle A1, 4 OCPU / 24 GB, Ubuntu 26.04), checkout of
 this directory at `~/careercraft-computers/deploy/computers`, secrets in the
 root-only `/opt/careercraft-secrets/computers.env`.
+Root is mounted without online `discard` (weekly `fstrim.timer` instead), as on
+the APP VM: synchronous TRIM of freed image layers stalls the disk for minutes
+after every rebuild. Launch and capacity report:
+`docs/reports/2026-10-22-computers-production.md`.
 
 - **Isolation: gVisor.** Every user's browser runs under `runsc`
   (`COMPUTER_RUNTIME`, default `runsc`), a user-space kernel between untrusted
