@@ -18,8 +18,8 @@ export function ComputerPanel() {
   const [expanded, setExpanded] = useState(false);
   const surface = useRef<BrowserSurfaceHandle>(null);
   const [running, setRunning] = useState(false);
-  // false: this site has no sandbox relay, so there is no computer to show.
-  const [available, setAvailable] = useState(true);
+  // null until the first status answer; false: this site has no sandbox relay.
+  const [available, setAvailable] = useState<boolean | null>(null);
   const [screen, setScreen] = useState<Screen | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -53,30 +53,42 @@ export function ComputerPanel() {
     let disposed = false;
     let timer: ReturnType<typeof setTimeout>;
     async function poll() {
+      let delay = 4000;
       try {
         const state = (await apiClient.get("/computer")).data;
         if (disposed) return;
-        if (state.available === false) { setAvailable(false); return; } // nothing to poll
-        setRunning(state.running);
-        if (state.running) {
+        setAvailable(state.available !== false);
+        if (state.available === false) {
+          // Re-check slowly so the workspace appears once a relay is set up.
+          delay = 60000;
+        } else if (state.running) {
+          setRunning(true);
           const next = await action("screenshot");
           if (!disposed) setScreen(next);
           const control = await action("control");
           if (!disposed) setControlId(control.holder === "human" ? control.request?.id : null);
-        } else { setScreen(null); setControlId(null); }
-      } catch (e) { if (!disposed) setError(getApiErrorMessage(e, "Computer service unavailable.")); }
-      if (!disposed) timer = setTimeout(poll, 4000);
+        } else { setRunning(false); setScreen(null); setControlId(null); }
+      } catch (e) {
+        // A failing status call is an error to show in the workspace, not "unavailable".
+        if (!disposed) { setAvailable(true); setError(getApiErrorMessage(e, "Computer service unavailable.")); }
+      }
+      if (!disposed) timer = setTimeout(poll, delay);
     }
     void poll();
     void refreshLogins().catch(() => {});
     return () => { disposed = true; clearTimeout(timer); };
   }, []);
 
-  if (!available) {
-    return <Bezel className="computer-workspace" coreClassName="overflow-hidden"><section aria-label="Computer workspace" className="flex items-center gap-3 p-4 sm:p-5">
-      <span className="grid h-10 w-10 place-items-center rounded-2xl bg-muted text-muted-foreground"><Desktop size={22} weight="light" /></span>
-      <div><h2 className="text-base font-semibold tracking-tight">Your computer</h2>
-        <p role="status" className="mt-1 text-xs text-muted-foreground">Not available yet. The live browser workspace isn&apos;t switched on for this site.</p></div>
+  if (available !== true) {
+    // No actionable controls until the relay is confirmed; saved logins stay removable.
+    return <Bezel className="computer-workspace" coreClassName="overflow-hidden"><section aria-label="Computer workspace" className="space-y-4 p-4 sm:p-5">
+      <div className="flex items-center gap-3"><span className="grid h-10 w-10 place-items-center rounded-2xl bg-muted text-muted-foreground"><Desktop size={22} weight="light" /></span>
+        <div><h2 className="text-base font-semibold tracking-tight">Your computer</h2>
+          <p role="status" className="mt-1 text-xs text-muted-foreground">{available === null ? "Checking..." : "Not available yet. The live browser workspace isn’t switched on for this site."}</p></div></div>
+      {available === false && logins.length > 0 && <div className="space-y-2"><p className="text-xs text-muted-foreground">Saved logins</p>
+        {logins.map(login => <div key={login.id} className="flex items-center justify-between gap-2 text-sm"><span className="min-w-0 break-all">{login.label}  /  {login.origin}</span>
+          <IslandButton size="sm" tone="ghost" disabled={busy} onClick={() => perform(async () => { await apiClient.delete(`/computer/credentials/${login.id}`); await refreshLogins(); })}>Delete</IslandButton></div>)}</div>}
+      {error && <p role="alert" className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
     </section></Bezel>;
   }
 
