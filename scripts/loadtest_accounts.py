@@ -105,11 +105,27 @@ def call(method, url, *, token=None, body=None, form=None, headers=None):
     raise RuntimeError(f"{method} {url}: retries exhausted")
 
 
-def frontend_api(publishable_key):
-    encoded = publishable_key.split("_", 2)[2]
+def frontend_api(env):
+    """The issuer the API verifies tokens against; else the publishable key's host."""
+    if env.get("CLERK_ISSUER"):
+        return env["CLERK_ISSUER"].rstrip("/")
+    encoded = env["NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY"].split("_", 2)[2]
     return "https://" + base64.b64decode(
         encoded + "=" * (-len(encoded) % 4)
     ).decode().rstrip("$")
+
+
+def check_same_instance(secret, fapi):
+    """Secret key and frontend API must be one instance: compare their signing kids."""
+    status, backend, _ = call("GET", f"{CLERK_API}/jwks", token=secret)
+    status_f, frontend, _ = call("GET", f"{fapi}/.well-known/jwks.json")
+    kids = {k["kid"] for k in backend.get("keys", [])} if status == 200 else set()
+    if status_f != 200 or not kids & {k["kid"] for k in frontend.get("keys", [])}:
+        sys.exit(
+            f"CLERK_SECRET_KEY is not a key of the instance at {fapi}; "
+            "use the secret key of the instance the API trusts (check which env file "
+            "defines CLERK_SECRET_KEY last)."
+        )
 
 
 def loadtest_users(secret):
@@ -178,9 +194,7 @@ def session_token(secret, fapi, user_id):
 
 
 def create(args, env):
-    secret, fapi = env["CLERK_SECRET_KEY"], frontend_api(
-        env["NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY"]
-    )
+    secret, fapi = env["CLERK_SECRET_KEY"], frontend_api(env)
     ensure_template(secret)
     existing = {
         u["email_addresses"][0]["email_address"]: u["id"]
@@ -235,9 +249,7 @@ def create(args, env):
 
 
 def delete(args, env):
-    secret, fapi = env["CLERK_SECRET_KEY"], frontend_api(
-        env["NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY"]
-    )
+    secret, fapi = env["CLERK_SECRET_KEY"], frontend_api(env)
     users = loadtest_users(secret)
     for done, user in enumerate(users, 1):
         try:
@@ -265,9 +277,13 @@ def main():
     parser.add_argument("--out", default="tokens.txt")
     args = parser.parse_args()
     env = read_env(args.env_file)
-    missing = {"CLERK_SECRET_KEY", "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY"} - env.keys()
-    if missing:
-        sys.exit(f"missing in env files: {', '.join(sorted(missing))}")
+    if "CLERK_SECRET_KEY" not in env or not (
+        "CLERK_ISSUER" in env or "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY" in env
+    ):
+        sys.exit(
+            "env files need CLERK_SECRET_KEY and CLERK_ISSUER (or a publishable key)"
+        )
+    check_same_instance(env["CLERK_SECRET_KEY"], frontend_api(env))
     (create if args.action == "create" else delete)(args, env)
 
 
