@@ -215,6 +215,10 @@ def create(args, env):
                         "first_name": "Load",
                         "last_name": f"Test {n:04d}",
                         "skip_password_requirement": True,
+                        # Required when the instance has legal consent enabled.
+                        "legal_accepted_at": time.strftime(
+                            "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                        ),
                         "public_metadata": {"loadtest": True},
                     },
                 )
