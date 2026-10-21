@@ -23,6 +23,8 @@ export function ComputerPanel() {
   const [screen, setScreen] = useState<Screen | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // Polling failures, kept apart from action errors and cleared by the next good poll.
+  const [statusError, setStatusError] = useState("");
   const [url, setUrl] = useState("http://test-portal/");
   const [controlId, setControlId] = useState<string | null>(null);
   const [privateText, setPrivateText] = useState("");
@@ -57,6 +59,7 @@ export function ComputerPanel() {
       try {
         const state = (await apiClient.get("/computer")).data;
         if (disposed) return;
+        setStatusError("");
         setAvailable(state.available !== false);
         if (state.available === false) {
           // Re-check slowly so the workspace appears once a relay is set up.
@@ -69,8 +72,8 @@ export function ComputerPanel() {
           if (!disposed) setControlId(control.holder === "human" ? control.request?.id : null);
         } else { setRunning(false); setScreen(null); setControlId(null); }
       } catch (e) {
-        // A failing status call is an error to show in the workspace, not "unavailable".
-        if (!disposed) { setAvailable(true); setError(getApiErrorMessage(e, "Computer service unavailable.")); }
+        // Availability stays as it was: a failed poll neither reveals nor hides controls.
+        if (!disposed) setStatusError(getApiErrorMessage(e, "Computer service unavailable."));
       }
       if (!disposed) timer = setTimeout(poll, delay);
     }
@@ -88,7 +91,7 @@ export function ComputerPanel() {
       {available === false && logins.length > 0 && <div className="space-y-2"><p className="text-xs text-muted-foreground">Saved logins</p>
         {logins.map(login => <div key={login.id} className="flex items-center justify-between gap-2 text-sm"><span className="min-w-0 break-all">{login.label}  /  {login.origin}</span>
           <IslandButton size="sm" tone="ghost" disabled={busy} onClick={() => perform(async () => { await apiClient.delete(`/computer/credentials/${login.id}`); await refreshLogins(); })}>Delete</IslandButton></div>)}</div>}
-      {error && <p role="alert" className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
+      {(statusError || error) && <p role="alert" className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">{statusError || error}</p>}
     </section></Bezel>;
   }
 
@@ -105,7 +108,7 @@ export function ComputerPanel() {
         })}>Stop</IslandButton>
       </div>
     </div>
-    {error && <p role="alert" className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
+    {(error || statusError) && <p role="alert" className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">{error || statusError}</p>}
     <form className="flex gap-2" onSubmit={e => { e.preventDefault(); void perform(async () => {
       // Manual navigation owns a handoff too: restart recovery and a pending
       // agent action must never race the user's Open button.
