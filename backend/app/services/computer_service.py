@@ -132,8 +132,12 @@ def credential_origin(value: str):
     return "https://" + parsed.hostname.lower().encode("idna").decode()
 
 
+def is_configured() -> bool:
+    return bool(settings.SANDBOX_RELAY_URL and settings.SANDBOX_RELAY_TOKEN)
+
+
 async def relay(user_id, route="", method="GET", body=None):
-    if not settings.SANDBOX_RELAY_URL or not settings.SANDBOX_RELAY_TOKEN:
+    if not is_configured():
         raise HTTPException(503, "Sandbox worker is not configured")
     url = settings.SANDBOX_RELAY_URL.rstrip("/") + "/users/" + str(uuid.UUID(str(user_id))) + route
     try:

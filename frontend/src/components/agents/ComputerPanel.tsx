@@ -18,9 +18,13 @@ export function ComputerPanel() {
   const [expanded, setExpanded] = useState(false);
   const surface = useRef<BrowserSurfaceHandle>(null);
   const [running, setRunning] = useState(false);
+  // null until the first status answer; false: this site has no sandbox relay.
+  const [available, setAvailable] = useState<boolean | null>(null);
   const [screen, setScreen] = useState<Screen | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // Polling failures, kept apart from action errors and cleared by the next good poll.
+  const [statusError, setStatusError] = useState("");
   const [url, setUrl] = useState("http://test-portal/");
   const [controlId, setControlId] = useState<string | null>(null);
   const [privateText, setPrivateText] = useState("");
@@ -51,23 +55,45 @@ export function ComputerPanel() {
     let disposed = false;
     let timer: ReturnType<typeof setTimeout>;
     async function poll() {
+      let delay = 4000;
       try {
         const state = (await apiClient.get("/computer")).data;
         if (disposed) return;
-        setRunning(state.running);
-        if (state.running) {
+        setStatusError("");
+        setAvailable(state.available !== false);
+        if (state.available === false) {
+          // Re-check slowly so the workspace appears once a relay is set up.
+          delay = 60000;
+        } else if (state.running) {
+          setRunning(true);
           const next = await action("screenshot");
           if (!disposed) setScreen(next);
           const control = await action("control");
           if (!disposed) setControlId(control.holder === "human" ? control.request?.id : null);
-        } else { setScreen(null); setControlId(null); }
-      } catch (e) { if (!disposed) setError(getApiErrorMessage(e, "Computer service unavailable.")); }
-      if (!disposed) timer = setTimeout(poll, 4000);
+        } else { setRunning(false); setScreen(null); setControlId(null); }
+      } catch (e) {
+        // Availability stays as it was: a failed poll neither reveals nor hides controls.
+        if (!disposed) setStatusError(getApiErrorMessage(e, "Computer service unavailable."));
+      }
+      if (!disposed) timer = setTimeout(poll, delay);
     }
     void poll();
     void refreshLogins().catch(() => {});
     return () => { disposed = true; clearTimeout(timer); };
   }, []);
+
+  if (available !== true) {
+    // No actionable controls until the relay is confirmed; saved logins stay removable.
+    return <Bezel className="computer-workspace" coreClassName="overflow-hidden"><section aria-label="Computer workspace" className="space-y-4 p-4 sm:p-5">
+      <div className="flex items-center gap-3"><span className="grid h-10 w-10 place-items-center rounded-2xl bg-muted text-muted-foreground"><Desktop size={22} weight="light" /></span>
+        <div><h2 className="text-base font-semibold tracking-tight">Your computer</h2>
+          <p role="status" className="mt-1 text-xs text-muted-foreground">{available === null ? "Checking..." : "Not available yet. The live browser workspace isn’t switched on for this site."}</p></div></div>
+      {available === false && logins.length > 0 && <div className="space-y-2"><p className="text-xs text-muted-foreground">Saved logins</p>
+        {logins.map(login => <div key={login.id} className="flex items-center justify-between gap-2 text-sm"><span className="min-w-0 break-all">{login.label}  /  {login.origin}</span>
+          <IslandButton size="sm" tone="ghost" disabled={busy} onClick={() => perform(async () => { await apiClient.delete(`/computer/credentials/${login.id}`); await refreshLogins(); })}>Delete</IslandButton></div>)}</div>}
+      {(statusError || error) && <p role="alert" className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">{statusError || error}</p>}
+    </section></Bezel>;
+  }
 
   const workspace = <Bezel className={`computer-workspace ${expanded ? "computer-expanded" : ""}`} coreClassName="overflow-hidden"><section aria-label="Computer workspace" className="space-y-4 p-4 sm:p-5">
     <div className="flex flex-wrap items-center justify-between gap-3">
@@ -82,7 +108,7 @@ export function ComputerPanel() {
         })}>Stop</IslandButton>
       </div>
     </div>
-    {error && <p role="alert" className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
+    {(error || statusError) && <p role="alert" className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">{error || statusError}</p>}
     <form className="flex gap-2" onSubmit={e => { e.preventDefault(); void perform(async () => {
       // Manual navigation owns a handoff too: restart recovery and a pending
       // agent action must never race the user's Open button.
