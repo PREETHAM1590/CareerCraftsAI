@@ -43,10 +43,14 @@ TEMPLATE = "loadtest"
 # Clerk's Cloudflare front rejects urllib's default "Python-urllib" agent (1010).
 USER_AGENT = "careercraft-loadtest-accounts/1.0"
 ACCOUNT_DEADLINE_S = 60
+STALL_PAUSE_S = 60
+_STEP = ["start"]  # the step in progress, for the stall message
 
 
 def _account_timeout(_signum, _frame):
-    raise RuntimeError(f"no answer within {ACCOUNT_DEADLINE_S} s; skipped")
+    raise RuntimeError(
+        f"no answer within {ACCOUNT_DEADLINE_S} s at {_STEP[0]}; skipped"
+    )
 
 
 def read_env(paths):
@@ -172,6 +176,7 @@ def ensure_template(secret):
 
 
 def session_token(secret, fapi, user_id):
+    _STEP[0] = "sign-in token"
     status, ticket, _ = call(
         "POST",
         f"{CLERK_API}/sign_in_tokens",
@@ -181,6 +186,7 @@ def session_token(secret, fapi, user_id):
     if status not in (200, 201):
         raise RuntimeError(f"sign-in token: HTTP {status} {ticket}")
     # Native-client sign-in: no cookies, the client token comes back in a header.
+    _STEP[0] = "ticket sign-in"
     status, signin, _ = call(
         "POST",
         f"{fapi}/v1/client/sign_ins?_is_native=true",
@@ -189,6 +195,7 @@ def session_token(secret, fapi, user_id):
     session_id = (signin.get("response") or {}).get("created_session_id")
     if status != 200 or not session_id:
         raise RuntimeError(f"ticket sign-in: HTTP {status} {str(signin)[:300]}")
+    _STEP[0] = "template token"
     status, minted, _ = call(
         "POST",
         f"{CLERK_API}/sessions/{session_id}/tokens/{TEMPLATE}",
@@ -207,13 +214,19 @@ def create(args, env):
         u["email_addresses"][0]["email_address"]: u["id"]
         for u in loadtest_users(secret)
     }
-    tokens, failures = [], 0
+    # Owner-only (live bearer tokens for an hour), written as each one is minted
+    # so a dropped SSH session or a stall never loses the accounts already made.
+    fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.chmod(args.out, 0o600)  # an existing file keeps its old mode otherwise
+    out = os.fdopen(fd, "w", encoding="utf-8")
+    ready, failures = 0, 0
     signal.signal(signal.SIGALRM, _account_timeout)
     for n in range(1, args.count + 1):
         email = f"loadtest-{n:04d}@{args.domain}"
         # Per-read timeouts can't stop a connection that keeps trickling bytes.
         signal.alarm(ACCOUNT_DEADLINE_S)
         try:
+            _STEP[0] = "create user"
             user_id = existing.get(email)
             if not user_id:
                 status, user, _ = call(
@@ -236,6 +249,7 @@ def create(args, env):
                     raise RuntimeError(f"create user: HTTP {status} {user}")
                 user_id = user["id"]
             jwt = session_token(secret, fapi, user_id)
+            _STEP[0] = "consent"
             status, consent, _ = call(
                 "POST", f"{args.api}/users/me/consent", token=jwt, body={}
             )
@@ -246,22 +260,24 @@ def create(args, env):
                 )
             if status != 200:
                 raise RuntimeError(f"consent: HTTP {status} {consent}")
-            tokens.append(jwt)
+            out.write(jwt + "\n")
+            out.flush()
+            ready += 1
         except RuntimeError as exc:
             failures += 1
-            print(f"{email}: {exc}", file=sys.stderr)
-            if failures >= 5 and not tokens:
+            print(f"\n{email}: {exc}", file=sys.stderr)
+            if failures >= 5 and not ready:
                 sys.exit("stopping: the first accounts all failed")
+            if "no answer within" in str(exc):
+                # Clerk throttles production sign-ins by stalling connections;
+                # waiting out the window beats burning one account per minute.
+                time.sleep(STALL_PAUSE_S)
         finally:
             signal.alarm(0)
-        print(f"\r{len(tokens)} ready, {failures} failed", end="", file=sys.stderr)
+        print(f"\r{ready} ready, {failures} failed", end="", file=sys.stderr)
         time.sleep(0.2)  # Clerk Backend API: stay well under 100 requests / 10 s
-    # Owner-only: these are live bearer tokens for an hour.
-    fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    os.chmod(args.out, 0o600)  # an existing file keeps its old mode otherwise
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        handle.write("\n".join(tokens) + "\n")
-    print(f"\nwrote {len(tokens)} tokens to {args.out} (valid 1 hour)", file=sys.stderr)
+    out.close()
+    print(f"\nwrote {ready} tokens to {args.out} (valid 1 hour)", file=sys.stderr)
 
 
 def delete(args, env):
