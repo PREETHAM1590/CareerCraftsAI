@@ -27,3 +27,29 @@ def test_limited_stream_sends_every_chunk():
     assert response.status_code == 200
     assert response.text == "data: 0\n\ndata: 1\n\ndata: 2\n\n"
     assert "x-ratelimit-limit" in response.headers
+
+
+def test_route_lookup_is_cached_and_limits_still_apply():
+    from app.core import rate_limit
+
+    app = FastAPI()
+    limiter = Limiter(key_func=get_remote_address)
+    app.state.limiter = limiter
+    app.add_middleware(StreamingSafeSlowAPIMiddleware)
+
+    @app.get("/limited")
+    @limiter.limit("2/minute")
+    async def limited(request: Request):
+        return {"ok": True}
+
+    @app.get("/open")
+    @limiter.exempt
+    async def open_route(request: Request):
+        return {"ok": True}
+
+    rate_limit._route_handlers.clear()
+    client = TestClient(app)
+    assert [client.get("/limited").status_code for _ in range(3)] == [200, 200, 429]
+    assert [client.get("/open").status_code for _ in range(3)] == [200, 200, 200]
+    # One lookup per distinct method+path, reused afterwards.
+    assert {k[3] for k in rate_limit._route_handlers} == {"/limited", "/open"}

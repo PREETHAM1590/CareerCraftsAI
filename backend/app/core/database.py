@@ -13,7 +13,11 @@ engine = create_async_engine(
     echo=settings.APP_ENV == "development",
     pool_size=settings.DB_POOL_SIZE,
     max_overflow=settings.DB_MAX_OVERFLOW,
-    pool_pre_ping=True,
+    # No pre-ping: it costs a SELECT 1 round trip on every checkout (~10% of a
+    # request's Python time under load). A dropped connection fails one query;
+    # SQLAlchemy then invalidates the whole pool, and recycling bounds staleness.
+    pool_pre_ping=False,
+    pool_recycle=1800,
     connect_args={"statement_cache_size": 0},
 )
 
