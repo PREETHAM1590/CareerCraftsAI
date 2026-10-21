@@ -107,3 +107,7 @@ tests/load/results/
 # local agent tool state
 .claude-flow/
 **/.claude-flow/
+.archify/
+.serena/
+.zcode/
+graphify-out/
