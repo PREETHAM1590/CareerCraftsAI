@@ -72,6 +72,21 @@ later.
     Temporal's own Postgres)
   - `nango.env`, `nango-redis.conf` (INFRA VM only)
   - `ngrok.yml` — used by the systemd unit `configure_runtime.py` writes
+  - `public.env`'s `CLERK_SECRET_KEY` must be the **same instance** as the
+    publishable key (both live). A leftover `sk_test` there issues tokens
+    from the development instance that production then rejects.
+- Root filesystem mounted **without** online `discard` (Oracle's cloud image
+  ships with it). Every deploy frees GBs of old image layers, and synchronous
+  TRIM on the block volume kept the disk ~96% busy for 30+ minutes, stalling
+  Postgres and the API. Ubuntu's weekly `fstrim.timer` trims instead:
+
+  ```bash
+  sudo sed -i 's/\tdiscard,commit=30/\tcommit=30/' /etc/fstab  # the / entry
+  sudo findmnt --verify --tab-file /etc/fstab && sudo systemctl daemon-reload
+  sudo mount -o remount,nodiscard / && systemctl is-enabled fstrim.timer
+  ```
+- Host nginx: every TLS site listens with `http2`, and proxied JSON is
+  gzipped. See `deploy/oracle-vm/nginx-host/gzip-text.conf`.
 
 ---
 
