@@ -10,9 +10,17 @@
 //           own API calls in parallel, the approvals poll, then the jobs page.
 //           Needs one synthetic-account token per line in TOKENS_FILE; each VU
 //           uses its own account so per-user rate limits behave as in production.
-// Optional: -e USERS=250,500,1000,1500,2000,3000 -e STEP_SECONDS=120
+// Optional: -e USERS=250,500,1000,2000,3000,4000 -e STEP_SECONDS=120
 //           -e MEMBER_SHARE=0.3 (fraction of users signed in, when tokens exist)
-// Each step aborts the run when errors > 5% or page p95 > 3 s.
+//           -e ALLOW_TOKEN_REUSE=1 (let members share tokens if TOKENS_FILE is short)
+// Each step aborts the run when errors > 5%, check success < 95% or page p95 > 3 s.
+// Tokens last 1 hour: keep USERS.length * STEP_SECONDS + 20 s under ~55 min.
+//
+// One "users" scenario holds all simulated people. A VU is a member when its
+// id (stable for the whole test, active ids are always 1..N) falls on the
+// MEMBER_SHARE sequence; its token is the member's ordinal in that sequence,
+// so every member VU gets a distinct account (k6 ids are NOT contiguous per
+// scenario, so separate visitor/member scenarios cannot index tokens safely).
 
 import http from "k6/http";
 import { check, sleep } from "k6";
@@ -21,7 +29,7 @@ import { SharedArray } from "k6/data";
 
 const SITE = __ENV.SITE || "https://careercraftsai.me";
 const API = __ENV.API || "https://api.careercraftsai.me/api/v1";
-const USERS = (__ENV.USERS || "250,500,1000,1500,2000,3000").split(",").map(Number);
+const USERS = (__ENV.USERS || "250,500,1000,2000,3000,4000").split(",").map(Number);
 const STEP_SECONDS = Number(__ENV.STEP_SECONDS || 120);
 const RAMP_SECONDS = 30;
 const TOKENS = new SharedArray("tokens", () =>
@@ -29,10 +37,23 @@ const TOKENS = new SharedArray("tokens", () =>
 );
 const MEMBER_SHARE = TOKENS.length ? Number(__ENV.MEMBER_SHARE || 0.3) : 0;
 
-function stages(share) {
+// Member ordinal for a VU id, or -1 for a visitor. floor(id*share) steps up by
+// one exactly at member ids, so ordinals are distinct and dense (0, 1, 2, ...).
+const memberOrdinal = (id) =>
+  Math.floor(id * MEMBER_SHARE) > Math.floor((id - 1) * MEMBER_SHARE) ? Math.floor(id * MEMBER_SHARE) - 1 : -1;
+
+const peakMembers = Math.floor(Math.max(...USERS) * MEMBER_SHARE);
+if (peakMembers > TOKENS.length && !__ENV.ALLOW_TOKEN_REUSE) {
+  throw new Error(
+    `Need ${peakMembers} tokens for ${peakMembers} concurrent members (max(USERS) ${Math.max(...USERS)} x MEMBER_SHARE ${MEMBER_SHARE}) ` +
+      `but TOKENS_FILE has ${TOKENS.length}. Add accounts, lower MEMBER_SHARE/USERS, or pass -e ALLOW_TOKEN_REUSE=1.`,
+  );
+}
+
+function stages() {
   const out = [];
   for (const n of USERS) {
-    const users = Math.round(n * share);
+    const users = n;
     out.push({ target: users, duration: `${RAMP_SECONDS}s` });
     out.push({ target: users, duration: `${STEP_SECONDS - RAMP_SECONDS}s` });
   }
@@ -51,6 +72,7 @@ function thresholds() {
   const out = { http_req_failed: [{ threshold: "rate<0.05", abortOnFail: true, delayAbortEval: "60s" }] };
   for (const n of USERS) {
     out[`http_req_failed{step:${n}}`] = [{ threshold: "rate<0.05", abortOnFail: true }];
+    out[`checks{step:${n}}`] = [{ threshold: "rate>0.95", abortOnFail: true }];
     out[`http_req_duration{step:${n},kind:page}`] = [{ threshold: "p(95)<3000", abortOnFail: true }];
     out[`http_req_duration{step:${n},kind:api}`] = ["p(95)<3000"];
   }
@@ -58,23 +80,14 @@ function thresholds() {
 }
 
 const scenarios = {
-  visitors: {
+  users: {
     executor: "ramping-vus",
-    exec: "visitor",
+    exec: "user",
     startVUs: 0,
-    stages: stages(1 - MEMBER_SHARE),
+    stages: stages(),
     gracefulRampDown: "10s",
   },
 };
-if (MEMBER_SHARE > 0) {
-  scenarios.members = {
-    executor: "ramping-vus",
-    exec: "member",
-    startVUs: 0,
-    stages: stages(MEMBER_SHARE),
-    gracefulRampDown: "10s",
-  };
-}
 
 export const options = {
   scenarios,
@@ -89,6 +102,10 @@ export const options = {
 // Static assets each page references, collected once (a first-time visitor
 // downloads them; a returning visitor has them cached).
 export function setup() {
+  const planned = USERS.length * STEP_SECONDS + 20;
+  if (planned > 55 * 60) {
+    console.warn(`Planned duration ${Math.round(planned / 60)} min exceeds ~55 min; member tokens expire after 1 hour.`);
+  }
   const assets = {};
   for (const path of ["/", "/pricing", "/docs", "/login"]) {
     const res = http.get(`${SITE}${path}`, { responseType: "text" });
@@ -106,7 +123,7 @@ function page(path, data, firstVisit, step) {
     headers: { "Accept-Encoding": "gzip, br" },
     tags: { name: `page ${path}`, kind: "page", step },
   });
-  check(res, { "page 200": (r) => r.status === 200 });
+  check(res, { "page 200": (r) => r.status === 200 }, { step });
   if (firstVisit && data.assets[path].length) {
     http.batch(
       data.assets[path].map((a) => ({
@@ -118,7 +135,13 @@ function page(path, data, firstVisit, step) {
   }
 }
 
-export function visitor(data) {
+export function user(data) {
+  const ord = memberOrdinal(exec.vu.idInTest);
+  if (ord >= 0) member(ord);
+  else visitor(data);
+}
+
+function visitor(data) {
   const step = currentStep();
   const firstVisit = Math.random() < 0.6;
   page("/", data, firstVisit, step);
@@ -152,18 +175,19 @@ function api(paths, token, step) {
       },
     })),
   );
-  for (const r of responses) check(r, { "api 2xx": (x) => x.status >= 200 && x.status < 300 });
+  for (const r of responses) check(r, { "api 2xx": (x) => x.status >= 200 && x.status < 300 }, { step });
 }
 
-export function member() {
-  const token = TOKENS[(exec.vu.idInTest - 1) % TOKENS.length];
+function member(ordinal) {
+  const token = TOKENS[ordinal % TOKENS.length];
   api(DASHBOARD, token, currentStep());
   // The dashboard re-polls approvals while open; a member reads it for ~1 minute.
   for (let i = 0; i < 4; i++) {
     think(10, 20);
     api(["/agents/runs?status=awaiting_approval&limit=100"], token, currentStep());
   }
-  api(["/jobs/applications"], token, currentStep());
+  // The jobs page also loads preferences and the job-search profile on mount.
+  api(["/jobs/applications", "/users/me/preferences", "/users/me/job-search-profile"], token, currentStep());
   think(10, 30);
   api(["/users/me", "/notifications"], token, currentStep());
   think(10, 30);

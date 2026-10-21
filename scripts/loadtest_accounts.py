@@ -17,9 +17,13 @@ create   idempotent: makes loadtest+NNNN@<domain> users (public_metadata.loadtes
          with a one-time ticket, mints a template token and records policy consent
          through the API (which also provisions the app's user row). Re-run it to
          get fresh tokens; existing users are reused.
-delete   asks the API to erase each account (DELETE /users/me, the app's own
-         erasure path), then deletes the Clerk users. Only users tagged
-         public_metadata.loadtest=true are touched.
+delete   asks the API to schedule erasure of each account (DELETE /users/me, the
+         app's own path; 15-day grace period). The Clerk users are NOT deleted
+         here: the backend reaper (reap_expired_account_deletions) removes them
+         once the grace period has passed. Only users tagged
+         public_metadata.loadtest=true are touched. If create reuses a user
+         whose erasure is already due (consent returns 410), it cancels the
+         pending erasure (POST /users/me/cancel-deletion) and retries consent.
 """
 
 import argparse
@@ -86,6 +90,11 @@ def call(method, url, *, token=None, body=None, form=None, headers=None):
                     {"raw": raw[:300].decode(errors="replace")},
                     exc.headers,
                 )
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+            if attempt < 5:  # HTTPError is handled above
+                time.sleep(2**attempt)
+                continue
+            raise RuntimeError(f"{method} {url}: {exc}") from exc
     raise RuntimeError(f"{method} {url}: retries exhausted")
 
 
@@ -195,6 +204,11 @@ def create(args, env):
             status, consent, _ = call(
                 "POST", f"{args.api}/users/me/consent", token=jwt, body={}
             )
+            if status == 410:  # reused user whose erasure grace period has passed
+                call("POST", f"{args.api}/users/me/cancel-deletion", token=jwt)
+                status, consent, _ = call(
+                    "POST", f"{args.api}/users/me/consent", token=jwt, body={}
+                )
             if status != 200:
                 raise RuntimeError(f"consent: HTTP {status} {consent}")
             tokens.append(jwt)
@@ -218,15 +232,15 @@ def delete(args, env):
     for done, user in enumerate(users, 1):
         try:
             jwt = session_token(secret, fapi, user["id"])
-            call("DELETE", f"{args.api}/users/me", token=jwt)
+            status, body, _ = call("DELETE", f"{args.api}/users/me", token=jwt)
+            if status not in (200, 202, 204):
+                raise RuntimeError(f"HTTP {status} {body}")
         except RuntimeError as exc:
-            print(f"{user['id']}: app erasure skipped ({exc})", file=sys.stderr)
-        status, body, _ = call(
-            "DELETE", f"{CLERK_API}/users/{user['id']}", token=secret
-        )
-        if status != 200:
-            print(f"{user['id']}: Clerk delete HTTP {status} {body}", file=sys.stderr)
-        print(f"\r{done}/{len(users)} deleted", end="", file=sys.stderr)
+            print(
+                f"{user['id']}: erasure not scheduled, user kept in Clerk ({exc})",
+                file=sys.stderr,
+            )
+        print(f"\r{done}/{len(users)} erasure scheduled", end="", file=sys.stderr)
         time.sleep(0.2)
     print(file=sys.stderr)
 
