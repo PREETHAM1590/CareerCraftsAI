@@ -12,7 +12,8 @@ CLERK_SECRET_KEY and NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY from the env files given
         --env-file /opt/careercraft-secrets/backend.env \
         --env-file /opt/careercraft-secrets/public.env
 
-create   idempotent: makes loadtest+NNNN@<domain> users (public_metadata.loadtest),
+create   idempotent: makes loadtest-NNNN@<domain> users (public_metadata.loadtest; no
+         +subaddress, which instances with subaddress blocking reject),
          a "loadtest" JWT template (1 h, email claim) if missing, signs each user in
          with a one-time ticket, mints a template token and records policy consent
          through the API (which also provisions the app's user row). Re-run it to
@@ -132,7 +133,7 @@ def loadtest_users(secret):
     users, offset = [], 0
     while True:
         query = urllib.parse.urlencode(
-            {"query": "loadtest+", "limit": 100, "offset": offset}
+            {"query": "loadtest", "limit": 100, "offset": offset}
         )
         status, page, _ = call("GET", f"{CLERK_API}/users?{query}", token=secret)
         if status != 200:
@@ -202,7 +203,7 @@ def create(args, env):
     }
     tokens, failures = [], 0
     for n in range(1, args.count + 1):
-        email = f"loadtest+{n:04d}@{args.domain}"
+        email = f"loadtest-{n:04d}@{args.domain}"
         try:
             user_id = existing.get(email)
             if not user_id:
