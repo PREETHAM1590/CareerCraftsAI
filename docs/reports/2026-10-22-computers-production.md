@@ -11,7 +11,7 @@
 | **16 (production cap)** | Works with no failures; at full load screens refresh in ~0.2–3 s and pages take ~15–25 s to open |
 | 20+ | Page loads start failing; screens lag 6–15 s |
 
-The cap is `SANDBOX_MAX_SESSIONS=16`. A 17th simultaneous user gets "All sandbox slots are busy; retry when a slot is available" (429) and nothing is allocated. Computers sleep after 90 s without an action. Screen polling doesn't keep a computer awake, and a hidden browser tab stops polling, so far more than 16 members can use the feature over a day; 16 is how many can drive a browser *at the same moment*.
+The cap is `SANDBOX_MAX_SESSIONS=16`. A 17th simultaneous user gets "All sandbox slots are busy; retry when a slot is available" (429) and nothing is allocated. Computers sleep after 90 s without an action; every real action renews that lease, but screen and control polling don't. A hidden browser tab stops fetching screen frames and only checks status every 15 s. So far more than 16 members can use the feature over a day; 16 is how many can drive a browser *at the same moment*.
 
 ## End to end through the production app
 
@@ -26,13 +26,13 @@ Driven through the real `/computer` routes inside the production backend contain
 | Open `169.254.169.254` (cloud metadata) | refused by the egress proxy |
 | Stop | 2.4 s |
 
-Every action is written to `agent_runs`.
+Every action except screen and control polling (fetched every few seconds by design) is written to `agent_runs`.
 
 **16 users at once through the same path:** 368 of 368 actions succeeded. Start p50 6.9 s, take control p50 1.1 s, open page p50 15.4 s / p95 22.9 s, screen refresh p50 0.23 s / p95 2.1 s, agent snapshot p50 1.3 s / p95 7.1 s.
 
 ## Load test on the computers host
 
-`deploy/computers/loadtest_computers.py`: N simulated members at once. Each starts a computer, opens real job boards (Greenhouse, Lever, Ashby and others), polls a screen frame every 4 s like the panel, reads agent snapshots, and browses again every 20–35 s.
+`deploy/computers/loadtest_computers.py`: N simulated members at once. Each starts a computer and opens a real job board (Greenhouse, Lever, Ashby and others). It then polls a screen frame every 4 s like the panel, and makes at most two more navigations, 20–35 s apart, each preceded by an agent snapshot. Most of each 90 s hold is screen polling: a member reading a page, not continuous browsing.
 
 | Users | Navigate p50 | Screen frame p50 / p95 | Snapshot p95 | Failures |
 |---|---|---|---|---|
@@ -41,7 +41,7 @@ Every action is written to `agent_runs`.
 | 20 | 32 s | 5.8 s / 16 s | 24 s | 4 |
 | 24 | 29 s | 7.0 s / 18 s | 34 s | 10 |
 
-- **Limit:** CPU. All 4 cores sit at 100% from about 12 active browsers. Memory is about 400 MB per browser, so 32 browsers used 13 GB of 24 GB.
+- **Limit:** CPU. All 4 cores sit at 100% from about 12 active browsers. Memory is about 400 MB per browser. The first ramp, with PNG frames, reached 32 browsers at 13 GB of 24 GB.
 - **Cost of gVisor:** at 12 users, plain `runc` gave navigate p50 2.7 s and screen frames 0.09 s. gVisor's system-call interception costs roughly 4–6× in latency, because there's no KVM acceleration on A1. gVisor stays on: these browsers open arbitrary sites and hold users' saved portal logins.
 
 ## What was fixed to get here
