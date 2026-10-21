@@ -185,6 +185,22 @@ services:
         condition: service_healthy
       frontend:
         condition: service_healthy
+  # SSH tunnel to the computers host (deploy/computers). Publishes its relay on
+  # this VM's loopback, where backend.env's SANDBOX_RELAY_URL points
+  # (http://127.0.0.1:14312). The key may only forward to that one port.
+  sandbox-tunnel:
+    build:
+      context: ../computers
+      dockerfile: tunnel.Dockerfile
+    network_mode: host
+    environment:
+      SANDBOX_SSH_TARGET: ubuntu@129.225.91.17
+    volumes:
+      - /opt/careercraft-secrets/sandbox-tunnel/sandbox.key:/secrets/sandbox.key:ro
+      - /opt/careercraft-secrets/sandbox-tunnel/known_hosts:/secrets/known_hosts:ro
+    restart: unless-stopped
+    mem_limit: 64m
+    init: true
 
 volumes:
   redis_data:

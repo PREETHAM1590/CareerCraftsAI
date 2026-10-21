@@ -23,6 +23,10 @@ services:
       COMPUTER_BROWSER_MODE: headless
       COMPUTER_NETWORK: careercraft-sandbox-computers
       COMPUTER_MEMORY_BYTES: '1073741824'
+      # gVisor (runsc) for every user's browser: a user-space kernel between
+      # untrusted pages and the host. Install it on the host first (see README).
+      # Unset defaults to runsc; an explicitly empty value uses Docker's runc.
+      COMPUTER_RUNTIME: ${COMPUTER_RUNTIME-runsc}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     networks: [control, computers]
@@ -58,6 +62,9 @@ services:
       dockerfile: computer.Dockerfile
     command: ['true']
   test-portal:
+    # Synthetic fixture for verify*.py only: start with --profile test, and build
+    # egress with ALLOW_TEST_PORTAL=1 so Squid lets browsers reach it.
+    profiles: [test]
     image: nginx:alpine
     volumes: ['./fixtures:/usr/share/nginx/html:ro']
     networks: [computers]
@@ -66,6 +73,8 @@ services:
     build:
       context: .
       dockerfile: egress.Dockerfile
+      args:
+        ALLOW_TEST_PORTAL: ${ALLOW_TEST_PORTAL:-0}
     networks: [computers, outbound]
     restart: unless-stopped
     mem_limit: 128m
