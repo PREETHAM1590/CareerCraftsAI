@@ -5,6 +5,10 @@
 Host: SSH alias `24gb1` (Oracle A1, 4 OCPU / 24 GB, Ubuntu 26.04), checkout of
 this directory at `~/careercraft-computers/deploy/computers`, secrets in the
 root-only `/opt/careercraft-secrets/computers.env`.
+Root is mounted without online `discard` (weekly `fstrim.timer` instead), as on
+the APP VM: synchronous TRIM of freed image layers stalls the disk for minutes
+after every rebuild. Launch and capacity report:
+[docs/reports/2026-10-22-computers-production.md](../../docs/reports/2026-10-22-computers-production.md).
 
 - **Isolation: gVisor.** Every user's browser runs under `runsc`
   (`COMPUTER_RUNTIME`, default `runsc`), a user-space kernel between untrusted
@@ -35,7 +39,7 @@ job boards, polling a screenshot every 4 s and reading agent snapshots.
 | Concurrent users | Navigate p50 | Screenshot p50 / p95 | Snapshot p95 | Failures |
 |---|---|---|---|---|
 | 12 | 15 s | 0.6 s / 3.8 s | 3.8 s | 0 |
-| 16 | 18–26 s | 0.9–3.2 s / 4.7–9.3 s | 11–17 s | 0 |
+| 16 | 16–26 s | 0.9–3.2 s / 4.7–9.3 s | 11–17 s | 0 |
 | 20 | 32 s | 5.8 s / 16 s | 24 s | 4 |
 | 24 | 29 s | 7.0 s / 18 s | 34 s | 10 |
 
@@ -98,7 +102,7 @@ The local `deploy/local/up.ps1` reads the relay token from gitignored
 known-hosts file from that directory. It verifies the server host key.
 The tunnel targets the user-authorized `24gb` host; change `tunnel.sh` if moving it.
 
-There are eight computer slots and a 90-second inactivity timeout. Screen and
+The test deployment defaults to eight computer slots (production: 16, see above) and a 90-second inactivity timeout. Screen and
 control polling neither allocates a computer nor renews its lease. Profiles and
 workspace files survive sleep. A full pool returns 429; it does **not** silently
 queue another browser. Temporal persists approval waits without a browser.
@@ -111,9 +115,8 @@ Only the supervisor holds Docker socket access. Each child gets its own HMAC
 token and isolated profile/workspace volumes.
 
 The pinned image uses Docker isolation with Chromium's own process sandbox off
-under the default Docker seccomp policy. This deployment is for testing. Before
-production, configure a supported Chromium sandbox policy or a stronger container
-runtime and test it with the target portals.
+under the default Docker seccomp policy. The test deployment uses that as is; production runs every browser under gVisor instead (see Production above), the
+stronger container runtime this setup needs outside a test.
 
 The model gets accessibility snapshots, never screenshots, cookies, shell,
 scripts, Docker access, or credential retrieval. Browser mutations require
