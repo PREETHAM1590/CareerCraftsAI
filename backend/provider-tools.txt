@@ -1,5 +1,4 @@
 # Install with --no-deps after requirements.txt + constraints.txt.
 # Upstream exact pins conflict with security floors. Runtime dependencies are
 # explicit in requirements.txt; validated by imports, conversion and full suite.
-browser-use==0.12.9
 python-jobspy==1.1.82
