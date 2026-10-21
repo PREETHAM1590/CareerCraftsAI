@@ -29,7 +29,7 @@ def test_limited_stream_sends_every_chunk():
     assert "x-ratelimit-limit" in response.headers
 
 
-def test_route_lookup_is_cached_and_limits_still_apply():
+def test_route_lookup_is_cached_and_limits_still_apply(monkeypatch):
     from app.core import rate_limit
 
     app = FastAPI()
@@ -48,8 +48,34 @@ def test_route_lookup_is_cached_and_limits_still_apply():
         return {"ok": True}
 
     rate_limit._route_handlers.clear()
+    lookups = []
+    real_lookup = rate_limit._slowapi_find_route_handler
+
+    def counting_lookup(routes, scope):
+        lookups.append(scope["path"])
+        return real_lookup(routes, scope)
+
+    monkeypatch.setattr(rate_limit, "_slowapi_find_route_handler", counting_lookup)
     client = TestClient(app)
     assert [client.get("/limited").status_code for _ in range(3)] == [200, 200, 429]
     assert [client.get("/open").status_code for _ in range(3)] == [200, 200, 200]
-    # One lookup per distinct method+path, reused afterwards.
-    assert {k[3] for k in rate_limit._route_handlers} == {"/limited", "/open"}
+    # Six requests, one route scan per distinct path.
+    assert sorted(lookups) == ["/limited", "/open"]
+
+
+def test_route_cache_evicts_least_recently_used(monkeypatch):
+    from app.core import rate_limit
+
+    monkeypatch.setattr(rate_limit, "_ROUTE_CACHE_MAX", 2)
+    monkeypatch.setattr(
+        rate_limit, "_slowapi_find_route_handler", lambda routes, scope: scope["path"]
+    )
+    rate_limit._route_handlers.clear()
+    routes = []
+    scope = lambda path: {"type": "http", "method": "GET", "path": path}  # noqa: E731
+    find = rate_limit._cached_find_route_handler
+    find(routes, scope("/a"))
+    find(routes, scope("/b"))
+    find(routes, scope("/a"))  # /a is now the most recently used
+    find(routes, scope("/c"))  # evicts /b, not /a
+    assert [k[-1] for k in rate_limit._route_handlers] == ["/a", "/c"]

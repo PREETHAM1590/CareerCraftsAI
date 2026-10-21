@@ -1,4 +1,5 @@
 import logging
+from collections import OrderedDict
 
 from fastapi import Request
 from slowapi import Limiter
@@ -77,20 +78,28 @@ class StreamingSafeSlowAPIMiddleware(SlowAPIASGIMiddleware):
 # (153 here, no early exit) before FastAPI routes the request again: ~16% of the
 # request path's Python time under load. Routes are fixed after startup, so the
 # answer for a method + path never changes; remember it.
-_route_handlers: dict[tuple, object] = {}
-_ROUTE_CACHE_MAX = 4096  # ponytail: clear-when-full, LRU if id-heavy paths churn it
+_route_handlers: OrderedDict[tuple, object] = OrderedDict()
+_ROUTE_CACHE_MAX = 4096
 _slowapi_find_route_handler = _slowapi_middleware._find_route_handler
 
 
 def _cached_find_route_handler(routes, scope):
-    key = (scope["type"], scope.get("method"), scope.get("root_path", ""), scope["path"])
+    # id(routes): each app's route list gets its own entries.
+    key = (
+        id(routes),
+        scope["type"],
+        scope.get("method"),
+        scope.get("root_path", ""),
+        scope["path"],
+    )
     try:
+        _route_handlers.move_to_end(key)
         return _route_handlers[key]
     except KeyError:
         handler = _slowapi_find_route_handler(routes, scope)
-        if len(_route_handlers) >= _ROUTE_CACHE_MAX:
-            _route_handlers.clear()
         _route_handlers[key] = handler
+        if len(_route_handlers) > _ROUTE_CACHE_MAX:
+            _route_handlers.popitem(last=False)  # least recently used
         return handler
 
 
