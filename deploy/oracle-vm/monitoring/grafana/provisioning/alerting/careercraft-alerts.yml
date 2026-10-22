@@ -1,7 +1,8 @@
 # Alerts, emailed through Resend's SMTP (GF_SMTP_* in monitoring-compose.yml).
 # ALERT_EMAIL, GF_SMTP_PASSWORD and GF_SMTP_FROM_ADDRESS come from
-# /opt/careercraft-secrets/monitoring.env. Grafana expands $VARS in this file,
-# so a literal $ in alert templates is written $$.
+# /opt/careercraft-secrets/monitoring.env. Grafana expands $VARS in this file
+# and does not unescape $$, so templates use {{ index .Values "B" }} rather
+# than $values.
 apiVersion: 1
 
 contactPoints:
@@ -64,9 +65,9 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "A cloud browser hit {{ $$values.B }} blocked requests in 5 minutes"
+          summary: 'A cloud browser hit {{ index .Values "B" }} blocked requests in 5 minutes'
           description: >-
-            Browser {{ $$labels.client }} on the computers host (24gb1) was refused
-            {{ $$values.B }} times by the egress proxy in 5 minutes (private network,
+            Browser {{ index .Labels "client" }} on the computers host (24gb1) was refused
+            {{ index .Values "B" }} times by the egress proxy in 5 minutes (private network,
             cloud metadata or a non-web port). Check the egress logs on the
             COMPUTERS dashboard; stop that user's computer if it continues.
