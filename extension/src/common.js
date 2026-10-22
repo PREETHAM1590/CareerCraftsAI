@@ -56,11 +56,11 @@ export function appOrigin(value) {
   return url.origin;
 }
 
-// Loopback, private, link-local and CGNAT IPv4 (URL() normalises odd forms
+// Loopback, private, link-local, CGNAT and benchmarking IPv4 (URL() normalises odd forms
 // such as 2130706433 to dotted quads), every IPv6 literal, and local-only
 // names. Names that resolve to private addresses can't be checked from an
 // extension (no DNS API); the backend's audit trail records every URL.
-const PRIVATE_HOST = /^(localhost|0\.|10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|\[)|\.(localhost|local|internal|lan|home\.arpa)$/;
+const PRIVATE_HOST = /^(localhost|0\.|10\.|127\.|169\.254\.|192\.168\.|198\.1[89]\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|\[)|\.(localhost|local|internal|lan|home\.arpa)$/;
 
 export function jobUrl(value) {
   const url = new URL(value);

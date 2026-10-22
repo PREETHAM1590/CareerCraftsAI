@@ -304,7 +304,7 @@ async function runAction(body) {
     if (op === "read") return ok({ ...blank, text: "" });
     if (op === "snapshot") {
       const snapshotId = state.snapshotId + 1;
-      await setAgentState({ ...state, snapshotId, snapshotValid: true });
+      await setAgentState({ ...state, snapshotId, snapshotValid: true, snapshotUrl: blank.url });
       return ok({ snapshotId, computer_run: state.run, ...blank, elements: [] });
     }
     return fail(422, "Navigate the agent tab to a public HTTPS page first.");
@@ -342,7 +342,6 @@ async function runAction(body) {
 async function unchanged(state) {
   const now = await getAgentState();
   if (!now || now.run !== state.run || now.snapshotId !== state.snapshotId || !now.snapshotValid) return false;
-  if (!state.snapshotUrl) return true; // the blank first tab: only navigate gets here
   try {
     return (await chrome.tabs.get(state.tabId)).url === state.snapshotUrl;
   } catch (e) {

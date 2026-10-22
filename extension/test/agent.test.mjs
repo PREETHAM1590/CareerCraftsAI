@@ -332,3 +332,15 @@ test("a result that fails to post is retried, and a final answer is not", async 
   await agent.startCommandLoop();
   assert.equal(posts.length, 3);
 });
+
+test("a blank-tab approval is void once the user moves the tab", async () => {
+  await agent.stopAgentTab();
+  await agent.executeCommand({ id: "s", kind: "start" });
+  const state = await agent.getAgentState();
+  const snap = (await run({ operation: "snapshot", actor: "agent" })).result;
+  tabs.get(state.tabId).url = "https://mail.example.com/inbox"; // the user took the tab
+  const out = await run({ operation: "navigate", actor: "agent", computer_run: state.run,
+    approved_snapshot: snap.snapshotId, parameters: { url: "https://jobs.lever.co/acme/9" } });
+  assert.deepEqual(out, { ok: false, status: 409, error: STALE });
+  assert.equal(tabs.get(state.tabId).url, "https://mail.example.com/inbox");
+});
