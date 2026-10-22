@@ -296,3 +296,39 @@ test("navigate loads the page and returns url, title and capped text", async () 
     assert.equal(refused.status, 422, url);
   }
 });
+
+test("a write re-checks the tab and page URL right before it runs", async () => {
+  const state = await freshStart();
+  const snap = (await run({ operation: "snapshot", actor: "agent" })).result;
+  const click = () =>
+    run({ operation: "click", actor: "agent", computer_run: state.run, approved_snapshot: snap.snapshotId,
+      parameters: { ref: "e1", snapshotId: snap.snapshotId } });
+  page.elements[0].clicked = undefined;
+  // The tab moved without an onUpdated event reaching us yet.
+  tabs.get(state.tabId).url = "https://jobs.lever.co/acme/2";
+  assert.deepEqual(await click(), { ok: false, status: 409, error: STALE });
+  tabs.get(state.tabId).url = "https://jobs.lever.co/acme/1";
+  // A same-document route change the tab URL hasn't caught up with.
+  location.href = "https://jobs.lever.co/acme/3";
+  assert.deepEqual(await click(), { ok: false, status: 409, error: STALE });
+  location.href = "https://jobs.lever.co/acme/1";
+  assert.equal(page.elements[0].clicked, undefined);
+  assert.equal((await click()).ok, true);
+});
+
+test("a result that fails to post is retried, and a final answer is not", async () => {
+  await freshStart();
+  const answers = [{ status: 0 }, { status: 503 }, { status: 200, ok: true }];
+  const posts = [];
+  const polls = [
+    { ok: true, status: 200, data: { id: "cmd-r", kind: "start", body: {}, expires: Date.now() / 1000 + 60 } },
+    { ok: false, status: 401, data: null },
+  ];
+  agent.configureAgent({
+    apiFetch: async (_p, path) => (path.endsWith("/result") ? (posts.push(path), answers.shift()) : polls.shift()),
+    onUnpaired: async () => {},
+    sleep: async () => {},
+  });
+  await agent.startCommandLoop();
+  assert.equal(posts.length, 3);
+});

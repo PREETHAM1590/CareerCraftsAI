@@ -75,6 +75,7 @@ export function AgentBrowserSetting({ compact = false, onChanged }: { compact?: 
     return (
       <div className="space-y-1.5">
         {select}
+        {pairLink && <p className="text-xs text-muted-foreground">To run the agent in your own Chrome: {pairLink}</p>}
         {error}
       </div>
     );

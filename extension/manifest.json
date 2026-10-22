@@ -26,7 +26,8 @@
     "storage",
     "alarms",
     "tabs",
-    "scripting"
+    "scripting",
+    "tabGroups"
   ],
   "host_permissions": [
     "http://localhost/*",

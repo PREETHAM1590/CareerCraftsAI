@@ -76,7 +76,18 @@ async function runLoop() {
     const cmd = res.data;
     if (typeof cmd.expires === "number" && cmd.expires * 1000 < Date.now()) continue; // nobody waits for it
     const result = await executeCommand(cmd);
-    await deps.apiFetch(pairing, `/extension/device/commands/${cmd.id}/result`, { method: "POST", json: result });
+    await postResult(pairing, cmd.id, result);
+  }
+}
+
+// The action may already have happened: a lost result would look like a
+// timeout. Retry network and server errors; any other answer (stored, or 404
+// once the backend stopped waiting) is final, so a repeat is harmless.
+async function postResult(pairing, id, result) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (attempt) await deps.sleep(1000 * 2 ** (attempt - 1));
+    const res = await deps.apiFetch(pairing, `/extension/device/commands/${id}/result`, { method: "POST", json: result });
+    if (res.status !== 0 && res.status < 500) return;
   }
 }
 
@@ -119,6 +130,13 @@ async function startAgentTab() {
     }
   }
   const tab = await chrome.tabs.create({ url: "about:blank", active: true });
+  try {
+    // Shown by Chrome itself, so a page can't hide which tab the agent drives.
+    const group = await chrome.tabs.group({ tabIds: tab.id });
+    await chrome.tabGroups.update(group, { title: "CareerCraft agent", color: "blue" });
+  } catch (e) {
+    /* tab groups unavailable: the in-page banner remains */
+  }
   await setAgentState({ tabId: tab.id, run: crypto.randomUUID(), snapshotId: 0, snapshotValid: false });
   return ok({ running: true, enabled: true });
 }
@@ -263,6 +281,8 @@ async function runAction(body) {
   if (op === "navigate" || op === "human/navigate") {
     if (!pageAllowed(params.url, appOrigin)) return fail(422, "The agent can only open public HTTPS pages outside CareerCraft.");
     if (!(await hasPermission(params.url))) return permissionRequired(params.url);
+    // The checks above awaited; the user may have moved the tab meanwhile.
+    if (agent && !(await unchanged(state))) return fail(409, STALE);
     await setAgentState({ ...state, snapshotValid: false });
     const loaded = waitForComplete(tab.id);
     await chrome.tabs.update(tab.id, { url: params.url });
@@ -306,12 +326,28 @@ async function runAction(body) {
 
   // click / type / scroll / upload: one approval, one write. A clean refusal
   // (password field, stale ref) wrote nothing, so the snapshot stays usable.
-  const out = await inPage(tab.id, op, params);
+  if (agent && !(await unchanged(state))) return fail(409, STALE);
+  // The page re-checks its URL in the same task as the write (an SPA route
+  // change can keep a reviewed element connected on a different page).
+  const out = await inPage(tab.id, op, agent ? { ...params, expectUrl: state.snapshotUrl } : params);
   if (out.ok || ![409, 422].includes(out.status)) {
     const now = await getAgentState();
     if (now) await setAgentState({ ...now, snapshotValid: false });
   }
   return out;
+}
+
+// Nothing voided the reviewed snapshot while this action awaited, and the tab
+// still shows the page it was taken on.
+async function unchanged(state) {
+  const now = await getAgentState();
+  if (!now || now.run !== state.run || now.snapshotId !== state.snapshotId || !now.snapshotValid) return false;
+  if (!state.snapshotUrl) return true; // the blank first tab: only navigate gets here
+  try {
+    return (await chrome.tabs.get(state.tabId)).url === state.snapshotUrl;
+  } catch (e) {
+    return false;
+  }
 }
 
 // ── Page side ───────────────────────────────────────────────────────────
@@ -322,10 +358,12 @@ export function agentPage(op, p) {
   const fail = (status, error) => ({ ok: false, status, error });
 
   try {
-    if (!document.getElementById("careercraft-agent-banner")) {
+    // Tracked in the isolated world, not by a page-visible id the page could
+    // pre-create; put back if the page removes it. The tab group set by the
+    // extension stays the indicator a page cannot touch.
+    if (!window.__ccAgentBanner) {
       const host = document.createElement("div");
-      host.id = "careercraft-agent-banner";
-      host.style.cssText = "all:initial;position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:2147483647;";
+      host.style.cssText = "all:initial!important;display:block!important;position:fixed!important;top:8px!important;left:50%!important;transform:translateX(-50%)!important;z-index:2147483647!important;visibility:visible!important;opacity:1!important;";
       const shadow = host.attachShadow({ mode: "closed" });
       shadow.innerHTML = `<style>
         .b{display:flex;gap:12px;align-items:center;padding:8px 10px 8px 14px;border-radius:999px;
@@ -338,6 +376,10 @@ export function agentPage(op, p) {
       shadow.querySelector("button").addEventListener("click", () => {
         chrome.runtime.sendMessage({ type: "CC_AGENT_STOP" });
       });
+      window.__ccAgentBanner = host;
+    }
+    const host = window.__ccAgentBanner;
+    if (!host.isConnected) {
       // In <body>, not <html>: an extra child of <html> fails React hydration
       // on Remix sites (Greenhouse job boards), which then rebuild the whole
       // document and every reviewed ref goes stale.
@@ -405,6 +447,7 @@ export function agentPage(op, p) {
     return { ok: true, result: { ...page(), elements } };
   }
 
+  if (p.expectUrl && location.href !== p.expectUrl) return fail(409, STALE_TEXT);
   if (op === "scroll") {
     window.scrollBy(0, Number(p.deltaY) || 0);
     return { ok: true, result: { ok: true, url: location.href } };

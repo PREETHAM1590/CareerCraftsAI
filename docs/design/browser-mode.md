@@ -73,17 +73,22 @@ mode: watch and use the agent tab directly."}`. Supported in browser mode:
   (navigation can be slow). Timeout → 504 `{"detail": "Your browser didn't
   respond in time."}`. The result is JSON `{"ok": true, "result": {...}}` or
   `{"ok": false, "status": 409|403|422|502, "error": "..."}`, which the backend
-  raises as `HTTPException(status, error)`.
+  raises as `HTTPException(status, error)`. On timeout the command is removed
+  from the queue (`LREM`), so a browser that reconnects later never runs an
+  action its caller was told failed.
 - Device endpoints (device token auth, existing `get_device`):
   - `GET /api/v1/extension/device/commands/next?wait=25`: `BLPOP
     ext:cmd:{device_id}` up to `wait` seconds (max 25); returns the command,
     or 204. Expired commands are dropped. Sets `agent_seen_at`. If the client
     disconnected while waiting, a popped command is pushed back for the next
-    live poll instead of being lost.
+    live poll instead of being lost. A device revoked while its poll waited
+    gets 401, not the command. Polls and result waits use separate Redis
+    pools; a full poll pool answers without waiting instead of failing.
     Rate limit: generous (e.g. `240/minute`).
   - `POST /api/v1/extension/device/commands/{id}/result` body `{"ok": bool,
     "result"?: object, "status"?: int, "error"?: str}` → `LPUSH ext:res:{id}`
-    with a 120 s TTL. A result body is capped at 1 MB.
+    with a 120 s TTL. A result body is capped at 1 MB. The extension retries a
+    result on network or 5xx errors; any other answer is final.
 - The device id in the command key comes from the authenticated device, so a
   device only ever receives its own owner's commands. A user with several
   devices: commands go to the most recently seen online device.
@@ -99,6 +104,8 @@ mode: watch and use the agent tab directly."}`. Supported in browser mode:
   its id; every action runs only in that tab, never in any other tab. `stop`
   closes it. If the user closes the agent tab, the next action reports 409
   `"The agent tab was closed; resume to reopen it."`.
+- The agent tab sits in a Chrome tab group titled "CareerCraft agent" (set by
+  the extension, out of the page's reach).
 - A visible banner in the agent tab (mounted in `<body>`; mounting outside it
   breaks React/Remix hydration on sites such as Greenhouse): "CareerCraft agent is controlling this
   tab", with a **Stop** button. Stop closes the agent session, and pending and
@@ -120,10 +127,15 @@ mode: watch and use the agent tab directly."}`. Supported in browser mode:
   (optional host permission `https://*/*`), reply 403 `{"error":
   "permission_required", "origin": "https://..."}`, and use the existing
   permission prompt flow so the user can grant it. The backend turns this into
-  403 "Allow the CareerCraft extension on {origin} to continue."
+  403 "Allow the CareerCraft extension on {origin} to continue." Nothing ran,
+  so the agent re-proposes the step instead of failing the run.
+- Before a write runs, the extension re-reads its state and the tab URL, and
+  the page itself checks `location.href` against the snapshot URL.
 - Navigation is limited to public HTTPS pages and never the CareerCraft app
   itself (an agent tab on the app could approve its own steps): http,
-  localhost, private addresses and the app give 422.
+  localhost, private and CGNAT IPv4, IPv6 literals, `.local`/`.internal`
+  names and the app give 422. Hostnames resolving to private addresses can't
+  be checked (an extension has no DNS API).
 - One approval, one write: a successful write spends the snapshot, as in the
   cloud computer. Any URL change in the agent tab also voids it (same-URL
   `replaceState` does not). Refs resolve through a map page scripts can't

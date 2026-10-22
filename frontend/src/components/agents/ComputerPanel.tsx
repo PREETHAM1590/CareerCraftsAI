@@ -161,7 +161,7 @@ export function ComputerPanel() {
           setRunning(true);
         })} tone="primary">{running ? "Keep awake" : "Resume"}</IslandButton>
         <IslandButton size="sm" tone="ghost" disabled={busy || !running} onClick={() => perform(async () => {
-          await apiClient.post("/computer/stop"); setRunning(false); setScreen(null); setSnapshot(null);
+          await apiClient.post("/computer/stop", {}, { timeout: 80000 }); setRunning(false); setScreen(null); setSnapshot(null);
         })}>Stop</IslandButton>
       </div>
     </div>

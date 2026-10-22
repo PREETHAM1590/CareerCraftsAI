@@ -68,10 +68,12 @@ async function openPopupIfPossible() {
 
 // ── HTTP ────────────────────────────────────────────────────────────────
 
-async function apiFetch(pairing, path, { method = "GET", json } = {}) {
+// The deadline outlasts the 25 s command long-poll; a request a network or
+// proxy leaves hanging resolves as status 0 and the caller backs off.
+async function apiFetch(pairing, path, { method = "GET", json, timeoutMs = 40000 } = {}) {
   const url = apiBase(pairing.appOrigin) + path;
   const headers = { Authorization: `Bearer ${pairing.token}` };
-  const init = { method, headers };
+  const init = { method, headers, signal: AbortSignal.timeout(timeoutMs) };
   if (json !== undefined) {
     headers["Content-Type"] = "application/json";
     init.body = JSON.stringify(json);

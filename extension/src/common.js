@@ -56,9 +56,15 @@ export function appOrigin(value) {
   return url.origin;
 }
 
+// Loopback, private, link-local and CGNAT IPv4 (URL() normalises odd forms
+// such as 2130706433 to dotted quads), every IPv6 literal, and local-only
+// names. Names that resolve to private addresses can't be checked from an
+// extension (no DNS API); the backend's audit trail records every URL.
+const PRIVATE_HOST = /^(localhost|0\.|10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|\[)|\.(localhost|local|internal|lan|home\.arpa)$/;
+
 export function jobUrl(value) {
   const url = new URL(value);
-  if (url.protocol !== "https:" || url.username || url.password || !url.hostname.includes(".") || /^(localhost|127\.|10\.|192\.168\.|169\.254\.)/.test(url.hostname)) {
+  if (url.protocol !== "https:" || url.username || url.password || !url.hostname.includes(".") || PRIVATE_HOST.test(url.hostname.replace(/\.$/, ""))) {
     throw new Error("Application pages must use a public HTTPS URL.");
   }
   return url;
