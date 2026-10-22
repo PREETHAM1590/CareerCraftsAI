@@ -1,8 +1,10 @@
 import { readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-// Fail closed if the pinned upstream contract changes. Only child authentication
-// changes; OpenBot retains ownership of container creation, volumes and lifecycle.
+// Fail closed if the pinned upstream contract changes. Child authentication and
+// a per-computer CPU cap change; OpenBot retains ownership of container
+// creation, volumes and lifecycle.
 export function hardenSupervisorEnvironment(source) {
   const before =
     'const computerToken = env.COMPUTER_TOKEN?.trim() || undefined;';
@@ -17,14 +19,39 @@ export function hardenSupervisorEnvironment(source) {
   const computerToken = createHmac("sha256", master).update("opendots-computer:" + botId).digest("hex");`,
   )}`;
 }
+
+// One browser must not be able to take every core from the others: Docker's
+// NanoCpus from COMPUTER_CPUS (cores, e.g. 1.5). Unset leaves it uncapped.
+export function hardenSupervisorDocker(source) {
+  const before = '    PidsLimit: options.pidsLimit ?? 512,';
+  if (source.split(before).length !== 2)
+    throw new Error(
+      'Pinned OpenBot docker contract changed; review before building.',
+    );
+  return `${source.replace(before, `${before}
+    ...computerCpuLimit(),`)}
+function computerCpuLimit() {
+  const raw = process.env.COMPUTER_CPUS?.trim();
+  if (!raw) return {};
+  const cpus = Number(raw);
+  if (!(cpus > 0 && cpus <= 64))
+    throw new Error(\`COMPUTER_CPUS must be a number of cores between 0 and 64 (got \${JSON.stringify(raw)}).\`);
+  return { NanoCpus: Math.round(cpus * 1e9) };
+}
+`;
+}
+
 if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(process.argv[1]).href
 ) {
-  const path = process.argv[2];
-  if (!path) throw new Error('Pass the pinned supervisor environment.ts path.');
-  await writeFile(
-    path,
-    hardenSupervisorEnvironment(await readFile(path, 'utf8')),
-  );
+  const src = process.argv[2];
+  if (!src) throw new Error('Pass the pinned supervisor src directory.');
+  for (const [file, harden] of [
+    ['environment.ts', hardenSupervisorEnvironment],
+    ['docker.ts', hardenSupervisorDocker],
+  ]) {
+    const path = join(src, file);
+    await writeFile(path, harden(await readFile(path, 'utf8')));
+  }
 }

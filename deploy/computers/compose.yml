@@ -28,6 +28,9 @@ services:
       # Unset or blank means runsc, so a typo can't silently drop isolation;
       # opting out takes an explicit COMPUTER_RUNTIME=runc.
       COMPUTER_RUNTIME: ${COMPUTER_RUNTIME:-runsc}
+      # Cores per browser (NanoCpus). 4 cores shared by up to 16 browsers: one
+      # busy page can slow the others but never take the whole host.
+      COMPUTER_CPUS: ${COMPUTER_CPUS:-1.5}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     networks: [control, computers]
