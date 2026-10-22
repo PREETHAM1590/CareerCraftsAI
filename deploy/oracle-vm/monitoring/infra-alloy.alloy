@@ -72,9 +72,22 @@ discovery.relabel "containers" {
   }
 }
 
+// Per-user browsers on 24gb1: they come and go all day (Alloy races their
+// removal), and their logs can carry the URLs users visit, which don't
+// belong in Loki. Supervisor, relay and egress logs are still collected.
+discovery.relabel "log_targets" {
+  targets = discovery.docker.containers.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/careercraft-sandbox-computer-u-.*"
+    action        = "drop"
+  }
+}
+
 loki.source.docker "containers" {
   host          = "tcp://127.0.0.1:12375"
-  targets       = discovery.docker.containers.targets
+  targets       = discovery.relabel.log_targets.output
   relabel_rules = discovery.relabel.containers.rules
   forward_to    = [loki.process.levels.receiver]
 }

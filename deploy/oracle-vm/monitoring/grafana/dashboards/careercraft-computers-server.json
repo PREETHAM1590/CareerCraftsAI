@@ -1267,7 +1267,7 @@
    },
    "targets": [
     {
-     "expr": "sum by (service) (count_over_time({instance=\"computers-vm\",service=~\".+\"} | level=~\"error|critical|fatal\" !~ \"caller=scheduler_processor[.]go:[0-9]+ .*code = Canceled\" [5m]))",
+     "expr": "sum by (service) (count_over_time({instance=\"computers-vm\",service=~\".+\"} | level=~\"error|critical|fatal\" !~ \"caller=scheduler_processor[.]go:[0-9]+ .*code = Canceled\" !~ \"msg=\\\"error inspecting Docker container\\\".*No such container\" [5m]))",
      "legendFormat": "{{service}}",
      "refId": "A",
      "datasource": {
@@ -1303,7 +1303,7 @@
       "type": "loki",
       "uid": "loki"
      },
-     "expr": "{instance=\"computers-vm\",service=~\".+\"} | level=~\"error|critical|fatal\" !~ \"caller=scheduler_processor[.]go:[0-9]+ .*code = Canceled\""
+     "expr": "{instance=\"computers-vm\",service=~\".+\"} | level=~\"error|critical|fatal\" !~ \"caller=scheduler_processor[.]go:[0-9]+ .*code = Canceled\" !~ \"msg=\\\"error inspecting Docker container\\\".*No such container\""
     }
    ]
   }

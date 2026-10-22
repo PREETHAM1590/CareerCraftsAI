@@ -27,7 +27,8 @@ services:
 
   # Polls the relay's /health and writes it as Prometheus text for Alloy's
   # textfile collector. Mounts the secrets file instead of taking the token
-  # as an env var, so it never shows in docker inspect.
+  # as an env var, so it never shows in docker inspect, and sends the request
+  # with the shell's printf builtin into nc, so it never shows in ps either.
   relay-health:
     image: busybox:1.37.0
     network_mode: host
@@ -40,7 +41,7 @@ services:
       - |
         token=$$(sed -n 's/^SANDBOX_RELAY_TOKEN=//p' /computers.env)
         while :; do
-          body=$$(wget -qO- -T 5 --header "Authorization: Bearer $$token" http://127.0.0.1:14312/health)
+          body=$$(printf 'GET /health HTTP/1.0\r\nAuthorization: Bearer %s\r\n\r\n' "$$token" | nc -w 5 127.0.0.1 14312)
           active=$$(echo "$$body" | sed -nE 's/.*"active": *([0-9]+).*/\1/p')
           cap=$$(echo "$$body" | sed -nE 's/.*"capacity": *([0-9]+).*/\1/p')
           if [ -n "$$active" ] && [ -n "$$cap" ]; then
