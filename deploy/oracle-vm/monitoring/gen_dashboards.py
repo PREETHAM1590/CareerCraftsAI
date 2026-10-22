@@ -581,9 +581,9 @@ def computers_extras(d):
     d.stat(
         "Relay up",
         'max(computers_relay_up{instance="computers-vm",job="relay"} '
-        'and on(instance, job) (time() - node_textfile_mtime_seconds{'
+        "and on(instance, job) (time() - node_textfile_mtime_seconds{"
         'instance="computers-vm",job="relay",file="/relay-health/relay.prom"} < 60)) '
-        'or vector(0)',
+        "or vector(0)",
         12,
         6,
         steps=UP,
