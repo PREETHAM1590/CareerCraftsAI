@@ -32,6 +32,7 @@ import {
 } from "@/components/vanguard";
 import { apiClient, getApiErrorMessage } from "@/lib/api";
 import { detectExtension, pairExtension } from "@/lib/extension-bridge";
+import { AgentBrowserSetting } from "@/components/agents/AgentBrowserMode";
 import { cn } from "@/lib/utils";
 
 type Device = {
@@ -139,6 +140,7 @@ export function BrowserExtensionCard() {
         setCode(pairing.token);
       }
       queryClient.invalidateQueries({ queryKey: ["extension-devices"] });
+      queryClient.invalidateQueries({ queryKey: ["computer-mode"] });
     },
     onError: (error) => toast.error(getApiErrorMessage(error, "Could not create a connection code")),
   });
@@ -148,6 +150,7 @@ export function BrowserExtensionCard() {
     onSuccess: () => {
       toast.success("Browser disconnected");
       queryClient.invalidateQueries({ queryKey: ["extension-devices"] });
+      queryClient.invalidateQueries({ queryKey: ["computer-mode"] });
     },
     onError: (error) => toast.error(getApiErrorMessage(error, "Could not disconnect that browser")),
   });
@@ -433,6 +436,10 @@ export function BrowserExtensionCard() {
           <Skeleton className="h-14 rounded-2xl" />
         )}
       </div>
+
+      <Hairline />
+
+      <AgentBrowserSetting />
 
       <Dialog open={setupOpen} onOpenChange={setSetupOpen}>
         <DialogContent

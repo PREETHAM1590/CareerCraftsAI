@@ -27,6 +27,22 @@ def get_redis() -> aioredis.Redis:
     return aioredis.Redis(connection_pool=_get_pool())
 
 
+def get_blocking_redis() -> aioredis.Redis:
+    """For long BLPOP waits (extension command channel). Each wait holds a
+    connection for up to a minute, so it must not drain the shared pool the
+    SSE bus and caches use."""
+    loop = asyncio.get_running_loop()
+    pool = getattr(loop, "_careercraft_blocking_redis_pool", None)
+    if pool is None:
+        pool = aioredis.ConnectionPool.from_url(
+            settings.REDIS_URL,
+            max_connections=500,
+            decode_responses=True,
+        )
+        loop._careercraft_blocking_redis_pool = pool
+    return aioredis.Redis(connection_pool=pool)
+
+
 async def check_redis_connection() -> bool:
     try:
         r = get_redis()
@@ -39,7 +55,8 @@ async def check_redis_connection() -> bool:
 
 async def close_redis() -> None:
     loop = asyncio.get_running_loop()
-    pool = getattr(loop, "_careercraft_redis_pool", None)
-    if pool is not None:
-        await pool.disconnect()
-        delattr(loop, "_careercraft_redis_pool")
+    for name in ("_careercraft_redis_pool", "_careercraft_blocking_redis_pool"):
+        pool = getattr(loop, name, None)
+        if pool is not None:
+            await pool.disconnect()
+            delattr(loop, name)

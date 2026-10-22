@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CareerCraft AI — Apply Assistant",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Fills and submits job applications in your own browser, under your review, using your CareerCraft AI profile and saved answers.",
   "icons": {
     "16": "icons/icon16.png",

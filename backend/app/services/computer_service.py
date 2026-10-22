@@ -6,7 +6,7 @@ import json
 import logging
 import time
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlsplit
 
 import httpx
@@ -58,6 +58,26 @@ PARAMETERS = {
     "privacy/release": set(),
     "human/navigate": {"url"},
 }
+# The extension drives one agent tab; anything else stays cloud-only.
+BROWSER_OPERATIONS = {
+    "navigate",
+    "read",
+    "snapshot",
+    "click",
+    "type",
+    "scroll",
+    "upload",
+    "human/navigate",
+}
+BROWSER_UNSUPPORTED = "Not available in your browser mode: watch and use the agent tab directly."
+BROWSER_OFFLINE = (
+    "Your browser isn't connected. Open Chrome with the CareerCraft extension, "
+    "or switch to Cloud."
+)
+ONLINE_SECONDS = 90  # the command long-poll refreshes agent_seen_at
+COMMAND_TIMEOUT = 60  # navigation in the user's browser can be slow
+RESULT_TTL = 120
+RESULT_STATUSES = {403, 409, 422, 502}
 
 
 class ComputerAction(BaseModel):
@@ -156,11 +176,103 @@ async def relay(user_id, route="", method="GET", body=None):
         raise HTTPException(503, "Sandbox worker is unavailable") from exc
 
 
+async def computer_backend(user_id) -> dict:
+    """Where this owner's agent browser runs now: the stored mode, the
+    effective backend, whether an extension is paired, and the online device
+    that receives commands (the most recently seen one; None when offline)."""
+    from sqlalchemy import select
+
+    from app.core.database import AsyncSessionLocal
+    from app.models.db import ExtensionDevice, User
+
+    owner = uuid.UUID(str(user_id))
+    async with AsyncSessionLocal() as db:
+        mode = (
+            await db.execute(select(User.computer_mode).where(User.id == owner))
+        ).scalar_one_or_none() or "auto"
+        devices = (
+            await db.execute(
+                select(ExtensionDevice.id, ExtensionDevice.agent_seen_at)
+                .where(ExtensionDevice.user_id == owner, ExtensionDevice.revoked_at.is_(None))
+                .order_by(ExtensionDevice.agent_seen_at.desc().nulls_last())
+            )
+        ).all()
+    cutoff = datetime.now(UTC) - timedelta(seconds=ONLINE_SECONDS)
+    device = None
+    if devices and devices[0].agent_seen_at and devices[0].agent_seen_at >= cutoff:
+        device = str(devices[0].id)
+    backend = mode if mode != "auto" else ("browser" if device else "cloud")
+    return {"mode": mode, "backend": backend, "paired": bool(devices), "device": device}
+
+
+async def send_command(device_id: str, kind: str, body=None):
+    """Queue one command for the extension and wait for its reply."""
+    from app.core import redis_client
+
+    command_id = str(uuid.uuid4())
+    redis = redis_client.get_redis()
+    # Only this device may answer the command (checked on the result route).
+    await redis.set(f"ext:owner:{command_id}", device_id, ex=COMMAND_TIMEOUT + RESULT_TTL)
+    queue = f"ext:cmd:{device_id}"
+    await redis.rpush(
+        queue,
+        json.dumps(
+            {
+                "id": command_id,
+                "kind": kind,
+                "body": body or {},
+                "expires": int(time.time()) + COMMAND_TIMEOUT,
+            }
+        ),
+    )
+    await redis.expire(queue, COMMAND_TIMEOUT + 30)
+    reply = await redis_client.get_blocking_redis().blpop(
+        f"ext:res:{command_id}", timeout=COMMAND_TIMEOUT
+    )
+    if reply is None:
+        raise HTTPException(504, "Your browser didn't respond in time.")
+    result = json.loads(reply[1])
+    if not result.get("ok"):
+        status = result.get("status")
+        if result.get("error") == "permission_required" and result.get("origin"):
+            raise HTTPException(
+                403, f"Allow the CareerCraft extension on {result['origin']} to continue."
+            )
+        raise HTTPException(
+            status if status in RESULT_STATUSES else 502,
+            str(result.get("error") or "Browser action failed")[:300],
+        )
+    return result.get("result") or {}
+
+
+async def dispatch(user_id, kind: str, body=None, state=None):
+    """status/start/stop/action on the owner's effective backend."""
+    state = state or await computer_backend(user_id)
+    if state["backend"] == "cloud":
+        if kind == "status":
+            if not is_configured():
+                # Not deployed on this site yet: a state the page shows, not a
+                # server error. Start, stop and actions still answer 503.
+                return {"available": False, "running": False, "backend": "cloud"}
+            return {**await relay(user_id), "backend": "cloud"}
+        return await relay(user_id, "/" + kind, "POST", body)
+    online = state["device"] is not None
+    if kind == "status":
+        return {"available": True, "backend": "browser", "running": online, "enabled": online}
+    # Checked before anything reaches Redis (credentials/fill never does).
+    if kind == "action" and body.get("operation") not in BROWSER_OPERATIONS:
+        raise HTTPException(409, BROWSER_UNSUPPORTED)
+    if not online:
+        raise HTTPException(503, BROWSER_OFFLINE)
+    return await send_command(state["device"], kind, body)
+
+
 async def purge_user(user_id) -> None:
     """Strict owner-scoped erasure; failures keep the account for sweep retry."""
     # An unconfigured feature may be skipped only for owners with no recorded
     # computer activity. Removing configuration cannot silently erase an account
-    # that previously allocated remote storage.
+    # that previously allocated remote storage. Actions run in the member's own
+    # browser (audited with backend "browser") leave no remote state.
     if not settings.SANDBOX_RELAY_URL and not settings.SANDBOX_RELAY_TOKEN:
         from sqlalchemy import select
 
@@ -174,6 +286,7 @@ async def purge_user(user_id) -> None:
                     .where(
                         AgentRun.user_id == uuid.UUID(str(user_id)),
                         AgentRun.agent_type == "computer_action",
+                        AgentRun.input["backend"].astext.is_distinct_from("browser"),
                     )
                     .limit(1)
                 )
@@ -186,7 +299,7 @@ async def purge_user(user_id) -> None:
         raise RuntimeError("Computer erasure was not confirmed")
 
 
-async def audit(user_id, operation, status="completed", duration_ms=0):
+async def audit(user_id, operation, status="completed", duration_ms=0, backend=None):
     from app.core.database import AsyncSessionLocal
     from app.models.db import AgentRun
 
@@ -195,7 +308,7 @@ async def audit(user_id, operation, status="completed", duration_ms=0):
             user_id=user_id,
             agent_type="computer_action",
             status=status,
-            input={"operation": operation},
+            input={"operation": operation, **({"backend": backend} if backend else {})},
             output={"status": status},
             duration_ms=duration_ms,
             tokens_used=0,
@@ -206,12 +319,14 @@ async def audit(user_id, operation, status="completed", duration_ms=0):
         return row.id
 
 
-async def finish_audit(row_id, status, duration_ms):
+async def finish_audit(row_id, status, duration_ms, backend=None):
     from app.core.database import AsyncSessionLocal
     from app.models.db import AgentRun
 
     async with AsyncSessionLocal() as db:
         row = await db.get(AgentRun, row_id)
+        if backend:
+            row.input = {**(row.input or {}), "backend": backend}
         row.status = status
         row.output = {"status": status}
         row.duration_ms = duration_ms
@@ -231,6 +346,7 @@ async def act(user_id, action: ComputerAction, actor="human"):
         raise ValueError("A browser change requires the reviewed computer snapshot")
     started = time.monotonic()
     status = "completed"
+    backend = None
     # Fail before dispatch if the action cannot be recorded. A DB outage after
     # dispatch must not turn success into a retry of an external write.
     audit_id = None
@@ -269,13 +385,17 @@ async def act(user_id, action: ComputerAction, actor="human"):
                     "mimeType": mime,
                     "base64": base64.b64encode(content).decode("ascii"),
                 }
-        return await relay(user_id, "/action", "POST", body)
+        state = await computer_backend(user_id)
+        backend = state["backend"]
+        return await dispatch(user_id, "action", body, state)
     except Exception:
         status = "failed"
         raise
     finally:
         if audit_id:
             try:
-                await finish_audit(audit_id, status, int((time.monotonic() - started) * 1000))
+                await finish_audit(
+                    audit_id, status, int((time.monotonic() - started) * 1000), backend
+                )
             except Exception:
                 logging.getLogger(__name__).error("Computer completion audit unavailable")

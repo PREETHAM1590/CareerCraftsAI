@@ -30,6 +30,11 @@ from app.core.database import Base
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint(
+            "computer_mode IN ('auto','browser','cloud')", name="users_computer_mode_check"
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email: Mapped[str] = mapped_column(String, unique=True, nullable=False)
@@ -44,6 +49,9 @@ class User(Base):
     linkedin_email_enc: Mapped[str | None] = mapped_column(Text)
     linkedin_password_enc: Mapped[str | None] = mapped_column(Text)
     auto_mode: Mapped[str] = mapped_column(String, default="drafts")  # 'auto' or 'drafts'
+    # Where the agent's browser runs: 'auto' (extension when online, else
+    # cloud), 'browser' or 'cloud'. Migration 20261022120000.
+    computer_mode: Mapped[str] = mapped_column(String, nullable=False, server_default="auto")
     # When the user clicked "I agree to the Terms of Service and Privacy
     # Policy" at sign-up, and which policy revision was current then. NULL on
     # accounts created before this was required — never backfilled.
@@ -239,6 +247,8 @@ class ExtensionDevice(Base):
     token_hash: Mapped[str] = mapped_column(String(64), unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Set only by the agent command long-poll: "online" for browser mode.
+    agent_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 

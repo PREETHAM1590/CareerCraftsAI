@@ -169,10 +169,11 @@ async def start_agent_run(task_type: str, context: dict | None = None) -> str:
                 task = context.get("task")
                 if not isinstance(task, str) or not task.strip():
                     return json.dumps({"error": "Describe the browser task in context.task."})
-                from app.services.computer_service import audit, relay
+                from app.services.computer_service import audit, computer_backend, dispatch
 
-                await relay(user.id, "/start", "POST")
-                await audit(user.id, "start")
+                state = await computer_backend(user.id)
+                await dispatch(user.id, "start", state=state)
+                await audit(user.id, "start", backend=state["backend"])
             run_id = await queue_agent_run(db, user, task_type, context)
     except Exception as exc:
         detail = getattr(exc, "detail", None)

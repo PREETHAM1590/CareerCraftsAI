@@ -21,6 +21,15 @@ import {
   taskSenderAllowed,
   snapshotKey,
 } from "./common.js";
+import {
+  configureAgent,
+  startCommandLoop,
+  onAgentTabRemoved,
+  onAgentTabUpdated,
+  onPermissionAdded,
+  stopFromBanner,
+  stopAgentTab,
+} from "./agent.js";
 
 const POLL_ALARM = "poll";
 // A job page often links to the real application form (Lever's /apply, an
@@ -155,6 +164,17 @@ async function syncBridgeRegistration(appOrigin) {
 // ── Poll / claim / open ─────────────────────────────────────────────────
 
 let polling = false;
+
+async function unpair() {
+  await clearPairing();
+  await syncBridgeRegistration(null);
+  await resetActiveTask();
+  await stopAgentTab();
+}
+
+// "My browser" agent mode: the command long-poll lives in agent.js.
+configureAgent({ apiFetch, onUnpaired: unpair });
+
 const submitClaims = new Set();
 
 const PERMISSION_WAIT_MS = 10 * 60 * 1000;
@@ -216,9 +236,7 @@ async function pollOnce() {
 
     const res = await apiFetch(pairing, "/extension/device/tasks/claim", { method: "POST" });
     if (res.status === 401) {
-      await clearPairing();
-      await syncBridgeRegistration(null);
-      await resetActiveTask();
+      await unpair();
       return;
     }
     if (!res.ok && res.status !== 204) {
@@ -301,6 +319,7 @@ async function injectAndRun(tabId, task, submitting) {
 }
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  onAgentTabUpdated(tabId, changeInfo, tab);
   if (changeInfo.status !== "complete") return;
   (async () => {
     const active = await getActiveTask();
@@ -325,10 +344,12 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 // The popup's permission prompt usually closes the popup before its own
 // promise settles, so continue from here as soon as Chrome records the grant.
 chrome.permissions.onAdded.addListener(() => {
+  onPermissionAdded();
   pollOnce();
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
+  onAgentTabRemoved(tabId);
   (async () => {
     const active = await getActiveTask();
     if (!active || active.tabId !== tabId) return;
@@ -364,6 +385,16 @@ async function handleMessage(msg, sender) {
       pollBurst();
       return { ok: true };
     }
+
+    case "AGENT_WAKE": {
+      const pairing = await getPairing();
+      if (!pairing || new URL(sender.url || "https://invalid.invalid").origin !== pairing.appOrigin) return { error: "Invalid app origin" };
+      startCommandLoop();
+      return { ok: true };
+    }
+
+    case "CC_AGENT_STOP":
+      return stopFromBanner(sender);
 
     case "CC_PLAN": {
       const pairing = await getPairing();
@@ -530,6 +561,7 @@ async function handleMessage(msg, sender) {
       await setPairing(pairing);
       await syncBridgeRegistration(pairing.appOrigin);
       pollOnce();
+      startCommandLoop();
       return { ok: true, device: me.data };
     }
 
@@ -554,6 +586,7 @@ async function handleMessage(msg, sender) {
       await setPairing(pairing);
       await syncBridgeRegistration(origin);
       pollOnce();
+      startCommandLoop();
       return { ok: true };
     }
 
@@ -561,6 +594,7 @@ async function handleMessage(msg, sender) {
       await revokeCurrentPairing();
       await clearPairing();
       await resetActiveTask();
+      await stopAgentTab();
       await syncBridgeRegistration(null);
       return { ok: true };
     }
@@ -588,10 +622,14 @@ async function init() {
   const pairing = await getPairing();
   if (pairing) await syncBridgeRegistration(pairing.appOrigin);
   pollOnce();
+  startCommandLoop();
 }
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === POLL_ALARM) pollOnce();
+  if (alarm.name === POLL_ALARM) {
+    pollOnce();
+    startCommandLoop();
+  }
 });
 chrome.runtime.onInstalled.addListener(() => {
   init();
