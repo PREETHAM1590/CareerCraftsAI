@@ -142,8 +142,8 @@ jobs:
       - name: Unit tests
         run: npm test
 
-      - name: Computer purge ownership checks
-        run: node --test ../deploy/computers/purge-supervisor.test.mjs
+      - name: Computer supervisor patch checks
+        run: node --test ../deploy/computers/purge-supervisor.test.mjs ../deploy/computers/harden-supervisor.test.mjs
 
       - name: Build
         run: npm run build

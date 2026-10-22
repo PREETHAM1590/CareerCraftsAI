@@ -62,7 +62,7 @@ beautifulsoup4==4.15.0
     # via
     #   -r requirements.txt
     #   markdownify
-black==26.5.1
+black==26.10.1
     # via -r requirements.txt
 certifi==2026.10.19
     # via
@@ -360,7 +360,7 @@ openai==3.22.1
     # via
     #   -r requirements.txt
     #   langchain-openai
-opentelemetry-api==1.45.0
+opentelemetry-api==1.45.1
     # via
     #   fastapi
     #   google-api-core

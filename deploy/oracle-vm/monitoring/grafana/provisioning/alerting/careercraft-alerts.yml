@@ -1,0 +1,72 @@
+# Alerts, emailed through Resend's SMTP (GF_SMTP_* in monitoring-compose.yml).
+# ALERT_EMAIL, GF_SMTP_PASSWORD and GF_SMTP_FROM_ADDRESS come from
+# /opt/careercraft-secrets/monitoring.env. Grafana expands $VARS in this file,
+# so a literal $ in alert templates is written $$.
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: careercraft-email
+    receivers:
+      - uid: careercraft-email
+        type: email
+        settings:
+          addresses: $ALERT_EMAIL
+          singleEmail: true
+
+policies:
+  - orgId: 1
+    receiver: careercraft-email
+    group_by: [alertname, client]
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h
+
+groups:
+  - orgId: 1
+    name: computers-security
+    folder: CareerCraft
+    interval: 1m
+    rules:
+      # The egress proxy logs only requests it refused (squid.conf). Normal
+      # browsing hits none, so a burst from one browser means a page probing the
+      # internal network or cloud metadata, or a browser doing something it
+      # shouldn't. Chromium's own push channel (mtalk.google.com:5228) is
+      # refused 1-4 times per browser per 10 minutes, far under the threshold,
+      # so it is counted rather than exempted (a page could abuse an exemption).
+      - uid: computers-egress-blocked-spike
+        title: "Computers: blocked-request spike"
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: loki
+            model:
+              refId: A
+              queryType: instant
+              expr: >-
+                sum by (client) (count_over_time({instance="computers-vm",
+                container="careercraft-sandbox-egress-1"} |= "blocked=" | logfmt [5m]))
+          - refId: B
+            datasourceUid: __expr__
+            model: { refId: B, type: reduce, expression: A, reducer: last }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { type: gt, params: [20] }
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        labels:
+          severity: warning
+        annotations:
+          summary: "A cloud browser hit {{ $$values.B }} blocked requests in 5 minutes"
+          description: >-
+            Browser {{ $$labels.client }} on the computers host (24gb1) was refused
+            {{ $$values.B }} times by the egress proxy in 5 minutes (private network,
+            cloud metadata or a non-web port). Check the egress logs on the
+            COMPUTERS dashboard; stop that user's computer if it continues.

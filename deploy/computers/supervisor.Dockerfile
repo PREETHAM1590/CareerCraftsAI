@@ -6,7 +6,7 @@ RUN bun install --frozen-lockfile
 COPY --from=openbot supervisor/src ./src
 COPY deploy/computers/LICENSE.openbot ./LICENSE.openbot
 COPY deploy/computers/harden-supervisor.mjs /tmp/harden-supervisor.mjs
-RUN bun /tmp/harden-supervisor.mjs /app/src/environment.ts && rm /tmp/harden-supervisor.mjs
+RUN bun /tmp/harden-supervisor.mjs /app/src && rm /tmp/harden-supervisor.mjs
 COPY deploy/computers/purge-supervisor.mjs /tmp/purge-supervisor.mjs
 RUN bun /tmp/purge-supervisor.mjs /app/src && rm /tmp/purge-supervisor.mjs
 EXPOSE 4300

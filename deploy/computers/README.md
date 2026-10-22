@@ -48,6 +48,27 @@ browser. Production: `SANDBOX_MAX_SESSIONS=16`, `COMPUTER_MEMORY_BYTES=107374182
 For comparison, runc at 12 users: navigate p50 2.7 s, screenshot p50 0.09 s;
 gVisor's syscall interception costs roughly 4-6x in latency (no KVM on A1).
 
+### Containment
+
+- Each browser: gVisor, all capabilities dropped, `no-new-privileges`, 512
+  processes, `COMPUTER_MEMORY_BYTES`, `COMPUTER_CPUS` cores (default 1.5, so
+  one busy page can't take all 4), and uid 10001, not root.
+- Egress: private ranges, cloud metadata and non-web ports are refused. Only
+  refusals are logged (reason, the browser's internal IP, host:port; never a
+  path); Grafana emails `ALERT_EMAIL` when one browser exceeds 20 in 5 minutes.
+
+**Volumes created before the non-root image** hold root-owned files. Chown them
+once, with no computer running (`docker ps` shows no `sandbox-computer-u`):
+
+```bash
+for v in $(sudo docker volume ls -q | grep -E '^careercraft-sandbox-(profile|workspace)-u-'); do
+  sudo docker run --rm --network none -v "$v:/v" alpine:3.23 chown -R 10001:10001 /v
+done
+```
+
+The supervisor replaces each user's container on its next start (the image
+changed), so the new user and CPU cap apply without touching anything else.
+
 ### Changing the internal network
 
 `careercraft-sandbox-computers` has a fixed name and subnet (`172.31.250.0/24`,
