@@ -363,6 +363,7 @@ export function agentPage(op, p) {
     // extension stays the indicator a page cannot touch.
     if (!window.__ccAgentBanner) {
       const host = document.createElement("div");
+      host.id = "careercraft-agent-banner"; // for tests; existence is never read from the page
       host.style.cssText = "all:initial!important;display:block!important;position:fixed!important;top:8px!important;left:50%!important;transform:translateX(-50%)!important;z-index:2147483647!important;visibility:visible!important;opacity:1!important;";
       const shadow = host.attachShadow({ mode: "closed" });
       shadow.innerHTML = `<style>
