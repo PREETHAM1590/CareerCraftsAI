@@ -9,7 +9,7 @@ from sqlalchemy import select
 from app.core.database import AsyncSessionLocal
 from app.core.llm_gateway import get_chat_gateway_llm
 from app.models.db import AgentRun, User, UserDocument
-from app.services.computer_service import AGENT_WRITES, ComputerAction, act
+from app.services.computer_service import AGENT_WRITES, PERMISSION_PREFIX, ComputerAction, act
 
 PROPOSAL = {
     "type": "function",
@@ -64,6 +64,14 @@ async def plan(run: AgentRun, note="") -> dict:
     try:
         snapshot = await act(run.user_id, ComputerAction(operation="snapshot"), actor="agent")
     except HTTPException as exc:
+        if needs_permission(exc):
+            return {
+                "status": "completed",
+                "result": {
+                    "input_required": "extension_permission",
+                    "message": f"{exc.detail} Then ask again.",
+                },
+            }
         if exc.status_code == 409:
             return {
                 "status": "completed",
@@ -169,6 +177,11 @@ async def plan(run: AgentRun, note="") -> dict:
     }
 
 
+def needs_permission(exc: HTTPException) -> bool:
+    """The extension refused a site the member hasn't allowed yet (nothing ran)."""
+    return exc.status_code == 403 and str(exc.detail).startswith(PERMISSION_PREFIX)
+
+
 async def continue_step(run: AgentRun, pending: dict) -> dict:
     if run.agent_type != "computer_task":
         raise ValueError("This run cannot execute computer actions")
@@ -184,6 +197,9 @@ async def continue_step(run: AgentRun, pending: dict) -> dict:
                 run,
                 "The computer state changed; the action did not run. Review a fresh proposal.",
             )
+        if needs_permission(exc):
+            # Refused before anything ran: re-propose once the site is allowed.
+            return await plan(run, f"{exc.detail} The action did not run; approve it again.")
         raise  # Unknown outcomes are never replayed automatically.
     steps = [
         *(run.input or {}).get("computer_steps", []),

@@ -2,6 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import axios from "axios";
+import { AgentBrowserSetting, useComputerMode } from "./AgentBrowserMode";
+import { wakeAgent } from "@/lib/extension-bridge";
 import { apiClient, getApiErrorMessage } from "@/lib/api";
 import { CopilotRunCard } from "./CopilotRunCard";
 import { LiveBrowserSurface, type BrowserSurfaceHandle } from "./LiveBrowserSurface";
@@ -20,6 +23,15 @@ export function ComputerPanel() {
   const [running, setRunning] = useState(false);
   // null until the first status answer; false: this site has no sandbox relay.
   const [available, setAvailable] = useState<boolean | null>(null);
+  // Where the agent's browser runs, from GET /computer; "browser" = the extension's tab.
+  const [backend, setBackend] = useState<"browser" | "cloud" | null>(null);
+  // Cloud start answered 429 (every sandbox slot taken).
+  const [slotsBusy, setSlotsBusy] = useState(false);
+  const pollNow = useRef<() => void>(() => {});
+  const { query: modeQuery, update: modeUpdate } = useComputerMode();
+  const effective = modeQuery.data?.effective;
+  useEffect(() => { if (effective === "browser") wakeAgent(); }, [effective]);
+  function modeChanged() { setError(""); setSlotsBusy(false); pollNow.current(); }
   const [screen, setScreen] = useState<Screen | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -63,7 +75,12 @@ export function ComputerPanel() {
         if (disposed) return;
         setStatusError("");
         setAvailable(state.available !== false);
-        if (state.available === false) {
+        setBackend(state.backend === "browser" ? "browser" : "cloud");
+        if (state.backend === "browser") {
+          // The agent tab lives in the user's Chrome: no screen frames or control handoff to poll.
+          setRunning(Boolean(state.running)); setScreen(null); setControlId(null);
+          delay = document.hidden ? 15000 : 5000;
+        } else if (state.available === false) {
           // Re-check slowly so the workspace appears once a relay is set up.
           delay = 60000;
         } else if (state.running && document.hidden) {
@@ -87,11 +104,36 @@ export function ComputerPanel() {
     }
     // Coming back to the tab refreshes the screen at once instead of after the slow interval.
     function onVisible() { if (!document.hidden && !disposed && !polling) { clearTimeout(timer); void poll(); } }
+    pollNow.current = () => { if (!disposed && !polling) { clearTimeout(timer); void poll(); } };
     document.addEventListener("visibilitychange", onVisible);
     void poll();
     void refreshLogins().catch(() => {});
     return () => { disposed = true; clearTimeout(timer); document.removeEventListener("visibilitychange", onVisible); };
   }, []);
+
+  const taskForm = <details className="workspace-disclosure rounded-2xl bg-muted/30 p-4 ring-1 ring-foreground/[0.06]"><summary className="flex cursor-pointer items-center gap-2 text-sm font-medium"><ArrowRight size={18} weight="light" /> Browser task <CaretDown className="disclosure-chevron ml-auto" size={14} weight="light" /></summary><form className="mt-4 space-y-3" onSubmit={e => { e.preventDefault(); void perform(async () => {
+      const result = await apiClient.post("/agents/run", { task_type: "computer_task", context: { task } }); setRunId(result.data.run_id);
+    }); }}>
+      <Field label="Ask the browser assistant">{id => <Textarea id={id} value={task} onChange={e => setTask(e.target.value)} placeholder="Prepare the test application using my details..." required maxLength={8000} />}</Field>
+      <IslandButton size="sm" tone="ghost" disabled={busy || !running || !task.trim()} type="submit">Start browser task</IslandButton>
+      <p className="text-xs text-muted-foreground">Each browser change needs review. Your active model in Settings powers the assistant.</p>
+    </form></details>;
+
+  if (backend === "browser") {
+    return <Bezel className="computer-workspace" coreClassName="overflow-hidden"><section aria-label="Computer workspace" className="space-y-4 p-4 sm:p-5">
+      <div className="flex items-center gap-3"><span className="grid h-10 w-10 place-items-center rounded-2xl bg-primary/10 text-primary"><Globe size={22} weight="light" /></span>
+        <div><h2 className="text-base font-semibold tracking-tight">Your computer</h2>
+          <p role="status" className="mt-1 text-xs text-muted-foreground">{busy ? "Working..." : running ? "Your browser is online" : "Your browser is offline"}</p></div></div>
+      <AgentBrowserSetting compact onChanged={modeChanged} />
+      {(error || statusError) && <p role="alert" className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">{error || statusError}</p>}
+      <div className="flex flex-col items-center justify-center gap-4 rounded-2xl bg-muted/40 px-6 py-10 text-center ring-1 ring-foreground/[0.06]"><span className="grid h-16 w-16 place-items-center rounded-[22px] bg-card shadow-bezel-core text-muted-foreground"><Globe size={30} weight="light" /></span>
+        <div><h3 className="text-sm font-medium">Running in your browser</h3><p className="mx-auto mt-2 max-w-72 text-xs leading-5 text-muted-foreground">The agent works in a CareerCraft tab in Chrome.{running ? "" : " Open Chrome with the CareerCraft extension, or switch to Cloud."}</p></div>
+        <IslandButton size="sm" tone="primary" disabled={busy || !running} onClick={() => perform(() => apiClient.post("/computer/start", {}, { timeout: 80000 }))}>Open agent tab</IslandButton></div>
+      {taskForm}
+      <p className="flex items-center gap-2 px-1 text-[11px] leading-5 text-muted-foreground"><LockKey size={14} weight="light" className="shrink-0" />You review browser changes before the assistant acts.</p>
+      {runId && <CopilotRunCard runId={runId} />}
+    </section></Bezel>;
+  }
 
   if (available !== true) {
     // No actionable controls until the relay is confirmed; saved logins stay removable.
@@ -99,6 +141,7 @@ export function ComputerPanel() {
       <div className="flex items-center gap-3"><span className="grid h-10 w-10 place-items-center rounded-2xl bg-muted text-muted-foreground"><Desktop size={22} weight="light" /></span>
         <div><h2 className="text-base font-semibold tracking-tight">Your computer</h2>
           <p role="status" className="mt-1 text-xs text-muted-foreground">{available === null ? "Checking..." : "Not available yet. The live browser workspace isn’t switched on for this site."}</p></div></div>
+      {available === false && <AgentBrowserSetting compact onChanged={modeChanged} />}
       {available === false && logins.length > 0 && <div className="space-y-2"><p className="text-xs text-muted-foreground">Saved logins</p>
         {logins.map(login => <div key={login.id} className="flex items-center justify-between gap-2 text-sm"><span className="min-w-0 break-all">{login.label}  /  {login.origin}</span>
           <IslandButton size="sm" tone="ghost" disabled={busy} onClick={() => perform(async () => { await apiClient.delete(`/computer/credentials/${login.id}`); await refreshLogins(); })}>Delete</IslandButton></div>)}</div>}
@@ -112,14 +155,19 @@ export function ComputerPanel() {
       <div className="flex flex-wrap gap-2">
         <IslandButton size="sm" tone="quiet" icon={expanded ? <ArrowsIn size={17} weight="light" /> : <ArrowsOut size={17} weight="light" />} onClick={() => setExpanded(!expanded)}>{expanded ? "Close large view" : "Expand"}</IslandButton>
         <IslandButton size="sm" disabled={busy} onClick={() => perform(async () => {
-          await apiClient.post("/computer/start", {}, { timeout: 80000 }); setRunning(true);
+          setSlotsBusy(false);
+          try { await apiClient.post("/computer/start", {}, { timeout: 80000 }); }
+          catch (e) { if (axios.isAxiosError(e) && e.response?.status === 429) setSlotsBusy(true); throw e; }
+          setRunning(true);
         })} tone="primary">{running ? "Keep awake" : "Resume"}</IslandButton>
         <IslandButton size="sm" tone="ghost" disabled={busy || !running} onClick={() => perform(async () => {
-          await apiClient.post("/computer/stop"); setRunning(false); setScreen(null); setSnapshot(null);
+          await apiClient.post("/computer/stop", {}, { timeout: 80000 }); setRunning(false); setScreen(null); setSnapshot(null);
         })}>Stop</IslandButton>
       </div>
     </div>
+    <AgentBrowserSetting compact onChanged={modeChanged} />
     {(error || statusError) && <p role="alert" className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">{error || statusError}</p>}
+    {slotsBusy && error && modeQuery.data?.extension.paired && <IslandButton size="sm" tone="primary" disabled={modeUpdate.isPending} onClick={() => modeUpdate.mutate("browser", { onSuccess: modeChanged, onError: e => setError(getApiErrorMessage(e, "Could not switch to your browser.")) })}>Use my browser instead</IslandButton>}
     <form className="flex gap-2" onSubmit={e => { e.preventDefault(); void perform(async () => {
       // Manual navigation owns a handoff too: restart recovery and a pending
       // agent action must never race the user's Open button.
@@ -207,13 +255,7 @@ export function ComputerPanel() {
         </>}
       </div>
     </details>
-    <details className="workspace-disclosure rounded-2xl bg-muted/30 p-4 ring-1 ring-foreground/[0.06]"><summary className="flex cursor-pointer items-center gap-2 text-sm font-medium"><ArrowRight size={18} weight="light" /> Browser task <CaretDown className="disclosure-chevron ml-auto" size={14} weight="light" /></summary><form className="mt-4 space-y-3" onSubmit={e => { e.preventDefault(); void perform(async () => {
-      const result = await apiClient.post("/agents/run", { task_type: "computer_task", context: { task } }); setRunId(result.data.run_id);
-    }); }}>
-      <Field label="Ask the browser assistant">{id => <Textarea id={id} value={task} onChange={e => setTask(e.target.value)} placeholder="Prepare the test application using my details..." required maxLength={8000} />}</Field>
-      <IslandButton size="sm" tone="ghost" disabled={busy || !running || !task.trim()} type="submit">Start browser task</IslandButton>
-      <p className="text-xs text-muted-foreground">Each browser change needs review. Your active model in Settings powers the assistant.</p>
-    </form></details>
+    {taskForm}
     <p className="flex items-center gap-2 px-1 text-[11px] leading-5 text-muted-foreground"><LockKey size={14} weight="light" className="shrink-0" />You review browser changes before the assistant acts.</p>
     {runId && <CopilotRunCard runId={runId} />}
   </section></Bezel>;

@@ -51,3 +51,8 @@ export async function pairExtension(token: string, timeoutMs = 5000): Promise<bo
 export function wakeExtension() {
   post({ type: "CAREERCRAFT_WAKE" });
 }
+
+/** Asks the extension to start its agent command loop right away. */
+export function wakeAgent() {
+  post({ type: "CAREERCRAFT_AGENT_WAKE" });
+}

@@ -17,6 +17,7 @@ Served over the AG-UI protocol by ag-ui-langgraph (see api/v1/copilot_chat.py).
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import uuid
@@ -169,11 +170,20 @@ async def start_agent_run(task_type: str, context: dict | None = None) -> str:
                 task = context.get("task")
                 if not isinstance(task, str) or not task.strip():
                     return json.dumps({"error": "Describe the browser task in context.task."})
-                from app.services.computer_service import audit, relay
+                from app.services.computer_service import audit, computer_backend, dispatch
 
-                await relay(user.id, "/start", "POST")
-                await audit(user.id, "start")
-            run_id = await queue_agent_run(db, user, task_type, context)
+                state = await computer_backend(user.id)
+                await dispatch(user.id, "start", state=state)
+                await audit(user.id, "start", backend=state["backend"])
+                try:
+                    run_id = await queue_agent_run(db, user, task_type, context)
+                except Exception:
+                    # No run will drive it: don't leave the browser open.
+                    with contextlib.suppress(Exception):
+                        await dispatch(user.id, "stop", state=state)
+                    raise
+            else:
+                run_id = await queue_agent_run(db, user, task_type, context)
     except Exception as exc:
         detail = getattr(exc, "detail", None)
         if detail is not None:

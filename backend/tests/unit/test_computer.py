@@ -259,11 +259,32 @@ async def test_unknown_outcome_is_never_replanned():
     plan.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_site_permission_refusal_is_reproposed_not_failed():
+    from fastapi import HTTPException
+
+    from app.agents import computer_agent as agent
+
+    run = SimpleNamespace(user_id=uuid.uuid4(), agent_type="computer_task")
+    pending = {"action": {"operation": "navigate", "parameters": {"url": "https://jobs.example"}}}
+    refused = HTTPException(403, f"{agent.PERMISSION_PREFIX}https://jobs.example to continue.")
+    with (
+        patch.object(agent, "act", AsyncMock(side_effect=refused)),
+        patch.object(
+            agent, "plan", AsyncMock(return_value={"status": "awaiting_approval"})
+        ) as plan,
+    ):
+        assert (await agent.continue_step(run, pending))["status"] == "awaiting_approval"
+    assert "https://jobs.example" in plan.await_args.args[1]
+
+
 def test_unconfigured_sandbox_reports_unavailable_but_actions_still_refuse(monkeypatch):
     from app.services import computer_service
 
     monkeypatch.setattr(computer_service.settings, "SANDBOX_RELAY_URL", "")
     monkeypatch.setattr(computer_service.settings, "SANDBOX_RELAY_TOKEN", "")
+    cloud = {"mode": "cloud", "backend": "cloud", "paired": False, "device": None}
+    monkeypatch.setattr(computer_service, "computer_backend", AsyncMock(return_value=cloud))
     app = FastAPI()
     app.include_router(router)
     app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=uuid.uuid4())
@@ -271,6 +292,6 @@ def test_unconfigured_sandbox_reports_unavailable_but_actions_still_refuse(monke
 
     status = client.get("/computer")
     assert status.status_code == 200
-    assert status.json() == {"available": False, "running": False}
+    assert status.json() == {"available": False, "running": False, "backend": "cloud"}
     # The page shows "not available"; anything that needs the relay still fails.
     assert client.post("/computer/stop").status_code == 503

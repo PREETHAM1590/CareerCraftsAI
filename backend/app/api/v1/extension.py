@@ -19,13 +19,15 @@ import ipaddress
 import json
 import logging
 import secrets
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
+from redis import exceptions as redis_errors
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio.service import RPCError
@@ -535,6 +537,106 @@ async def task_event(
         task.user_id, event.stage, previous_stage, task.payload, task_id=task.id
     )
     return {"status": event.stage, "active": True}
+
+
+MAX_COMMAND_WAIT = 25
+MAX_RESULT_BYTES = 1024 * 1024
+
+
+@router.get("/device/commands/next")
+@limiter.limit("240/minute")
+async def next_command(
+    request: Request,
+    wait: int = MAX_COMMAND_WAIT,
+    device: ExtensionDevice = Depends(get_device),
+    db: AsyncSession = Depends(get_db),
+):
+    """Long-poll the agent's next browser command (see computer_service)."""
+    from app.core import redis_client
+
+    device_id = str(device.id)
+    # Agent liveness: only a command loop that passed get_device's eligibility
+    # checks counts as "online" (any other device route refreshes last_seen_at,
+    # including extensions too old to take commands). End the transaction so the
+    # wait holds neither a DB connection nor the owner's erasure fence.
+    device.agent_seen_at = datetime.now(UTC)
+    await db.commit()
+    queue = f"ext:cmd:{device_id}"
+    redis = redis_client.get_blocking_redis("poll")
+    deadline = time.monotonic() + max(0, min(wait, MAX_COMMAND_WAIT))
+    while True:
+        remaining = int(deadline - time.monotonic())
+        try:
+            if remaining >= 1:
+                popped = await redis.blpop(queue, timeout=remaining)
+                raw = popped[1] if popped else None
+            else:
+                # BLPOP with timeout 0 would block forever.
+                raw = await redis.lpop(queue)
+        except redis_errors.ConnectionError:
+            # Poll pool full (many idle paired devices on this worker): answer
+            # without waiting rather than 500. A queued command still goes out.
+            raw = await redis_client.get_redis().lpop(queue)
+            deadline = 0
+        if raw is None:
+            return Response(status_code=204)
+        command = json.loads(raw)
+        if command.get("expires", 0) > time.time():
+            # A poll abandoned mid-wait (MV3 worker killed) must not swallow the
+            # command: hand it back for the next live poll.
+            if await request.is_disconnected():
+                await redis_client.get_redis().lpush(queue, raw)
+                return Response(status_code=204)
+            # Revoked while this poll waited: the command dies with the device.
+            await db.refresh(device, ["revoked_at"])
+            if device.revoked_at is not None:
+                raise HTTPException(status_code=401, detail="Device revoked")
+            return command
+
+
+class CommandResult(BaseModel):
+    ok: bool
+    result: dict[str, Any] | None = None
+    status: int | None = None
+    error: str | None = None
+    # permission_required: the https origin the user must allow.
+    origin: str | None = Field(
+        default=None, max_length=300, pattern=r"^https://[A-Za-z0-9.-]+(:\d+)?$"
+    )
+
+
+@router.post("/device/commands/{command_id}/result")
+@limiter.limit("240/minute")
+async def command_result(
+    request: Request,
+    command_id: uuid.UUID,
+    device: ExtensionDevice = Depends(get_device),
+):
+    from app.core import redis_client
+    from app.services.computer_service import RESULT_TTL
+
+    length = request.headers.get("content-length", "")
+    if length.isdigit() and int(length) > MAX_RESULT_BYTES:
+        raise HTTPException(status_code=413, detail="Result too large")
+    raw = b""
+    async for chunk in request.stream():
+        raw += chunk
+        if len(raw) > MAX_RESULT_BYTES:
+            raise HTTPException(status_code=413, detail="Result too large")
+    try:
+        body = CommandResult.model_validate_json(raw)
+    except ValidationError:
+        raise HTTPException(status_code=422, detail="Invalid command result") from None
+    redis = redis_client.get_redis()
+    owner_key = f"ext:owner:{command_id}"
+    # Only the device the command was issued to may answer it.
+    if await redis.get(owner_key) != str(device.id):
+        raise HTTPException(status_code=404, detail="Command not found")
+    key = f"ext:res:{command_id}"
+    await redis.lpush(key, json.dumps(body.model_dump(exclude_none=True)))
+    await redis.expire(key, RESULT_TTL)
+    await redis.delete(owner_key)
+    return {"status": "received"}
 
 
 class PlanRequest(BaseModel):

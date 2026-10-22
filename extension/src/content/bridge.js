@@ -38,6 +38,15 @@
       return;
     }
 
+    if (data.type === "CAREERCRAFT_AGENT_WAKE") {
+      try {
+        chrome.runtime.sendMessage({ type: "AGENT_WAKE" });
+      } catch (e) {
+        /* ignore */
+      }
+      return;
+    }
+
     if (data.type === "CAREERCRAFT_WAKE") {
       try {
         chrome.runtime.sendMessage({ type: "WAKE" });

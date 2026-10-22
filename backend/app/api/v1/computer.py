@@ -1,12 +1,13 @@
 """Member computer controls and write-only encrypted portal credentials."""
 
 import uuid
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import get_current_user, get_db
@@ -38,26 +39,56 @@ router = APIRouter(prefix="/computer", tags=["computer"], route_class=PrivateInp
 
 @router.get("")
 async def status(user: User = Depends(get_current_user)):
-    if not service.is_configured():
-        # Not deployed on this site yet: a state the page shows, not a server
-        # error. Start, stop and actions still answer 503.
-        return {"available": False, "running": False}
-    return await service.relay(user.id)
+    return await service.dispatch(user.id, "status")
 
 
 @router.post("/start")
 @limiter.limit("10/minute")
 async def start(request: Request, user: User = Depends(get_current_user)):
-    result = await service.relay(user.id, "/start", "POST")
-    await service.audit(user.id, "start")
+    state = await service.computer_backend(user.id)
+    result = await service.dispatch(user.id, "start", state=state)
+    await service.audit(user.id, "start", backend=state["backend"])
     return result
 
 
 @router.post("/stop")
 async def stop(user: User = Depends(get_current_user)):
-    result = await service.relay(user.id, "/stop", "POST")
-    await service.audit(user.id, "stop")
+    state = await service.computer_backend(user.id)
+    result = await service.dispatch(user.id, "stop", state=state)
+    await service.audit(user.id, "stop", backend=state["backend"])
     return result
+
+
+def mode_view(state):
+    return {
+        "mode": state["mode"],
+        "effective": state["backend"],
+        "extension": {"paired": state["paired"], "online": state["device"] is not None},
+        "cloud": {"available": service.is_configured()},
+    }
+
+
+class ComputerMode(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["auto", "browser", "cloud"]
+
+
+@router.get("/mode")
+async def get_mode(user: User = Depends(get_current_user)):
+    return mode_view(await service.computer_backend(user.id))
+
+
+@router.put("/mode")
+@limiter.limit("30/minute")
+async def put_mode(
+    request: Request,
+    payload: ComputerMode,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    await db.execute(update(User).where(User.id == user.id).values(computer_mode=payload.mode))
+    await db.commit()
+    return mode_view(await service.computer_backend(user.id))
 
 
 @router.post("/action")
@@ -195,9 +226,11 @@ async def fill(
             "password": decrypt_api_key(row.password_enc, settings.APP_SECRET_KEY),
         },
     }
-    audit_id = await service.audit(user.id, "credential_fill", "running")
+    state = await service.computer_backend(user.id)
+    audit_id = await service.audit(user.id, "credential_fill", "running", backend=state["backend"])
     try:
-        result = await service.relay(user.id, "/action", "POST", body)
+        # Browser mode refuses this operation before anything is queued.
+        result = await service.dispatch(user.id, "action", body, state)
     except Exception:
         await service.finish_audit(audit_id, "failed", 0)
         raise
