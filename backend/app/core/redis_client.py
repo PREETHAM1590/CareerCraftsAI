@@ -7,6 +7,8 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+BLOCKING_SOCKET_TIMEOUT = 90
+
 
 def _get_pool() -> aioredis.ConnectionPool:
     # Redis sockets and locks belong to the loop that first uses them. Agent
@@ -41,6 +43,9 @@ def get_blocking_redis(purpose: str = "poll") -> aioredis.Redis:
             settings.REDIS_URL,
             max_connections=500,
             decode_responses=True,
+            # redis-py 8 defaults to a 5 s read timeout, which kills every
+            # BLPOP longer than that. Outlast the longest wait (60 s).
+            socket_timeout=BLOCKING_SOCKET_TIMEOUT,
         )
         setattr(loop, name, pool)
     return aioredis.Redis(connection_pool=pool)

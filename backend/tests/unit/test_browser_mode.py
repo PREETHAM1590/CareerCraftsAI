@@ -406,3 +406,13 @@ async def test_abandoned_poll_hands_the_command_back(redis):
     assert response.status_code == 204
     # Still queued for the next live poll.
     assert json.loads(await redis.lpop(queue))["id"] == command["id"]
+
+
+@pytest.mark.asyncio
+async def test_blocking_pool_outlasts_the_longest_wait():
+    # redis-py 8 defaults socket_timeout to 5 s; a BLPOP must not hit it.
+    from app.core import redis_client
+
+    for purpose in ("poll", "result"):
+        kwargs = redis_client.get_blocking_redis(purpose).connection_pool.connection_kwargs
+        assert kwargs["socket_timeout"] > max(service.COMMAND_TIMEOUT, extension.MAX_COMMAND_WAIT)
