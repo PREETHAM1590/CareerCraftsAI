@@ -58,7 +58,9 @@ def _assert_owns_path(owner_id: str, storage_path: str) -> str:
         raise PermissionError(f"Illegal storage path: {storage_path}")
     prefix = normalized.split("/", 1)[0]
     if prefix != owner_id:
-        raise PermissionError(f"Storage path {storage_path} does not belong to user {owner_id}")
+        raise PermissionError(
+            f"Storage path {storage_path} does not belong to user {owner_id}"
+        )
     return normalized
 
 

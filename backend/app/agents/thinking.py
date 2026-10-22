@@ -10,7 +10,6 @@ Provides a pre-action reasoning step that agents can invoke to:
 This makes agents smarter by forcing deliberate analysis before action,
 rather than dumping all context into a single prompt.
 """
-
 import logging
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -69,12 +68,10 @@ APPROACH: <the strategy to use>
 REASONING: <1-2 sentences explaining your logic>"""
 
     try:
-        response = llm.invoke(
-            [
-                SystemMessage(content=THINKING_SYSTEM),
-                HumanMessage(content=prompt),
-            ]
-        )
+        response = llm.invoke([
+            SystemMessage(content=THINKING_SYSTEM),
+            HumanMessage(content=prompt),
+        ])
         return response.content
     except Exception as exc:
         logger.warning("Thinking step failed, proceeding without: %s", exc)
@@ -115,12 +112,10 @@ ANGLE: <recommended approach>
 REASONING: <why>"""
 
     try:
-        response = llm.invoke(
-            [
-                SystemMessage(content=THINKING_SYSTEM),
-                HumanMessage(content=prompt),
-            ]
-        )
+        response = llm.invoke([
+            SystemMessage(content=THINKING_SYSTEM),
+            HumanMessage(content=prompt),
+        ])
         text = response.content
 
         # Parse structured output

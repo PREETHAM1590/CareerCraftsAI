@@ -5,23 +5,14 @@ Pure functions for contact filtering, message validation, and drafting.
 """
 
 RECRUITER_TITLE_KEYWORDS = {
-    "recruiter",
-    "talent",
-    "hiring",
-    "engineering",
-    "director",
-    "people",
-    "hr",
-    "human resources",
-    "staffing",
+    "recruiter", "talent", "hiring", "engineering", "director",
+    "people", "hr", "human resources", "staffing",
 }
 
 MAX_MESSAGE_LENGTH = 300
 
 
-def filter_contacts_by_title(
-    contacts: list[dict], filter_keywords: set[str] | None = None
-) -> list[dict]:
+def filter_contacts_by_title(contacts: list[dict], filter_keywords: set[str] | None = None) -> list[dict]:
     """Filter contacts to only those with relevant titles.
 
     Default filter: recruiter, talent, hiring, engineering, director.

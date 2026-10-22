@@ -16,7 +16,6 @@ class CheckpointPayload(TypedDict):
 
 class _AgentStateRequired(TypedDict):
     """Fields every node may read — KeyError-safe only when these are always present."""
-
     user_id: str
     run_id: str
 
@@ -32,7 +31,6 @@ class AgentState(_AgentStateRequired, total=False):
     not plain dicts — the list[dict] annotation in the original schema was wrong
     and caused silent type mismatches at serialisation time.
     """
-
     task: str
     task_type: str
     status: str

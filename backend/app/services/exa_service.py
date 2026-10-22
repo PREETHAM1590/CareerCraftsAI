@@ -3,7 +3,6 @@ Exa.ai search service for salary data, company news, and tech stack research.
 
 Used by Salary Agent and Company Research Agent.
 """
-
 import logging
 from typing import Any
 

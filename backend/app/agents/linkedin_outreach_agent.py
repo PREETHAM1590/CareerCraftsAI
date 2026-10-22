@@ -62,7 +62,8 @@ async def _build_outreach(state: AgentState) -> AgentState:
     contacts = await ProxycurlService().find_contacts(company, role_context or None)
     relevant_contacts = filter_contacts_by_title(contacts) or contacts
     relevant_contacts = [
-        c for c in relevant_contacts[:10] if c.get("name") and c.get("linkedin_url")
+        c for c in relevant_contacts[:10]
+        if c.get("name") and c.get("linkedin_url")
     ][:5]
 
     if not relevant_contacts:
@@ -76,8 +77,9 @@ async def _build_outreach(state: AgentState) -> AgentState:
                 "messages": [],
                 "notice": "No recruiter or hiring contacts found. Check Proxycurl configuration or try another company.",
             },
-            "messages": state["messages"]
-            + [AIMessage(content=f"No LinkedIn outreach contacts found for {company}.")],
+            "messages": state["messages"] + [
+                AIMessage(content=f"No LinkedIn outreach contacts found for {company}.")
+            ],
         }
 
     try:
@@ -86,9 +88,7 @@ async def _build_outreach(state: AgentState) -> AgentState:
         logger.warning("LinkedIn outreach profile fetch failed for user %s: %s", user_id, exc)
         profile_text = ""
 
-    user_experience = (
-        profile_text or role_context or "software engineering and product delivery"
-    ).strip()
+    user_experience = (profile_text or role_context or "software engineering and product delivery").strip()
     drafts = []
     for contact in relevant_contacts:
         message = draft_outreach_message(
@@ -127,8 +127,9 @@ async def _build_outreach(state: AgentState) -> AgentState:
             "messages": queued,
             "queue_ids": [item["queue_id"] for item in queued],
         },
-        "messages": state["messages"]
-        + [AIMessage(content=f"LinkedIn outreach drafts ready for {company}.")],
+        "messages": state["messages"] + [
+            AIMessage(content=f"LinkedIn outreach drafts ready for {company}.")
+        ],
     }
 
 

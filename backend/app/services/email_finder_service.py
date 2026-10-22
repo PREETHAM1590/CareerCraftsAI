@@ -9,7 +9,6 @@ Method:
 2. Verify domain has valid MX records (proves email server exists)
 3. Optionally SMTP-verify the specific address (connect, RCPT TO check)
 """
-
 import asyncio
 import dns.resolver
 import logging
@@ -22,14 +21,14 @@ logger = logging.getLogger(__name__)
 
 # Common corporate email patterns (covers ~90% of companies)
 PATTERNS = [
-    "{first}.{last}",  # john.doe@company.com (46% of companies)
-    "{first}{last}",  # johndoe@company.com
-    "{f}{last}",  # jdoe@company.com
-    "{first}",  # john@company.com
-    "{first}_{last}",  # john_doe@company.com
-    "{last}.{first}",  # doe.john@company.com
-    "{f}.{last}",  # j.doe@company.com
-    "{first}{l}",  # johnd@company.com
+    "{first}.{last}",       # john.doe@company.com (46% of companies)
+    "{first}{last}",        # johndoe@company.com
+    "{f}{last}",            # jdoe@company.com
+    "{first}",             # john@company.com
+    "{first}_{last}",      # john_doe@company.com
+    "{last}.{first}",      # doe.john@company.com
+    "{f}.{last}",          # j.doe@company.com
+    "{first}{l}",          # johnd@company.com
 ]
 
 
@@ -44,14 +43,10 @@ class EmailResult:
 def _company_to_domain(company: str) -> str:
     """Convert company name to likely domain."""
     # Remove common suffixes
-    clean = re.sub(
-        r"\b(inc|llc|ltd|corp|co|pvt|private|limited|technologies|tech|solutions|software)\b",
-        "",
-        company.lower(),
-    )
-    clean = re.sub(r"[^a-z0-9]", "", clean.strip())
+    clean = re.sub(r'\b(inc|llc|ltd|corp|co|pvt|private|limited|technologies|tech|solutions|software)\b', '', company.lower())
+    clean = re.sub(r'[^a-z0-9]', '', clean.strip())
     if not clean:
-        clean = re.sub(r"[^a-z0-9]", "", company.lower().strip())
+        clean = re.sub(r'[^a-z0-9]', '', company.lower().strip())
     return f"{clean}.com"
 
 
@@ -76,7 +71,7 @@ def _generate_emails(first_name: str, last_name: str, domain: str) -> list[tuple
 def verify_mx(domain: str) -> bool:
     """Check if domain has valid MX records (email server exists)."""
     try:
-        dns.resolver.resolve(domain, "MX")
+        dns.resolver.resolve(domain, 'MX')
         return True
     except Exception:
         return False
@@ -90,8 +85,8 @@ def smtp_verify(email: str, timeout: int = 5) -> bool:
     """
     domain = email.split("@")[1]
     try:
-        mx_records = dns.resolver.resolve(domain, "MX")
-        mx_host = str(mx_records[0].exchange).rstrip(".")
+        mx_records = dns.resolver.resolve(domain, 'MX')
+        mx_host = str(mx_records[0].exchange).rstrip('.')
     except Exception:
         return False
 

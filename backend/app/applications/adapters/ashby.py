@@ -7,7 +7,6 @@ forms are standard HTML controls (input/select/textarea) inside a React
 shell, so the same label-matching approach the generic adapter uses applies
 here; only `detect()` and `open_application()` are Ashby-specific.
 """
-
 from __future__ import annotations
 
 import re
@@ -43,18 +42,12 @@ class AshbyAdapter:
         return extract_fields(raw)
 
     async def fill_fields(
-        self,
-        page,
-        fields: list[ApplicationField],
-        answers: list[ResolvedAnswer],
+        self, page, fields: list[ApplicationField], answers: list[ResolvedAnswer],
     ) -> None:
         await fill_fields(page, fields, answers)
 
     async def upload_documents(
-        self,
-        page,
-        resume: bytes,
-        cover_letter: bytes | None = None,
+        self, page, resume: bytes, cover_letter: bytes | None = None,
     ) -> None:
         await upload_resume_and_cover_letter(page, resume, cover_letter)
 
