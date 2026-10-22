@@ -2,6 +2,7 @@
 implementation (Ashby, Generic). Kept tiny and adapter-agnostic — no
 persistence, no LLM calls.
 """
+
 from __future__ import annotations
 
 from app.applications.models import ApplicationField, ResolvedAnswer
@@ -41,9 +42,15 @@ async def fill_field(page, field: ApplicationField, answer: ResolvedAnswer) -> N
             options = locator
             for index in range(await options.count()):
                 option = options.nth(index)
-                label = (await option.evaluate(
-                    "e => e.labels?.[0]?.innerText || e.getAttribute('aria-label') || ''",
-                )).strip().lower()
+                label = (
+                    (
+                        await option.evaluate(
+                            "e => e.labels?.[0]?.innerText || e.getAttribute('aria-label') || ''",
+                        )
+                    )
+                    .strip()
+                    .lower()
+                )
                 if label in wanted:
                     await option.check()
         else:
@@ -60,9 +67,15 @@ async def fill_field(page, field: ApplicationField, answer: ResolvedAnswer) -> N
         options = locator
         for index in range(await options.count()):
             option = options.nth(index)
-            label = (await option.evaluate(
-                "e => e.labels?.[0]?.innerText || e.getAttribute('aria-label') || ''",
-            )).strip().lower()
+            label = (
+                (
+                    await option.evaluate(
+                        "e => e.labels?.[0]?.innerText || e.getAttribute('aria-label') || ''",
+                    )
+                )
+                .strip()
+                .lower()
+            )
             if label == wanted:
                 await option.check()
                 return
@@ -77,7 +90,9 @@ async def fill_fields(page, fields: list[ApplicationField], answers: list[Resolv
 
 
 async def upload_resume_and_cover_letter(
-    page, resume: bytes, cover_letter: bytes | None = None,
+    page,
+    resume: bytes,
+    cover_letter: bytes | None = None,
 ) -> None:
     """Best-effort label matching: the first file input whose label mentions
     'resume'/'cv' gets the resume; a second file input mentioning 'cover'
@@ -91,9 +106,9 @@ async def upload_resume_and_cover_letter(
     resume_index = 0
     cover_index = None
     for index in range(count):
-        label = (await file_inputs.nth(index).evaluate(
+        label = await file_inputs.nth(index).evaluate(
             "e => (e.labels?.[0]?.innerText || e.getAttribute('aria-label') || '').toLowerCase()",
-        ))
+        )
         if "resume" in label or "cv" in label:
             resume_index = index
         elif "cover" in label:

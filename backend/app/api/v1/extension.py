@@ -27,6 +27,7 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field, ValidationError
+from redis import exceptions as redis_errors
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio.service import RPCError
@@ -561,16 +562,22 @@ async def next_command(
     device.agent_seen_at = datetime.now(UTC)
     await db.commit()
     queue = f"ext:cmd:{device_id}"
-    redis = redis_client.get_blocking_redis()
+    redis = redis_client.get_blocking_redis("poll")
     deadline = time.monotonic() + max(0, min(wait, MAX_COMMAND_WAIT))
     while True:
         remaining = int(deadline - time.monotonic())
-        if remaining >= 1:
-            popped = await redis.blpop(queue, timeout=remaining)
-            raw = popped[1] if popped else None
-        else:
-            # BLPOP with timeout 0 would block forever.
-            raw = await redis.lpop(queue)
+        try:
+            if remaining >= 1:
+                popped = await redis.blpop(queue, timeout=remaining)
+                raw = popped[1] if popped else None
+            else:
+                # BLPOP with timeout 0 would block forever.
+                raw = await redis.lpop(queue)
+        except redis_errors.ConnectionError:
+            # Poll pool full (many idle paired devices on this worker): answer
+            # without waiting rather than 500. A queued command still goes out.
+            raw = await redis_client.get_redis().lpop(queue)
+            deadline = 0
         if raw is None:
             return Response(status_code=204)
         command = json.loads(raw)
@@ -578,8 +585,12 @@ async def next_command(
             # A poll abandoned mid-wait (MV3 worker killed) must not swallow the
             # command: hand it back for the next live poll.
             if await request.is_disconnected():
-                await redis.lpush(queue, raw)
+                await redis_client.get_redis().lpush(queue, raw)
                 return Response(status_code=204)
+            # Revoked while this poll waited: the command dies with the device.
+            await db.refresh(device, ["revoked_at"])
+            if device.revoked_at is not None:
+                raise HTTPException(status_code=401, detail="Device revoked")
             return command
 
 

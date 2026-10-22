@@ -4,6 +4,7 @@ Every value returned here comes from an explicit user-entered field or a
 previously user-approved answer — never generated. See answer_resolver.py
 for the priority order this feeds into.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -39,21 +40,25 @@ PROFILE_FIELD_FOR_KEY: dict[str, str] = {
 
 
 async def get_profile(db: AsyncSession, user_id: uuid.UUID) -> CandidateProfile | None:
-    return (await db.execute(
-        select(CandidateProfile).where(CandidateProfile.user_id == user_id)
-    )).scalar_one_or_none()
+    return (
+        await db.execute(select(CandidateProfile).where(CandidateProfile.user_id == user_id))
+    ).scalar_one_or_none()
 
 
 async def get_saved_answer(
-    db: AsyncSession, user_id: uuid.UUID, question_key: str,
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    question_key: str,
 ) -> CandidateAnswer | None:
-    return (await db.execute(
-        select(CandidateAnswer).where(
-            CandidateAnswer.user_id == user_id,
-            CandidateAnswer.question_key == question_key,
-            CandidateAnswer.approved_by_user.is_(True),
+    return (
+        await db.execute(
+            select(CandidateAnswer).where(
+                CandidateAnswer.user_id == user_id,
+                CandidateAnswer.question_key == question_key,
+                CandidateAnswer.approved_by_user.is_(True),
+            )
         )
-    )).scalar_one_or_none()
+    ).scalar_one_or_none()
 
 
 def structured_profile_value(profile: CandidateProfile, question_key: str) -> object | None:
@@ -67,15 +72,24 @@ def structured_profile_value(profile: CandidateProfile, question_key: str) -> ob
 
 
 async def save_approved_answer(
-    db: AsyncSession, user_id: uuid.UUID, question_key: str, normalized_question: str,
-    answer: object, answer_type: str = "text", source: str = "user", confidence: float = 1.0,
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    question_key: str,
+    normalized_question: str,
+    answer: object,
+    answer_type: str = "text",
+    source: str = "user",
+    confidence: float = 1.0,
 ) -> CandidateAnswer:
     """Upsert the (user_id, question_key) row the unique constraint enforces."""
-    existing = (await db.execute(
-        select(CandidateAnswer).where(
-            CandidateAnswer.user_id == user_id, CandidateAnswer.question_key == question_key,
+    existing = (
+        await db.execute(
+            select(CandidateAnswer).where(
+                CandidateAnswer.user_id == user_id,
+                CandidateAnswer.question_key == question_key,
+            )
         )
-    )).scalar_one_or_none()
+    ).scalar_one_or_none()
     if existing:
         existing.normalized_question = normalized_question
         existing.answer_type = answer_type
@@ -85,9 +99,15 @@ async def save_approved_answer(
         existing.approved_by_user = True
         return existing
     row = CandidateAnswer(
-        id=uuid.uuid4(), user_id=user_id, question_key=question_key,
-        normalized_question=normalized_question, answer_type=answer_type,
-        answer={"value": answer}, source=source, confidence=confidence, approved_by_user=True,
+        id=uuid.uuid4(),
+        user_id=user_id,
+        question_key=question_key,
+        normalized_question=normalized_question,
+        answer_type=answer_type,
+        answer={"value": answer},
+        source=source,
+        confidence=confidence,
+        approved_by_user=True,
     )
     db.add(row)
     return row

@@ -4,6 +4,7 @@ YouTube Data API v3 service.
 search.list costs 100 quota units per call (default: 10,000/day).
 Always cache results in Redis with 24-hour TTL.
 """
+
 import hashlib
 import json
 import logging
@@ -40,9 +41,7 @@ def _build_query(company: str, role: str) -> str:
     return f"{role} behavioral interview STAR method questions"
 
 
-async def search_interview_videos(
-    company: str, role: str, max_results: int = 6
-) -> list[dict]:
+async def search_interview_videos(company: str, role: str, max_results: int = 6) -> list[dict]:
     query = _build_query(company, role)
 
     try:

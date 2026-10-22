@@ -23,7 +23,7 @@ from app.services import computer_service as service
 def redis(monkeypatch):
     client = fakeredis.FakeAsyncRedis(server=fakeredis.FakeServer(), decode_responses=True)
     monkeypatch.setattr("app.core.redis_client.get_redis", lambda: client)
-    monkeypatch.setattr("app.core.redis_client.get_blocking_redis", lambda: client)
+    monkeypatch.setattr("app.core.redis_client.get_blocking_redis", lambda purpose="poll": client)
     return client
 
 
@@ -40,7 +40,9 @@ def session(monkeypatch, *results):
 def device_client(device_id):
     app = FastAPI()
     app.include_router(extension.router)
-    app.dependency_overrides[extension.get_device] = lambda: SimpleNamespace(id=device_id)
+    app.dependency_overrides[extension.get_device] = lambda: SimpleNamespace(
+        id=device_id, revoked_at=None
+    )
     app.dependency_overrides[get_db] = lambda: AsyncMock()
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
 
@@ -213,9 +215,35 @@ async def test_unknown_device_status_maps_to_502(redis):
 @pytest.mark.asyncio
 async def test_unanswered_command_times_out(redis, monkeypatch):
     monkeypatch.setattr(service, "COMMAND_TIMEOUT", 1)
+    device = str(uuid.uuid4())
     with pytest.raises(HTTPException) as exc:
-        await service.send_command(str(uuid.uuid4()), "start")
+        await service.send_command(device, "start")
     assert exc.value.status_code == 504
+    # A browser that reconnects later must not run what the caller saw fail.
+    assert await redis.llen(f"ext:cmd:{device}") == 0
+
+
+@pytest.mark.asyncio
+async def test_revoked_device_does_not_receive_a_waiting_command(redis):
+    device = SimpleNamespace(id=uuid.uuid4(), agent_seen_at=None, revoked_at=None)
+    queue = f"ext:cmd:{device.id}"
+    command = {"id": str(uuid.uuid4()), "kind": "action", "body": {}, "expires": time.time() + 60}
+    await redis.rpush(queue, json.dumps(command))
+    db = AsyncMock()
+
+    async def revoke(target, attrs):
+        target.revoked_at = datetime.now(UTC)  # the owner revoked it mid-wait
+
+    db.refresh.side_effect = revoke
+
+    class LiveRequest:
+        async def is_disconnected(self):
+            return False
+
+    route = extension.next_command.__wrapped__
+    with pytest.raises(HTTPException) as exc:
+        await route(request=LiveRequest(), wait=1, device=device, db=db)
+    assert exc.value.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -272,16 +300,17 @@ def member_client(monkeypatch, resolved):
     app = FastAPI()
     app.include_router(computer.router)
     db = AsyncMock()
-    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=uuid.uuid4())
+    member = SimpleNamespace(id=uuid.uuid4())
+    app.dependency_overrides[get_current_user] = lambda: member
     app.dependency_overrides[get_db] = lambda: db
     monkeypatch.setattr(service, "computer_backend", AsyncMock(return_value=resolved))
     monkeypatch.setattr(service.settings, "SANDBOX_RELAY_URL", "")
     monkeypatch.setattr(service.settings, "SANDBOX_RELAY_TOKEN", "")
-    return TestClient(app), db
+    return TestClient(app), db, member
 
 
 def test_put_mode_validates_and_returns_the_mode_view(monkeypatch):
-    client, db = member_client(
+    client, db, member = member_client(
         monkeypatch, {"mode": "browser", "backend": "browser", "paired": True, "device": "d"}
     )
     assert client.put("/computer/mode", json={"mode": "bogus"}).status_code == 422
@@ -294,12 +323,16 @@ def test_put_mode_validates_and_returns_the_mode_view(monkeypatch):
         "extension": {"paired": True, "online": True},
         "cloud": {"available": False},
     }
-    assert db.execute.await_args.args[0].compile().params["computer_mode"] == "browser"
+    update = db.execute.await_args.args[0]
+    assert update.compile().params["computer_mode"] == "browser"
+    # Scoped to the signed-in member, never every user.
+    assert "WHERE users.id = " in str(update.compile())
+    assert member.id in update.compile().params.values()
     db.commit.assert_awaited_once()
 
 
 def test_status_reports_the_browser_backend(monkeypatch):
-    client, _ = member_client(
+    client, _, _ = member_client(
         monkeypatch, {"mode": "auto", "backend": "browser", "paired": True, "device": "d"}
     )
     assert client.get("/computer").json() == {
@@ -345,12 +378,16 @@ async def test_long_poll_marks_the_agent_online(redis):
     app = FastAPI()
     app.include_router(extension.router)
     app.dependency_overrides[extension.get_device] = lambda: device
-    app.dependency_overrides[get_db] = lambda: AsyncMock()
+    db = AsyncMock()
+    seen_at_commit = []
+    db.commit.side_effect = lambda: seen_at_commit.append(device.agent_seen_at)
+    app.dependency_overrides[get_db] = lambda: db
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get("/extension/device/commands/next", params={"wait": 0})
     assert response.status_code == 204
-    assert device.agent_seen_at is not None
+    # Persisted, not just set in memory: the commit saw the new timestamp.
+    assert seen_at_commit and seen_at_commit[0] is not None
 
 
 @pytest.mark.asyncio

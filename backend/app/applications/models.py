@@ -3,6 +3,7 @@
 Plain Pydantic models, no ORM/agent imports — importable from schema
 extraction, answer resolution, validation, and every ATS adapter.
 """
+
 from __future__ import annotations
 
 from typing import Literal
@@ -16,7 +17,14 @@ class ApplicationField(BaseModel):
     normalized_key: str | None = None
 
     input_type: Literal[
-        "text", "textarea", "number", "date", "select", "radio", "checkbox", "file",
+        "text",
+        "textarea",
+        "number",
+        "date",
+        "select",
+        "radio",
+        "checkbox",
+        "file",
     ]
 
     required: bool

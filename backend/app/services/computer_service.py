@@ -78,6 +78,7 @@ ONLINE_SECONDS = 90  # the command long-poll refreshes agent_seen_at
 COMMAND_TIMEOUT = 60  # navigation in the user's browser can be slow
 RESULT_TTL = 120
 RESULT_STATUSES = {403, 409, 422, 502}
+PERMISSION_PREFIX = "Allow the CareerCraft extension on "
 
 
 class ComputerAction(BaseModel):
@@ -214,30 +215,30 @@ async def send_command(device_id: str, kind: str, body=None):
     # Only this device may answer the command (checked on the result route).
     await redis.set(f"ext:owner:{command_id}", device_id, ex=COMMAND_TIMEOUT + RESULT_TTL)
     queue = f"ext:cmd:{device_id}"
-    await redis.rpush(
-        queue,
-        json.dumps(
-            {
-                "id": command_id,
-                "kind": kind,
-                "body": body or {},
-                "expires": int(time.time()) + COMMAND_TIMEOUT,
-            }
-        ),
+    raw = json.dumps(
+        {
+            "id": command_id,
+            "kind": kind,
+            "body": body or {},
+            "expires": int(time.time()) + COMMAND_TIMEOUT,
+        }
     )
+    await redis.rpush(queue, raw)
     await redis.expire(queue, COMMAND_TIMEOUT + 30)
-    reply = await redis_client.get_blocking_redis().blpop(
+    reply = await redis_client.get_blocking_redis("result").blpop(
         f"ext:res:{command_id}", timeout=COMMAND_TIMEOUT
     )
     if reply is None:
+        # Nobody is waiting any more: a browser that reconnects later must not
+        # run a command the caller was told failed. If the extension already
+        # took it, it is running and its late result simply expires.
+        await redis.lrem(queue, 1, raw)
         raise HTTPException(504, "Your browser didn't respond in time.")
     result = json.loads(reply[1])
     if not result.get("ok"):
         status = result.get("status")
         if result.get("error") == "permission_required" and result.get("origin"):
-            raise HTTPException(
-                403, f"Allow the CareerCraft extension on {result['origin']} to continue."
-            )
+            raise HTTPException(403, f"{PERMISSION_PREFIX}{result['origin']} to continue.")
         raise HTTPException(
             status if status in RESULT_STATUSES else 502,
             str(result.get("error") or "Browser action failed")[:300],

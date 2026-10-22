@@ -18,9 +18,7 @@ class ProxycurlService:
         self.api_key = settings.PROXYCURL_API_KEY
         self.base_url = PROXYCURL_BASE_URL
 
-    async def find_contacts(
-        self, company: str, role_context: str | None = None
-    ) -> list[dict]:
+    async def find_contacts(self, company: str, role_context: str | None = None) -> list[dict]:
         """Find up to 10 contacts at a company relevant to the role context.
 
         Args:
@@ -77,9 +75,7 @@ class ProxycurlService:
             )
             return []
         except httpx.RequestError as e:
-            logger.error(
-                "Proxycurl request failed for company=%s: %s", company, str(e)
-            )
+            logger.error("Proxycurl request failed for company=%s: %s", company, str(e))
             return []
         except Exception as e:
             logger.error(

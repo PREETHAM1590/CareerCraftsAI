@@ -13,6 +13,7 @@ workaround is implemented; if a future real-world form turns out to hide
 the native `<select>` entirely (no live page was available to verify this),
 that will need a dedicated fallback here.
 """
+
 from __future__ import annotations
 
 import logging
@@ -81,7 +82,10 @@ class GreenhouseAdapter:
         return _extract_fields(raw_fields)
 
     async def fill_fields(
-        self, page, fields: list[ApplicationField], answers: list[ResolvedAnswer],
+        self,
+        page,
+        fields: list[ApplicationField],
+        answers: list[ResolvedAnswer],
     ) -> None:
         field_by_id = {f.field_id: f for f in fields}
         for answer in answers:
@@ -97,7 +101,9 @@ class GreenhouseAdapter:
                 await _field_locator(page, field_id).first.select_option(label=str(answer.value))
             elif field.input_type == "radio":
                 await _group_locator(page, field_id).get_by_role(
-                    "radio", name=str(answer.value), exact=True,
+                    "radio",
+                    name=str(answer.value),
+                    exact=True,
                 ).check()
             elif field.input_type == "checkbox" and field.options:
                 values = answer.value if isinstance(answer.value, list) else [answer.value]
@@ -108,7 +114,10 @@ class GreenhouseAdapter:
                 await _field_locator(page, field_id).first.set_checked(bool(answer.value))
 
     async def upload_documents(
-        self, page, resume: bytes, cover_letter: bytes | None = None,
+        self,
+        page,
+        resume: bytes,
+        cover_letter: bytes | None = None,
     ) -> None:
         file_inputs = page.locator('input[type="file"]')
         count = await file_inputs.count()
@@ -116,10 +125,12 @@ class GreenhouseAdapter:
         cover_input = None
         for index in range(count):
             candidate = file_inputs.nth(index)
-            label = (await candidate.evaluate(
-                "e => (e.labels?.[0]?.innerText || e.getAttribute('aria-label') "
-                "|| e.name || '').toLowerCase()"
-            )) or ""
+            label = (
+                await candidate.evaluate(
+                    "e => (e.labels?.[0]?.innerText || e.getAttribute('aria-label') "
+                    "|| e.name || '').toLowerCase()"
+                )
+            ) or ""
             if "cover" in label:
                 cover_input = candidate
             elif resume_input is None:
