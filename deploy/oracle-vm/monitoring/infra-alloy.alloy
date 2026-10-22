@@ -1,6 +1,8 @@
-// INFRA VM collector: host + container metrics and container logs, pushed
+// Collector for the servers that are not the APP VM (INFRA, and the
+// computers host 24gb1): host + container metrics and container logs, pushed
 // to the APP VM over HTTPS. Labels match the APP side (job="node",
-// job="cadvisor", instance="infra-vm") so the same dashboards show both.
+// job="cadvisor") so the same dashboard panels work; MONITOR_INSTANCE sets
+// instance= (computers-vm on 24gb1, infra-vm when unset).
 
 // ── Host metrics (node-exporter equivalent) ─────────────────────────────
 prometheus.exporter.unix "host" {
@@ -28,7 +30,7 @@ prometheus.scrape "cadvisor" {
 prometheus.relabel "infra" {
   rule {
     target_label = "instance"
-    replacement  = "infra-vm"
+    replacement  = coalesce(sys.env("MONITOR_INSTANCE"), "infra-vm")
   }
   forward_to = [prometheus.remote_write.app.receiver]
 }
@@ -66,13 +68,26 @@ discovery.relabel "containers" {
   }
   rule {
     target_label = "instance"
-    replacement  = "infra-vm"
+    replacement  = coalesce(sys.env("MONITOR_INSTANCE"), "infra-vm")
+  }
+}
+
+// Per-user browsers on 24gb1: they come and go all day (Alloy races their
+// removal), and their logs can carry the URLs users visit, which don't
+// belong in Loki. Supervisor, relay and egress logs are still collected.
+discovery.relabel "log_targets" {
+  targets = discovery.docker.containers.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/careercraft-sandbox-computer-u-.*"
+    action        = "drop"
   }
 }
 
 loki.source.docker "containers" {
   host          = "tcp://127.0.0.1:12375"
-  targets       = discovery.docker.containers.targets
+  targets       = discovery.relabel.log_targets.output
   relabel_rules = discovery.relabel.containers.rules
   forward_to    = [loki.process.levels.receiver]
 }
@@ -83,6 +98,12 @@ loki.process "levels" {
   stage.drop {
     older_than          = "160h"
     drop_counter_reason = "too_old"
+  }
+  // Alloy retries a removed container until the next discovery refresh
+  // (~1m). On 24gb1 every ended browser session does this.
+  stage.drop {
+    expression          = "error inspecting Docker container.*No such container"
+    drop_counter_reason = "removed_container"
   }
   stage.regex {
     expression = "(?i)\\b(?P<level>debug|info|warning|warn|error|critical|fatal)\\b"

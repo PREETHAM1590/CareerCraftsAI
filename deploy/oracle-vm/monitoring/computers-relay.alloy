@@ -1,0 +1,27 @@
+// Computers host only, loaded next to infra-alloy.alloy: the relay's
+// /health (active browser sessions and the SANDBOX_MAX_SESSIONS cap), which
+// the relay-health sidecar writes as a node textfile every 15s.
+
+prometheus.exporter.unix "relay" {
+  set_collectors = ["textfile"]
+  textfile {
+    directory = "/relay-health"
+  }
+}
+
+// Both unix exporters' targets carry job="integrations/unix", which wins over
+// job_name; without this the relay's up/scrape_* series collide with the
+// host's after the instance relabel.
+discovery.relabel "relay" {
+  targets = prometheus.exporter.unix.relay.targets
+  rule {
+    target_label = "job"
+    replacement  = "relay"
+  }
+}
+
+prometheus.scrape "relay" {
+  targets         = discovery.relabel.relay.output
+  scrape_interval = "15s"
+  forward_to      = [prometheus.relabel.infra.receiver]
+}

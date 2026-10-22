@@ -1,4 +1,4 @@
-"""Generate one Grafana dashboard per server (APP and INFRA), never combined.
+"""Generate one Grafana dashboard per server (APP, INFRA, COMPUTERS), never combined.
 
 Run from this directory: python gen_dashboards.py grafana/dashboards
 """
@@ -13,6 +13,13 @@ LOKI = {"type": "loki", "uid": "loki"}
 # no longer needs (panel refresh, dashboard closed). Match only that line, so
 # any other scheduler_processor.go error still shows.
 QUERY_CANCEL_NOISE = '!~ "caller=scheduler_processor[.]go:[0-9]+ .*code = Canceled"'
+# Alloy logs this when a container is removed between its discovery and its
+# inspect (deploys on app-vm). Match only that pairing, so other Alloy errors
+# still show.
+INSPECT_RACE_NOISE = (
+    '!~ "msg=\\"error inspecting Docker container\\".*No such container"'
+)
+ERROR_NOISE = f"{QUERY_CANCEL_NOISE} {INSPECT_RACE_NOISE}"
 PCT = [
     {"color": "green", "value": None},
     {"color": "orange", "value": 70},
@@ -346,7 +353,7 @@ def logs_section(d, i, name):
         [
             {
                 "expr": f'sum by (service) (count_over_time({{instance="{i}",service=~".+"}} '
-                f'| level=~"error|critical|fatal" {QUERY_CANCEL_NOISE} [5m]))',
+                f'| level=~"error|critical|fatal" {ERROR_NOISE} [5m]))',
                 "legendFormat": "{{service}}",
             }
         ],
@@ -357,7 +364,7 @@ def logs_section(d, i, name):
     d.y += 8
     d.logs(
         f"Recent errors on {name}",
-        f'{{instance="{i}",service=~".+"}} | level=~"error|critical|fatal" {QUERY_CANCEL_NOISE}',
+        f'{{instance="{i}",service=~".+"}} | level=~"error|critical|fatal" {ERROR_NOISE}',
         0,
         24,
     )
@@ -551,6 +558,64 @@ def app_extras(d):
     d.y += 8
 
 
+def computers_extras(d):
+    browsers = (
+        'count(container_memory_working_set_bytes{instance="computers-vm",'
+        'name=~"careercraft-sandbox-computer-u-.*"}) or vector(0)'
+    )
+    d.row("COMPUTERS: user browsers (gVisor) and relay")
+    d.stat("Running browsers", browsers, 0, 6)
+    d.stat(
+        "Browsers / cap",
+        f'({browsers}) / scalar(computers_relay_capacity_sessions{{instance="computers-vm"}})',
+        6,
+        6,
+        "percentunit",
+        steps=[
+            {"color": "green", "value": None},
+            {"color": "orange", "value": 0.75},
+            {"color": "red", "value": 1},
+        ],
+    )
+    # Allow for the 15s poll + 5s timeout and 15s scrape; expire a stopped poller.
+    d.stat(
+        "Relay up",
+        'max(computers_relay_up{instance="computers-vm",job="relay"} '
+        "and on(instance, job) (time() - node_textfile_mtime_seconds{"
+        'instance="computers-vm",job="relay",file="/relay-health/relay.prom"} < 60)) '
+        "or vector(0)",
+        12,
+        6,
+        steps=UP,
+    )
+    d.stat(
+        "Cap (SANDBOX_MAX_SESSIONS)",
+        'computers_relay_capacity_sessions{instance="computers-vm"}',
+        18,
+        6,
+    )
+    d.y += 4
+    d.ts(
+        "Browsers vs cap",
+        [
+            {"expr": browsers, "legendFormat": "browser containers"},
+            {
+                "expr": 'computers_relay_active_sessions{instance="computers-vm"}',
+                "legendFormat": "relay active sessions",
+            },
+            {
+                "expr": 'computers_relay_capacity_sessions{instance="computers-vm"}',
+                "legendFormat": "cap",
+            },
+        ],
+        0,
+        24,
+        desc="CPU is the limit: 4 cores saturate around 12 active browsers "
+        "(docs/reports/2026-10-22-computers-production.md).",
+    )
+    d.y += 8
+
+
 def dashboard(uid, title, d):
     return {
         "uid": uid,
@@ -576,6 +641,11 @@ infra = Dash()
 host_section(infra, "infra-vm", "INFRA")
 container_section(infra, "infra-vm", "INFRA")
 logs_section(infra, "infra-vm", "INFRA")
+computers = Dash()
+host_section(computers, "computers-vm", "COMPUTERS")
+computers_extras(computers)
+container_section(computers, "computers-vm", "COMPUTERS")
+logs_section(computers, "computers-vm", "COMPUTERS")
 for name, uid, title, d in [
     (
         "careercraft-app-server.json",
@@ -588,6 +658,12 @@ for name, uid, title, d in [
         "careercraft-infra",
         "CareerCraft · INFRA server (infra-vm: Nango, Ollama)",
         infra,
+    ),
+    (
+        "careercraft-computers-server.json",
+        "careercraft-computers",
+        "CareerCraft · COMPUTERS server (computers-vm)",
+        computers,
     ),
 ]:
     with open(os.path.join(out, name), "w", encoding="utf-8") as fh:
