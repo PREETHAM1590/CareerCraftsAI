@@ -32,7 +32,8 @@ groups:
       # browsing hits none, so a burst from one browser means a page probing the
       # internal network or cloud metadata, or a browser doing something it
       # shouldn't. Chromium's own push channel (mtalk.google.com:5228) is
-      # refused a few times per browser per session; that is not a signal.
+      # refused 1-4 times per browser per 10 minutes, far under the threshold,
+      # so it is counted rather than exempted (a page could abuse an exemption).
       - uid: computers-egress-blocked-spike
         title: "Computers: blocked-request spike"
         condition: C
@@ -45,8 +46,7 @@ groups:
               queryType: instant
               expr: >-
                 sum by (client) (count_over_time({instance="computers-vm",
-                container="careercraft-sandbox-egress-1"} |= "blocked="
-                != "dest=mtalk.google.com:5228" | logfmt [5m]))
+                container="careercraft-sandbox-egress-1"} |= "blocked=" | logfmt [5m]))
           - refId: B
             datasourceUid: __expr__
             model: { refId: B, type: reduce, expression: A, reducer: last }
