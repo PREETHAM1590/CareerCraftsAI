@@ -34,8 +34,9 @@ function computerCpuLimit() {
   const raw = process.env.COMPUTER_CPUS?.trim();
   if (!raw) return {};
   const cpus = Number(raw);
-  if (!(cpus > 0 && cpus <= 64))
-    throw new Error(\`COMPUTER_CPUS must be a number of cores between 0 and 64 (got \${JSON.stringify(raw)}).\`);
+  // 0.01 is Docker's minimum; anything that rounds to NanoCpus 0 would mean no cap.
+  if (!(cpus >= 0.01 && cpus <= 64))
+    throw new Error(\`COMPUTER_CPUS must be a number of cores from 0.01 to 64 (got \${JSON.stringify(raw)}).\`);
   return { NanoCpus: Math.round(cpus * 1e9) };
 }
 `;

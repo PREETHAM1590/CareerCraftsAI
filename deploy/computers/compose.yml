@@ -85,6 +85,11 @@ services:
       outbound: {}
     restart: unless-stopped
     mem_limit: 128m
+    # Refused requests are logged one line each; a browser hammering blocked
+    # addresses must not fill the disk.
+    logging:
+      driver: json-file
+      options: { max-size: 10m, max-file: '3' }
 networks:
   control: {}
   computers:

@@ -22,7 +22,7 @@ test('COMPUTER_CPUS caps each browser container', () => {
 });
 
 test('a bad COMPUTER_CPUS refuses to create the container', () => {
-  for (const bad of ['0', '-1', 'two', '65']) assert.throws(() => hostConfigWith(bad), /COMPUTER_CPUS/);
+  for (const bad of ['0', '-1', 'two', '65', '1e-10', '0.009']) assert.throws(() => hostConfigWith(bad), /COMPUTER_CPUS/);
 });
 
 test('a changed upstream contract fails the build', () => {
