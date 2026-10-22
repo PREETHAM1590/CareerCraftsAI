@@ -21,6 +21,10 @@ services:
     # rate limiter, SSE bus, run admission and Temporal all live in
     # Redis/Postgres, so workers share state; caches are per-process.
     command: uvicorn app.main:app --host 127.0.0.1 --port 18100 --workers 2
+    # The chat copilot calls its model through this same process's gateway;
+    # the default (localhost:8000) is not where it listens.
+    environment:
+      LLM_GATEWAY_URL: http://127.0.0.1:18100/llm-gateway/v1
     init: true
     # Uploaded resumes/documents. Supabase Storage is unreachable from this VM
     # for the same reason the database was, so files live on local disk.
