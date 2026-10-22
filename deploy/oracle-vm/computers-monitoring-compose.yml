@@ -1,0 +1,58 @@
+# Computers host (24gb1) collector: the INFRA collector as-is, plus the
+# relay's /health. Pushes out over HTTPS like INFRA; nothing listens off
+# loopback, so the host firewall stays SSH-only.
+#
+# On 24gb1, with this file, infra-monitoring-compose.yml,
+# monitoring/infra-alloy.alloy and monitoring/computers-relay.alloy copied to
+# ~/careercraft-monitoring/:
+#   sudo docker compose -p monitoring -f infra-monitoring-compose.yml \
+#     -f computers-monitoring-compose.yml up -d
+# Credentials: /opt/careercraft-secrets/monitoring.env
+#   INGEST_USER=computers
+#   INGEST_PASSWORD=...
+#   MONITOR_INSTANCE=computers-vm
+# The relay token is read from /opt/careercraft-secrets/computers.env.
+
+services:
+  alloy:
+    command:
+      - run
+      - --server.http.listen-addr=127.0.0.1:19320
+      - --storage.path=/var/lib/alloy
+      - /etc/alloy # every .alloy file in it
+    volumes:
+      - ./monitoring/infra-alloy.alloy:/etc/alloy/config.alloy:ro
+      - ./monitoring/computers-relay.alloy:/etc/alloy/relay.alloy:ro
+      - relay-health:/relay-health:ro
+
+  # Polls the relay's /health and writes it as Prometheus text for Alloy's
+  # textfile collector. Mounts the secrets file instead of taking the token
+  # as an env var, so it never shows in docker inspect.
+  relay-health:
+    image: busybox:1.37.0
+    network_mode: host
+    volumes:
+      - /opt/careercraft-secrets/computers.env:/computers.env:ro
+      - relay-health:/out
+    command:
+      - sh
+      - -c
+      - |
+        token=$$(sed -n 's/^SANDBOX_RELAY_TOKEN=//p' /computers.env)
+        while :; do
+          body=$$(wget -qO- -T 5 --header "Authorization: Bearer $$token" http://127.0.0.1:14312/health)
+          active=$$(echo "$$body" | sed -nE 's/.*"active": *([0-9]+).*/\1/p')
+          cap=$$(echo "$$body" | sed -nE 's/.*"capacity": *([0-9]+).*/\1/p')
+          if [ -n "$$active" ] && [ -n "$$cap" ]; then
+            printf 'computers_relay_up 1\ncomputers_relay_active_sessions %s\ncomputers_relay_capacity_sessions %s\n' "$$active" "$$cap" > /out/relay.prom.tmp
+          else
+            echo 'computers_relay_up 0' > /out/relay.prom.tmp
+          fi
+          mv /out/relay.prom.tmp /out/relay.prom
+          sleep 15
+        done
+    mem_limit: 16m
+    restart: unless-stopped
+
+volumes:
+  relay-health:

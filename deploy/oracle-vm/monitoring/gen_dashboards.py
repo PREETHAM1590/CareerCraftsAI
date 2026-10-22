@@ -1,4 +1,4 @@
-"""Generate one Grafana dashboard per server (APP and INFRA), never combined.
+"""Generate one Grafana dashboard per server (APP, INFRA, COMPUTERS), never combined.
 
 Run from this directory: python gen_dashboards.py grafana/dashboards
 """
@@ -551,6 +551,60 @@ def app_extras(d):
     d.y += 8
 
 
+def computers_extras(d):
+    browsers = (
+        'count(container_memory_working_set_bytes{instance="computers-vm",'
+        'name=~"careercraft-sandbox-computer-u-.*"}) or vector(0)'
+    )
+    d.row("COMPUTERS: user browsers (gVisor) and relay")
+    d.stat("Running browsers", browsers, 0, 6)
+    d.stat(
+        "Browsers / cap",
+        f'({browsers}) / scalar(computers_relay_capacity_sessions{{instance="computers-vm"}})',
+        6,
+        6,
+        "percentunit",
+        steps=[
+            {"color": "green", "value": None},
+            {"color": "orange", "value": 0.75},
+            {"color": "red", "value": 1},
+        ],
+    )
+    d.stat(
+        "Relay up",
+        'max(computers_relay_up{instance="computers-vm"}) or vector(0)',
+        12,
+        6,
+        steps=UP,
+    )
+    d.stat(
+        "Cap (SANDBOX_MAX_SESSIONS)",
+        'computers_relay_capacity_sessions{instance="computers-vm"}',
+        18,
+        6,
+    )
+    d.y += 4
+    d.ts(
+        "Browsers vs cap",
+        [
+            {"expr": browsers, "legendFormat": "browser containers"},
+            {
+                "expr": 'computers_relay_active_sessions{instance="computers-vm"}',
+                "legendFormat": "relay active sessions",
+            },
+            {
+                "expr": 'computers_relay_capacity_sessions{instance="computers-vm"}',
+                "legendFormat": "cap",
+            },
+        ],
+        0,
+        24,
+        desc="CPU is the limit: 4 cores saturate around 12 active browsers "
+        "(docs/reports/2026-10-22-computers-production.md).",
+    )
+    d.y += 8
+
+
 def dashboard(uid, title, d):
     return {
         "uid": uid,
@@ -576,6 +630,11 @@ infra = Dash()
 host_section(infra, "infra-vm", "INFRA")
 container_section(infra, "infra-vm", "INFRA")
 logs_section(infra, "infra-vm", "INFRA")
+computers = Dash()
+host_section(computers, "computers-vm", "COMPUTERS")
+computers_extras(computers)
+container_section(computers, "computers-vm", "COMPUTERS")
+logs_section(computers, "computers-vm", "COMPUTERS")
 for name, uid, title, d in [
     (
         "careercraft-app-server.json",
@@ -588,6 +647,12 @@ for name, uid, title, d in [
         "careercraft-infra",
         "CareerCraft · INFRA server (infra-vm: Nango, Ollama)",
         infra,
+    ),
+    (
+        "careercraft-computers-server.json",
+        "careercraft-computers",
+        "CareerCraft · COMPUTERS server (computers-vm)",
+        computers,
     ),
 ]:
     with open(os.path.join(out, name), "w", encoding="utf-8") as fh:
