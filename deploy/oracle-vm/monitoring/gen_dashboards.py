@@ -570,9 +570,13 @@ def computers_extras(d):
             {"color": "red", "value": 1},
         ],
     )
+    # Allow for the 15s poll + 5s timeout and 15s scrape; expire a stopped poller.
     d.stat(
         "Relay up",
-        'max(computers_relay_up{instance="computers-vm"}) or vector(0)',
+        'max(computers_relay_up{instance="computers-vm",job="relay"} '
+        'and on(instance, job) (time() - node_textfile_mtime_seconds{'
+        'instance="computers-vm",job="relay",file="/relay-health/relay.prom"} < 60)) '
+        'or vector(0)',
         12,
         6,
         steps=UP,
