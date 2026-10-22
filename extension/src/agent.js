@@ -362,8 +362,9 @@ export function agentPage(op, p) {
     // extension stays the indicator a page cannot touch.
     if (!window.__ccAgentBanner) {
       const host = document.createElement("div");
-      host.id = "careercraft-agent-banner"; // for tests; existence is never read from the page
-      host.style.cssText = "all:initial!important;display:block!important;position:fixed!important;top:8px!important;left:50%!important;transform:translateX(-50%)!important;z-index:2147483647!important;visibility:visible!important;opacity:1!important;";
+      const style = "all:initial!important;display:block!important;position:fixed!important;top:8px!important;left:50%!important;transform:translateX(-50%)!important;z-index:2147483647!important;visibility:visible!important;opacity:1!important;";
+      host.style.cssText = style;
+      const applied = host.style.cssText; // as the browser serialises it
       const shadow = host.attachShadow({ mode: "closed" });
       shadow.innerHTML = `<style>
         .b{display:flex;gap:12px;align-items:center;padding:8px 10px 8px 14px;border-radius:999px;
@@ -377,6 +378,14 @@ export function agentPage(op, p) {
         chrome.runtime.sendMessage({ type: "CC_AGENT_STOP" });
       });
       window.__ccAgentBanner = host;
+      // No page-visible id. If the page removes the banner or restyles it, put
+      // it straight back (the Chrome tab group is the indicator a page can't touch).
+      const restore = () => {
+        if (host.style.cssText !== applied) host.style.cssText = style;
+        if (!host.isConnected) (document.body || document.documentElement).appendChild(host);
+      };
+      new MutationObserver(restore).observe(host, { attributes: true });
+      new MutationObserver(restore).observe(document.documentElement, { childList: true, subtree: true });
     }
     const host = window.__ccAgentBanner;
     if (!host.isConnected) {

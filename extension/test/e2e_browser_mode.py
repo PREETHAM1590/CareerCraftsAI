@@ -433,12 +433,27 @@ async def main():
                 await asyncio.sleep(1.5)  # let the click's navigation settle
                 page = next((p for p in context.pages if "greenhouse" in p.url), None)
                 banner = page and await page.evaluate(
-                    "!!document.getElementById('careercraft-agent-banner')"
+                    "[...document.body.children].some(e => e.style.zIndex === '2147483647' && !e.shadowRoot)"
                 )
                 expect(
                     "banner visible in the agent tab",
                     bool(banner),
                     f"{page and page.url}",
+                )
+                # A page that removes or hides the banner gets it straight back.
+                restored = page and await page.evaluate("""async () => {
+                      const find = () => [...document.body.children].find(
+                        e => e.style.zIndex === '2147483647' && !e.shadowRoot);
+                      const b = find();
+                      b.style.display = 'none';
+                      await new Promise(r => setTimeout(r, 50));
+                      const shown = b.style.display !== 'none';
+                      b.remove();
+                      await new Promise(r => setTimeout(r, 50));
+                      return shown && !!find();
+                    }""")
+                expect(
+                    "banner restored after page removes or hides it", bool(restored), ""
                 )
 
                 out, exc, ms = await timed(cs.dispatch(user_id, "stop"))

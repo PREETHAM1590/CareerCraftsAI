@@ -15,6 +15,9 @@ for (const host of ["172.20.1.5", "100.64.0.1", "[::1]", "2130706433", "intranet
 }
 assert.equal(jobUrl("https://172.32.0.1/form").hostname, "172.32.0.1"); // public range
 assert.equal(jobUrl("https://198.20.0.1/form").hostname, "198.20.0.1");
+for (const host of ["localhost.example.com", "10.example.com", "127.jobs.example", "jobs.local.example.com"]) {
+  assert.equal(jobUrl(`https://${host}/form`).hostname, host); // public names, not private addresses
+}
 assert.throws(() => appOrigin("https://user:password@app.example"));
 assert.equal(appOrigin("http://localhost:3000"), "http://localhost:3000");
 assert.equal(snapshotKey({url: "x", fields: [{id: "a", value: "b"}]}), snapshotKey({fields: [{value: "b", id: "a"}], url: "x"}));
