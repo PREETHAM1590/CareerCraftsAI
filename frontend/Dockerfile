@@ -18,5 +18,7 @@ ENV NODE_ENV production
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
+# next/image writes its optimizer cache here; the node user must own it.
+RUN mkdir -p .next/cache && chown -R node:node .next
 USER node
 CMD ["node", "server.js"]

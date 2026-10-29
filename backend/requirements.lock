@@ -102,7 +102,7 @@ distro==1.9.0
     #   google-genai
     #   langsmith
     #   posthog
-dnspython==2.8.0
+dnspython==2.9.0
     # via
     #   -r requirements.txt
     #   email-validator
@@ -311,7 +311,7 @@ langgraph-checkpoint==4.2.0
     #   langgraph-prebuilt
 langgraph-prebuilt==1.1.0
     # via langgraph
-langgraph-sdk==0.4.5
+langgraph-sdk==0.4.6
     # via
     #   -c constraints.txt
     #   langgraph
@@ -568,7 +568,7 @@ rpds-py==2026.6.3
     #   referencing
 ruff==0.16.9
     # via -r requirements.txt
-setuptools==84.0.0
+setuptools==84.2.1
     # via -r requirements.txt
 shellingham==1.5.4
     # via typer

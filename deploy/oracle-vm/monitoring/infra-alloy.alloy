@@ -28,6 +28,13 @@ prometheus.scrape "cadvisor" {
 }
 
 prometheus.relabel "infra" {
+  // cAdvisor emits NaN staleness samples for this metric at timestamps that
+  // collide with real ones; Prometheus rejects the whole batch (HTTP 400).
+  rule {
+    source_labels = ["__name__"]
+    regex         = "container_creation_time_seconds"
+    action        = "drop"
+  }
   rule {
     target_label = "instance"
     replacement  = coalesce(sys.env("MONITOR_INSTANCE"), "infra-vm")
@@ -95,8 +102,10 @@ loki.source.docker "containers" {
 loki.process "levels" {
   // Idle containers' last lines can be weeks old; Docker re-sends them when
   // Alloy reconnects and Loki rejects anything past its 1-week window.
+  // Loki also rejects entries older than ~1h behind a stream's newest entry
+  // ("entry too far behind"), so the cutoff must sit inside that window.
   stage.drop {
-    older_than          = "160h"
+    older_than          = "50m"
     drop_counter_reason = "too_old"
   }
   // Alloy retries a removed container until the next discovery refresh
