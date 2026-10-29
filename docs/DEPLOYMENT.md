@@ -36,7 +36,7 @@ APP VM  "chola-public", 10.0.0.183  (Oracle "Always Free" ARM,
         19232 (temporal-postgres), 19280 (UI). Nothing leaves the box, so
         no firewall / Security List port is needed for Temporal.
 
-INFRA VM  "instance-20260921-0007", 10.0.0.182
+INFRA VM  "instance-20261029-1945", 10.0.0.35 (public 130.210.16.175)
 ├── nango-isolated  (deploy/oracle-vm/nango-compose.yml)
 │   └── self-hosted Nango — Gmail/Drive OAuth broker, :191xx range
 └── ollama-isolated (deploy/oracle-vm/ollama-compose.yml)
@@ -240,7 +240,7 @@ Ollama has no authentication.
 
    ```
    EMBEDDING_PROVIDER=ollama
-   EMBEDDING_OLLAMA_URL=http://10.0.0.182:11434
+   EMBEDDING_OLLAMA_URL=http://10.0.0.35:11434
    ```
 
 4. Recreate the services that read it:
@@ -250,12 +250,44 @@ Ollama has no authentication.
    ```
 
 5. Check from the main VM:
-   `curl -s http://10.0.0.182:11434/api/tags` should list `qwen3-embedding:0.6b`.
+   `curl -s http://10.0.0.35:11434/api/tags` should list `qwen3-embedding:0.6b`.
 
 After any embedding-model or dimension change, existing documents stay in
 their old collection (collections are named `{user}_{doc}_{provider}_{dim}d`)
 and are no longer searched. **Users must re-upload their documents** to
 re-index them.
+
+### Nango (OAuth broker, INFRA VM)
+
+Self-hosted Nango (`deploy/oracle-vm/nango-compose.yml`) holds users' Gmail and
+Drive tokens. Everything listens on loopback (server 19103, Connect UI 19109,
+Postgres 19132, Redis 19179); host nginx + certbot serve
+`https://nango.careercraftsai.me` and `https://nango-connect.careercraftsai.me`.
+
+1. `nango-server` is amd64-only and this host is ARM: run
+   `docker run --privileged --rm tonistiigi/binfmt --install amd64` once.
+   Under emulation it takes **2–4 minutes** to answer `/health` after every
+   restart; a 502 in that window is normal.
+2. `/opt/careercraft-secrets/nango.env` sets `NANGO_ENCRYPTION_KEY` (never
+   change it once set), the DB/Redis passwords, `NANGO_SERVER_URL` /
+   `NANGO_PUBLIC_SERVER_URL` (the `nango.` host), `NANGO_PUBLIC_CONNECT_URL`
+   (the `nango-connect.` host), dashboard basic auth
+   (`FLAG_AUTH_ENABLED=false`, `NANGO_DASHBOARD_USERNAME/PASSWORD`) and
+   `NANGO_SECRET_KEY_PROD`, the prod API key.
+3. Webhooks are signed with a **separate** per-environment signing key, not
+   the API key. Read it on the box with
+   `curl -u admin:<dashboard-password> 'http://127.0.0.1:19103/api/v1/environments/current?env=prod'`
+   (`environmentAndAccount.webhook_signing_key`). On the main VM,
+   `backend.env` gets `NANGO_SECRET_KEY` = the API key and
+   `NANGO_WEBHOOK_SECRET` = the signing key.
+4. In the prod environment, point the webhook URL at
+   `https://api.careercraftsai.me/api/v1/integrations/webhooks/nango` with
+   auth-creation, refresh-error and connection-deletion events on. Create the
+   `google-mail` (`gmail.modify`, `gmail.send`) and `google-drive`
+   (`drive.readonly`) integrations with the Google OAuth client, whose
+   redirect URI must be `https://nango.careercraftsai.me/oauth/callback`.
+5. Rebuilding without a database dump loses every user connection: users
+   must reconnect Gmail/Drive.
 
 ---
 

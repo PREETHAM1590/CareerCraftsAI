@@ -9,7 +9,7 @@
 #     ollama pull qwen3-embedding:0.6b
 # The main VM's backend.env then points at it:
 #   EMBEDDING_PROVIDER=ollama
-#   EMBEDDING_OLLAMA_URL=http://10.0.0.182:11434
+#   EMBEDDING_OLLAMA_URL=http://10.0.0.35:11434
 #
 # Ollama has NO authentication. OLLAMA_HOST pins it to this box's private
 # VCN address, so it must never be 0.0.0.0 (under network_mode: host that
@@ -24,7 +24,7 @@ services:
     environment:
       # Private IP only (same address as TEMPORAL_BROADCAST_ADDRESS in
       # temporal-compose.yml). Never 0.0.0.0.
-      OLLAMA_HOST: 10.0.0.182:11434
+      OLLAMA_HOST: 10.0.0.35:11434
       # Keep the model resident: embeddings are small but reloading adds
       # seconds to the first query after idle.
       OLLAMA_KEEP_ALIVE: "-1"
