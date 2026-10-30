@@ -238,11 +238,14 @@ async def test_resolved_search_query_still_matches_plain_titles(monkeypatch):
     db = MagicMock()
     db.execute = AsyncMock(return_value=result)
     user = User(id=uuid.uuid4(), email="audit@example.invalid", headline=None)
-    job = {"title": "Software Engineer I", "location": "Remote", "remote": "remote"}
-
-    for typed in ("", "Software Engineer"):
+    cases = (
+        ("", "Software Engineer", "Software Engineer I"),
+        ("Data Scientist", "Data Scientist", "Data Scientist II"),
+    )
+    for typed, expected, title in cases:
         query, location, *_ = await jobs._resolve_search_context(
             db, user, jobs.JobSearchRequest(search_query=typed)
         )
-        assert query == "Software Engineer"
+        assert query == expected
+        job = {"title": title, "location": "Remote", "remote": "remote"}
         assert matches_query(job, {"search_query": query, "location": location})

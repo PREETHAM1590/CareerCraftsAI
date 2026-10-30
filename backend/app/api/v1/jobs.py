@@ -500,7 +500,7 @@ async def get_job_search_profile(
         inferred_years_experience=inferred_years,
         inferred_experience_level=level,
         saved_preferences=saved_preferences,
-        search_query_preview=role,
+        search_query_preview=role[:200],
         location_preview=location,
         work_mode_preview=work_mode,
         missing_fields=missing_fields,
