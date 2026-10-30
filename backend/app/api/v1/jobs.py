@@ -276,32 +276,6 @@ def _experience_level_from_years(years: int | None) -> str | None:
     return "lead"
 
 
-def _experience_level_label(level: str | None) -> str:
-    normalized = (level or "").lower()
-    labels = {
-        "fresher": "Fresher",
-        "entry": "Entry-level",
-        "entry-level": "Entry-level",
-        "junior": "Junior",
-        "mid": "Mid-level",
-        "senior": "Senior",
-        "lead": "Lead",
-        "principal": "Principal",
-    }
-    return labels.get(normalized, "")
-
-
-def _experience_prefix(level: str | None) -> str:
-    normalized = (level or "").lower()
-    if normalized in {"fresher", "entry", "entry-level"}:
-        return "Fresher Entry-level"
-    if normalized == "junior":
-        return "Junior"
-    if normalized in {"senior", "lead", "principal"}:
-        return normalized.capitalize()
-    return _experience_level_label(normalized)
-
-
 def _derive_role_from_resume(resume_text: str | None) -> str:
     text = (resume_text or "").lower()
     for role in ROLE_HINTS:
@@ -330,22 +304,6 @@ def _derive_roles_from_resume(resume_text: str | None, limit: int = 5) -> list[s
         if skills & required and label not in roles:
             roles.append(label)
     return roles[:limit]
-
-
-def _build_search_query(
-    role: str,
-    experience_level: str | None,
-    years_experience: int | None,
-    skills: list[str] | None = None,
-) -> str:
-    prefix = _experience_prefix(experience_level)
-    query = f"{prefix} {role}".strip() if prefix else role
-    if years_experience == 0 and "fresher" not in query.lower():
-        query = f"Fresher {query}"
-    skill_terms = [s for s in (skills or []) if s.lower() not in query.lower()][:2]
-    if skill_terms:
-        query = f"{query} {' '.join(skill_terms)}"
-    return query.strip()[:200]
 
 
 async def _resolve_search_context(
@@ -400,7 +358,11 @@ async def _resolve_search_context(
         or (prefs.experience_level if prefs else None)
         or _experience_level_from_years(years_experience)
     )
-    search_query = _build_search_query(role, experience_level, years_experience, skills)
+    # The role alone: every word of the query must appear in a job title
+    # (job_catalog._role_patterns), so adding the experience level or resume
+    # skills here ("Fresher Entry-level Software Engineer Python React")
+    # matched no job at all. Resume skills still steer ranking (job_matching).
+    search_query = role[:200]
 
     requested_location = payload.location.strip()
     location = requested_location or "Remote"
@@ -538,7 +500,7 @@ async def get_job_search_profile(
         inferred_years_experience=inferred_years,
         inferred_experience_level=level,
         saved_preferences=saved_preferences,
-        search_query_preview=_build_search_query(role, level, years, skills),
+        search_query_preview=role[:200],
         location_preview=location,
         work_mode_preview=work_mode,
         missing_fields=missing_fields,

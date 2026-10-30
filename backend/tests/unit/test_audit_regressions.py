@@ -207,3 +207,45 @@ async def test_generated_letter_cleanup_has_no_binary_path():
     db = AsyncMock()
     await enqueue_document_cleanup(db, doc)
     assert db.execute.await_args.args[1]["storage_path"] == ""
+
+
+@pytest.mark.asyncio
+async def test_resolved_search_query_still_matches_plain_titles(monkeypatch):
+    # Regression: the query used to grow into "Fresher Entry-level Software
+    # Engineer Python React", and every word must be in a job title, so a
+    # fresher with resume skills found 0 jobs on every search.
+    from types import SimpleNamespace
+
+    from app.api.v1 import jobs
+    from app.models.db import User
+    from app.services import search_basis
+    from app.services.job_catalog import matches_query
+
+    resume = SimpleNamespace(id=uuid.uuid4(), raw_text="Projects in Python, React and FastAPI.")
+    monkeypatch.setattr(search_basis, "resolve_basis", AsyncMock(return_value=(resume, None)))
+    prefs = SimpleNamespace(
+        id=uuid.uuid4(),
+        target_roles=[],
+        current_title=None,
+        experience_level="fresher",
+        years_experience=0,
+        preferred_locations=[],
+        work_mode="remote",
+        job_type="full-time",
+    )
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = prefs
+    db = MagicMock()
+    db.execute = AsyncMock(return_value=result)
+    user = User(id=uuid.uuid4(), email="audit@example.invalid", headline=None)
+    cases = (
+        ("", "Software Engineer", "Software Engineer I"),
+        ("Data Scientist", "Data Scientist", "Data Scientist II"),
+    )
+    for typed, expected, title in cases:
+        query, location, *_ = await jobs._resolve_search_context(
+            db, user, jobs.JobSearchRequest(search_query=typed)
+        )
+        assert query == expected
+        job = {"title": title, "location": "Remote", "remote": "remote"}
+        assert matches_query(job, {"search_query": query, "location": location})
