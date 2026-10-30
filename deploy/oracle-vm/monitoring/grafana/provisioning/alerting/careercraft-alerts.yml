@@ -77,7 +77,7 @@ groups:
     folder: CareerCraft
     interval: 1m
     rules:
-      # cAdvisor stops exporting a container once it is gone, so the 24h
+      # cAdvisor stops exporting a container once it is gone, so the 7d
       # max_over_time keeps its last-seen timestamp around long enough to alert
       # on it. A whole VM going dark (Alloy stops pushing) trips every one of its
       # containers at once. sandbox-tunnel is left out until the COMPUTERS server
@@ -93,7 +93,7 @@ groups:
               refId: A
               instant: true
               expr: >-
-                time() - max by (instance, name) (max_over_time(container_last_seen{name=~"careercraft-isolated-(backend|frontend|temporal-worker|notification-worker|postgres|redis|gateway)-1|temporal-isolated-temporal(-postgres)?-1|nango-isolated-nango-(server|db|redis)-1|ollama-isolated-ollama-1"}[24h]))
+                time() - max by (instance, name) (max_over_time(container_last_seen{name=~"careercraft-isolated-(backend|frontend|temporal-worker|notification-worker|postgres|redis|gateway)-1|temporal-isolated-temporal(-postgres)?-1|nango-isolated-nango-(server|db|redis)-1|ollama-isolated-ollama-1"}[7d]))
           - refId: B
             datasourceUid: __expr__
             model: { refId: B, type: reduce, expression: A, reducer: last }
