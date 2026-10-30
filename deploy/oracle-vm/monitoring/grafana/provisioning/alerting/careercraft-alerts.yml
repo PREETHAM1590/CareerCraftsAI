@@ -71,3 +71,85 @@ groups:
             {{ index .Values "B" }} times by the egress proxy in 5 minutes (private network,
             cloud metadata or a non-web port). Check the egress logs on the
             COMPUTERS dashboard; stop that user's computer if it continues.
+
+  - orgId: 1
+    name: core-services
+    folder: CareerCraft
+    interval: 1m
+    rules:
+      # cAdvisor stops exporting a container once it is gone, so the 24h
+      # max_over_time keeps its last-seen timestamp around long enough to alert
+      # on it. A whole VM going dark (Alloy stops pushing) trips every one of its
+      # containers at once. sandbox-tunnel is left out until the COMPUTERS server
+      # is rebuilt.
+      - uid: core-container-down
+        title: "Core service down"
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: >-
+                time() - max by (instance, name) (max_over_time(container_last_seen{name=~"careercraft-isolated-(backend|frontend|temporal-worker|notification-worker|postgres|redis|gateway)-1|temporal-isolated-temporal(-postgres)?-1|nango-isolated-nango-(server|db|redis)-1|ollama-isolated-ollama-1"}[24h]))
+          - refId: B
+            datasourceUid: __expr__
+            model: { refId: B, type: reduce, expression: A, reducer: last }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { type: gt, params: [180] }
+        noDataState: Alerting
+        execErrState: Error
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: '{{ index .Labels "name" }} on {{ index .Labels "instance" }} is down'
+          description: >-
+            {{ index .Labels "name" }} has not been seen running on {{ index .Labels "instance" }}
+            for {{ index .Values "B" }} seconds. If every container on that VM fired together,
+            the VM or its Alloy agent is down. Check `docker ps` there.
+
+      # A container stuck in a crash loop stays "seen", so count restarts too.
+      # cAdvisor starts a new series on every restart (changes() stays 0), so
+      # count the distinct series in the window; a deploy's recreate adds one.
+      - uid: core-container-restarting
+        title: "Core service restart loop"
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: >-
+                count by (instance, name) (count_over_time(container_start_time_seconds{name=~"careercraft-isolated-(backend|frontend|temporal-worker|notification-worker|postgres|redis|gateway)-1|temporal-isolated-temporal(-postgres)?-1|nango-isolated-nango-(server|db|redis)-1|ollama-isolated-ollama-1"}[15m])) - 1
+          - refId: B
+            datasourceUid: __expr__
+            model: { refId: B, type: reduce, expression: A, reducer: last }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { type: gt, params: [2] }
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        labels:
+          severity: critical
+        annotations:
+          summary: '{{ index .Labels "name" }} on {{ index .Labels "instance" }} restarted {{ index .Values "B" }} times in 15 minutes'
+          description: >-
+            {{ index .Labels "name" }} keeps restarting. Check `docker logs` for it on
+            {{ index .Labels "instance" }}.
