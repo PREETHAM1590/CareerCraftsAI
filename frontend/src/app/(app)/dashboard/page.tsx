@@ -4,9 +4,7 @@ import Link from "next/link";
 import { useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "motion/react";
-import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import axios from "axios";
 import {
   ArrowUpRight,
   BellRinging,
@@ -36,7 +34,6 @@ import {
   EmptyPanel,
   Hairline,
   IconButton,
-  IslandButton,
   IslandLink,
   PageHero,
   PanelTitle,
@@ -54,7 +51,7 @@ import {
 } from "@/components/vanguard";
 import { apiClient, getApiErrorMessage } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { useAgentStore, usePollMs } from "@/store/agentStore";
+import { usePollMs } from "@/store/agentStore";
 
 interface AgentResults {
   applications: number;
@@ -104,9 +101,10 @@ interface PendingApproval {
   output: { type?: string; subject?: string; body?: string } | null;
 }
 
-/** Quick-action cards: primary Search Jobs triggers agent; others navigate to dedicated pages. */
+/** Quick-action cards: each opens its dedicated page. Search Jobs goes to /jobs, whose search
+ *  resolves the role from preferences and the resume (an empty agent run has no role to search). */
 const quickActions = [
-  { label: "Search Jobs", icon: MagnifyingGlass, taskType: "job_search", ctx: { query: "", location: "Remote" }, description: "Scan the boards and score every match." },
+  { label: "Search Jobs", icon: MagnifyingGlass, taskType: "job_search", ctx: {}, description: "Scan the boards and score every match.", href: "/jobs" },
   { label: "Optimize Resume", icon: FileText, taskType: "resume_optimize", ctx: {}, description: "Tailor to a role and rescore it for ATS.", href: "/resume" },
   { label: "Mock Interview", icon: Microphone, taskType: "interview_coach", ctx: { role: "Software Engineer" }, description: "Practice answers with scored feedback.", href: "/interview" },
   { label: "Research Company", icon: Buildings, taskType: "company_research", ctx: {}, description: "Culture, news and interview patterns.", href: "/company" },
@@ -256,10 +254,6 @@ function ValueSkeleton() {
 
 export default function DashboardPage() {
   const qc = useQueryClient();
-  const router = useRouter();
-  const initRun = useAgentStore((s) => s.initRun);
-  const setActiveRun = useAgentStore((s) => s.setActiveRun);
-  const [launching, setLaunching] = useState<string | null>(null);
   const [dismissedKeywordGaps, setDismissedKeywordGaps] = useState<string | null>(null);
 
   const { data: agentResults } = useQuery<AgentResults>({
@@ -314,25 +308,6 @@ export default function DashboardPage() {
       };
     },
   });
-
-  const triggerAgent = async (taskType: string, ctx: Record<string, unknown>) => {
-    if (launching) return;
-    setLaunching(taskType);
-    try {
-      const { data } = await apiClient.post("/agents/run", { task_type: taskType, context: ctx });
-      const runId = (data as { run_id: string }).run_id;
-      initRun(runId);
-      setActiveRun(runId);
-      router.push("/agents");
-    } catch (err) {
-      // 429s are already surfaced once by the api client interceptor.
-      if (!(axios.isAxiosError(err) && err.response?.status === 429)) {
-        toast.error(getApiErrorMessage(err, "Couldn't start the agent. Try again."));
-      }
-    } finally {
-      setLaunching(null);
-    }
-  };
 
   const decideApproval = async (runId: string, approved: boolean) => {
     try {
@@ -449,17 +424,9 @@ export default function DashboardPage() {
         }
         actions={
           <>
-            <IslandButton
-              size="lg"
-              tone="primary"
-              trailing
-              icon={<MagnifyingGlass size={18} weight="light" />}
-              disabled={launching !== null}
-              aria-busy={launching === primaryAction.taskType}
-              onClick={() => triggerAgent(primaryAction.taskType, { ...primaryAction.ctx })}
-            >
-              {launching === primaryAction.taskType ? "Starting…" : primaryAction.label}
-            </IslandButton>
+            <IslandLink href="/jobs" size="lg" tone="primary" trailing icon={<MagnifyingGlass size={18} weight="light" />}>
+              {primaryAction.label}
+            </IslandLink>
             <IslandLink href="/applications" size="lg" tone="quiet" icon={<Kanban size={18} weight="light" />}>
               View pipeline
             </IslandLink>
@@ -570,10 +537,7 @@ export default function DashboardPage() {
                       label={action.label}
                       description={action.description}
                       icon={<action.icon size={18} weight="light" />}
-                      href={"href" in action ? action.href : undefined}
-                      busy={launching === action.taskType}
-                      disabled={launching !== null}
-                      onClick={!("href" in action) ? () => triggerAgent(action.taskType, { ...action.ctx }) : undefined}
+                      href={action.href}
                     />
                   ))}
                 </motion.ul>
