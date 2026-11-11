@@ -43,6 +43,7 @@ import {
   type StatusTone,
 } from "@/components/vanguard";
 import { APP_STAGES, ApplyControls, STAGE_LABELS, STAGE_TONE, type ApplicationItem, type AppStage } from "./ApplicationList";
+import { SubmissionEvidence, type Submission } from "./SubmissionEvidence";
 
 type AgentRun = {
   id: string;
@@ -58,6 +59,8 @@ type Props = {
   onClose: () => void;
   onStageChange: (stage: AppStage) => void;
   activityRuns: AgentRun[];
+  /** Who approved the browser submission and with which answers, if any. */
+  submission?: Submission | null;
 };
 
 const AI_SUGGESTIONS: Partial<Record<AppStage, { label: string; copy: string; href: string }>> = {
@@ -105,7 +108,7 @@ function runTone(status: string): StatusTone {
 
 type Fact = { key: string; label: string; icon: ReactNode; value: ReactNode };
 
-export function ApplicationDrawer({ application, open, onClose, onStageChange, activityRuns }: Props) {
+export function ApplicationDrawer({ application, open, onClose, onStageChange, activityRuns, submission }: Props) {
   const router = useRouter();
   const reduce = useReducedMotion();
   // Keep the last shown application so the drawer can finish its exit
@@ -168,6 +171,7 @@ export function ApplicationDrawer({ application, open, onClose, onStageChange, a
                   onCustomize={customizeResume}
                   customizing={customizing}
                   activityRuns={activityRuns}
+                  submission={submission ?? null}
                 />
               </motion.div>
             </Dialog.Content>
@@ -186,6 +190,7 @@ function DrawerBody({
   onCustomize,
   customizing,
   activityRuns,
+  submission,
 }: {
   app: ApplicationItem;
   reduce: boolean;
@@ -194,6 +199,7 @@ function DrawerBody({
   onCustomize: () => void;
   customizing: boolean;
   activityRuns: AgentRun[];
+  submission: Submission | null;
 }) {
   const source = safeSource(app.jobUrl);
   const suggestion = AI_SUGGESTIONS[app.stage];
@@ -408,6 +414,12 @@ function DrawerBody({
               </IslandLink>
             </motion.section>
           )}
+
+          {submission ? (
+            <motion.div {...item}>
+              <SubmissionEvidence applicationId={app.id} submission={submission} />
+            </motion.div>
+          ) : null}
 
           <motion.section {...item} className="space-y-4 pb-2">
             <PanelTitle

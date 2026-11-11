@@ -119,12 +119,6 @@ def _adapter_jobspy(query: str, location: str, max_results: int) -> list[dict]:
     )
 
 
-def _adapter_ats(query: str, location: str, max_results: int) -> list[dict]:
-    from app.agents.job_search import _search_public_ats_jobs
-
-    return _search_public_ats_jobs(query, location, max_results, "")
-
-
 def _adapter_remoteok(query: str, location: str, max_results: int) -> list[dict]:
     from app.agents.job_search import _search_remoteok_jobs
 
@@ -150,7 +144,6 @@ _ADAPTERS: dict[str, Callable[[str, str, int], list[dict]]] = {
     "open_apis": _adapter_open_apis,
     "open_apis_keyless": _adapter_open_apis_keyless,
     "jobspy": _adapter_jobspy,
-    "ats": _adapter_ats,
     "remoteok": _adapter_remoteok,
     "searxng": _adapter_searxng,
     "presets": _adapter_presets,
