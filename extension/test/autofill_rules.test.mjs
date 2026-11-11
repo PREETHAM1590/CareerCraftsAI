@@ -7,7 +7,7 @@ import fs from "node:fs";
 import vm from "node:vm";
 
 const window = {};
-const context = { window, document: {}, CSS: { escape: (s) => s }, console, setTimeout };
+const context = { window, document: {}, CSS: { escape: (s) => s }, console, setTimeout, MouseEvent: class {} };
 const load = (file) => vm.runInNewContext(fs.readFileSync(new URL(`../src/content/${file}`, import.meta.url), "utf8"), context);
 load("dom.js");
 window.CareerCraftPanel = {};
@@ -25,6 +25,14 @@ test("options match whole words, never a longer word", () => {
   assert.equal(dom.matchOption(["India", "Indiana"], "india"), "India");
   assert.equal(dom.matchOption(["Yes", "No"], ""), null);
   assert.equal(dom.matchOption([{ label: "C++ (expert)" }], "c++", (o) => o.label).label, "C++ (expert)");
+});
+
+test("a checkbox answer that is none of the boxes is reported, not ignored", async () => {
+  const box = (label) => ({ label, el: { checked: false, dispatchEvent() {}, click() { this.checked = !this.checked; } } });
+  assert.equal(await dom.fillCheckboxGroup([box("Remote"), box("Hybrid")], ["On-site"]), false);
+  const boxes = [box("Remote"), box("Hybrid")];
+  assert.equal(await dom.fillCheckboxGroup(boxes, ["remote"]), true);
+  assert.deepEqual(boxes.map((b) => b.el.checked), [true, false]);
 });
 
 test("dates in the formats plans and profiles use", () => {

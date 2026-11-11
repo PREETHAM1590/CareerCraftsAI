@@ -20,6 +20,7 @@ SENSITIVE_KEY_PREFIXES = (
     "compensation.",
     "experience.notice_period_days",
     "availability.",
+    "disclosure.",
 )
 
 # (label, question_key) -> (value, confidence 0-1, evidence) or None.
