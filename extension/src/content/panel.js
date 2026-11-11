@@ -76,6 +76,7 @@
     resume: ["Profile", "profile"],
     generated: ["Draft — review", "draft"],
     unresolved: ["Unresolved", "unresolved"],
+    page: ["On page", "profile"],
   };
 
   let host, shadow, wrap, pending;
@@ -212,7 +213,7 @@
 
   function fieldBlock(field, optionsByFieldId, editable) {
     const [badgeText, badgeClass] = BADGE_LABEL[field.source] || [field.source || "?", "unresolved"];
-    const needsEditor = editable && (field.requires_review || field.source === "unresolved" || field.source === "generated");
+    const needsEditor = editable && !field.readonly && (field.requires_review || field.source === "unresolved" || field.source === "generated");
     const valueLine =
       !needsEditor && field.value != null && field.value !== ""
         ? `<div class="cc-fvalue">${escapeHtml(Array.isArray(field.value) ? field.value.join(", ") : field.value)}</div>`
