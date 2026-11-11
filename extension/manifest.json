@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CareerCraft AI — Apply Assistant",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Fills and submits job applications in your own browser, under your review, using your CareerCraft AI profile and saved answers.",
   "icons": {
     "16": "icons/icon16.png",
@@ -18,6 +18,10 @@
       "128": "icons/icon128.png"
     }
   },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
   "background": {
     "service_worker": "src/background.js",
     "type": "module"
@@ -27,7 +31,8 @@
     "alarms",
     "tabs",
     "scripting",
-    "tabGroups"
+    "tabGroups",
+    "activeTab"
   ],
   "host_permissions": [
     "http://localhost/*",
@@ -40,10 +45,16 @@
     "https://www.naukri.com/*",
     "https://*.greenhouse.io/*",
     "https://jobs.lever.co/*",
+    "https://jobs.eu.lever.co/*",
     "https://jobs.ashbyhq.com/*",
+    "https://*.ashbyhq.com/*",
     "https://*.myworkdayjobs.com/*",
+    "https://*.myworkdaysite.com/*",
+    "https://*.myworkday.com/*",
     "https://jobs.smartrecruiters.com/*",
+    "https://*.smartrecruiters.com/*",
     "https://apply.workable.com/*",
+    "https://*.workable.com/*",
     "https://*.icims.com/*",
     "https://*.taleo.net/*",
     "https://*.successfactors.com/*",
