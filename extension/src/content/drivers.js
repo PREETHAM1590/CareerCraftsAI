@@ -109,7 +109,8 @@
     opts = opts || {};
     const fields = (plan.fields || []).map((f) => {
       if (f.input_type === "file" && f.value === "__resume__") {
-        return { ...f, value: opts.resumeFilename ? `Resume: ${opts.resumeFilename}` : f.value };
+        if (opts.resumeFilename) return { ...f, value: `Resume: ${opts.resumeFilename}` };
+        return { ...f, value: null, source: "unresolved", requires_review: true, missing_reason: "The resume could not be attached; attach it yourself in the page." };
       }
       return f;
     });
@@ -125,6 +126,10 @@
     }
     const el = snap.byId.get(fieldId);
     if (!el) return false;
+    const widget = snap.widgets && snap.widgets.get(fieldId);
+    if (widget === "listbox") return dom.fillListbox(el, value);
+    if (widget === "combobox" || widget === "multiselect") return dom.fillCombobox(el, value);
+    if (widget === "date") return dom.fillDateGroup(el, value);
     if (inputType === "select") return dom.fillSelect(el, value);
     if (inputType === "checkbox") return dom.fillSingleCheckbox(el, value);
     if (inputType === "radio") {
@@ -137,15 +142,68 @@
   // Fills every planned field into the live DOM, pacing each fill. `typed`
   // (field_id -> value) overrides plan values for fields the user edited in
   // the panel. File inputs are skipped here — see attachResumeIfNeeded.
-  async function applyPlan(ctx, snap, planFields, typed) {
+  // Returns the ids of fields whose value could not be put on the page (no
+  // matching option, a widget that did not take it) so callers can ask the
+  // person instead of assuming they were filled.
+  async function applyPlan(ctx, snap, planFields, typed, opts) {
+    const failed = [];
     for (const field of planFields) {
       if (field.input_type === "file") continue;
       const hasOverride = typed && Object.prototype.hasOwnProperty.call(typed, field.field_id);
       const value = hasOverride ? typed[field.field_id] : field.value;
       if (value === null || value === undefined || value === "") continue;
+      if (!hasOverride && opts && opts.skip && opts.skip(field)) continue;
       await ctx.delay();
-      await applyOne(snap, field.field_id, field.input_type, value);
+      let ok = false;
+      try {
+        ok = await applyOne(snap, field.field_id, field.input_type, value);
+      } catch (e) {
+        ok = false;
+      }
+      if (ok === false) failed.push(field.field_id);
     }
+    return failed;
+  }
+
+  // Marks fields the page did not accept so they show up as unresolved.
+  function flagFailed(planFields, failed) {
+    const ids = new Set(failed);
+    for (const f of planFields) {
+      if (!ids.has(f.field_id)) continue;
+      f.requires_review = true;
+      f.source = "unresolved";
+      f.missing_reason = `Could not set "${Array.isArray(f.value) ? f.value.join(", ") : f.value}" on the page; choose it yourself.`;
+    }
+  }
+
+  // ── Auto-apply ──────────────────────────────────────────────────────────
+  // With the member's opt-in, a form that needs nothing from them is
+  // submitted without the review panel or the popup approval. Anything a
+  // person should look at (an empty required answer, an AI draft, a value the
+  // page refused) still stops at the review panel.
+  function needsAttention(fields, typed) {
+    return fields.filter((f) => {
+      if (f.readonly) return false;
+      const value = typed && Object.prototype.hasOwnProperty.call(typed, f.field_id) ? typed[f.field_id] : f.value;
+      if (f.required && isEmpty(value)) return true;
+      return !!f.requires_review && !isEmpty(value);
+    });
+  }
+
+  async function reviewOrAuto(ctx, opts) {
+    // canAuto=false: the submit control was only guessed, so a person confirms.
+    if (ctx.autoApply && opts.canAuto !== false) {
+      const blocking = needsAttention(opts.fields || []);
+      if (!blocking.length) {
+        ctx.panel.showStatus("Auto-apply is on: everything is filled, submitting now…", [ctx.task.company, ctx.task.role].filter(Boolean).join(" · "));
+        return { action: "submit", typed: {}, remember: false, auto: true };
+      }
+      opts = {
+        ...opts,
+        message: [opts.message, `Auto-apply paused: ${blocking.map((f) => f.label || f.field_id).slice(0, 6).join(", ")} need${blocking.length === 1 ? "s" : ""} your review.`].filter(Boolean).join(" "),
+      };
+    }
+    return ctx.panel.showReview(opts);
   }
 
   async function attachResumeIfNeeded(ctx, snap, planFields) {
@@ -278,8 +336,21 @@
     return hasEmail && inputs.length >= 3;
   }
 
+  // Single-page ATS front ends (Ashby, some Greenhouse and Lever boards)
+  // render the application without a <form> element.
+  const FORMLESS_CONTAINERS =
+    ".ashby-application-form-container, [class*='application-form' i], [id*='application-form' i], [data-testid*='application' i], [data-ui='application-form'], main, [role='main']";
+
   function findApplicationForm() {
-    const scored = Array.from(document.forms)
+    const forms = Array.from(document.forms);
+    if (!forms.some(looksLikeApplication)) {
+      const container = Array.from(document.querySelectorAll(FORMLESS_CONTAINERS)).find((el) => !el.closest("form") && looksLikeApplication(el));
+      if (container) {
+        const submit = findSubmitControl(container);
+        if (submit) return { form: container, submit, inputs: container.querySelectorAll("input,select,textarea").length };
+      }
+    }
+    const scored = forms
       .filter(looksLikeApplication)
       .map((f) => ({ form: f, submit: findSubmitControl(f), inputs: f.querySelectorAll("input,select,textarea").length }));
     if (!scored.length) return null;
@@ -370,11 +441,11 @@
       const { form, submit } = found;
 
       await ctx.api.event("filling", { message: "Filling the application" });
-      const snap = dom.snapshot(form);
+      const snap = await dom.loadWidgetOptions(dom.snapshot(form));
       const plan = await ctx.api.plan(location.href, snap.fields);
       if (!plan) throw new Error("Could not reach CareerCraft to plan this form");
 
-      await applyPlan(ctx, snap, plan.fields);
+      flagFailed(plan.fields, await applyPlan(ctx, snap, plan.fields));
       const resumeInfo = await attachResumeIfNeeded(ctx, snap, plan.fields);
 
       if (await guardCaptcha(ctx, form)) return;
@@ -384,13 +455,15 @@
       let decision;
       let message;
       for (;;) {
-        decision = await ctx.panel.showReview({
+        const reviewOpts = {
           company: ctx.task.company,
           role: ctx.task.role,
           message,
           fields: merged.fields,
           optionsByFieldId: merged.optionsByFieldId,
-        });
+          canAuto: !!submit,
+        };
+        decision = message ? await ctx.panel.showReview(reviewOpts) : await reviewOrAuto(ctx, reviewOpts);
         if (decision.action !== "submit") {
           await ctx.api.event("cancelled", { message: "Cancelled before submitting" });
           return;
@@ -412,7 +485,7 @@
       if (!submitEl) throw new Error("Could not find the submit control for this application");
 
       await ctx.delay();
-      await ctx.api.markSubmitting(form, submitEl);
+      await ctx.api.markSubmitting(form, submitEl, { auto: !!decision.auto });
       dom.clickLike(submitEl);
 
       const result = await waitForConfirmation(ctx, GENERIC_SUCCESS_RE, 15000);
