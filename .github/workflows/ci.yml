@@ -73,6 +73,13 @@ jobs:
           DATABASE_URL: "postgresql+asyncpg://x:x@localhost/x"
           REDIS_URL: "redis://localhost:6379"
 
+      - name: Offline RAG retrieval eval
+        run: pytest tests/evals -v
+        env:
+          APP_SECRET_KEY: "test-secret-key-32-chars-minimum!!"
+          DATABASE_URL: "postgresql+asyncpg://x:********@localhost/x"
+          REDIS_URL: "redis://localhost:6379"
+
   backend-workflow-integration-test:
     runs-on: ubuntu-latest
 

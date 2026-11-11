@@ -1,13 +1,13 @@
 import logging
 
 from langchain_core.messages import AIMessage
+
 from app.agents._llm_json import call_llm_json
 from app.agents.prompts.linkedin_prompt import (
     OUTPUT_SCHEMA,
     SYSTEM_PROMPT,
     build_user_prompt,
 )
-
 from app.agents.state import AgentState
 from app.agents.thinking import think_and_select
 from app.core.model_router import build_agent_llm
@@ -16,28 +16,11 @@ from app.services.rag_service import retrieve
 
 logger = logging.getLogger(__name__)
 
-_HEADLINE_PROMPT = (
-    "Write a LinkedIn headline (max 220 chars) for this candidate targeting: {role}. "
-    "Strategic direction: {thinking}\n"
-    "Context: {context}. Return ONLY the headline text, no explanation."
-)
-_ABOUT_PROMPT = (
-    "Write a LinkedIn About section (max 2600 chars, 3 paragraphs) targeting: {role}. "
-    "Strategic direction: {thinking}\n"
-    "Context: {context}. Return ONLY the about text."
-)
-_BULLETS_PROMPT = (
-    "Write 5 LinkedIn experience bullet points using the STAR method targeting: {role}. "
-    "ONLY include experiences relevant to this role (per thinking analysis): {thinking}\n"
-    "Context: {context}. Return ONLY the bullets, one per line starting with •."
-)
-
 
 def linkedin_agent_node(state: AgentState) -> AgentState:
     try:
         user_id = state["user_id"]
         target_role = state["context"].get("target_role", "software engineer")
-        live_browser = bool(state["context"].get("live_browser", True))
 
         model_settings = state.get("model_settings") or fetch_model_settings(user_id)
         if not model_settings:
@@ -45,6 +28,12 @@ def linkedin_agent_node(state: AgentState) -> AgentState:
 
         chunks = retrieve(user_id, "resume", target_role, model_settings, k=5)
         context_text = "\n".join(c.page_content for c in chunks)
+        context_warning = (
+            None
+            if context_text.strip()
+            else "No resume text could be retrieved (no resume uploaded, or document search "
+            "was unavailable), so these suggestions are not grounded in your resume."
+        )
 
         llm = build_agent_llm(model_settings)
 
@@ -81,7 +70,9 @@ def linkedin_agent_node(state: AgentState) -> AgentState:
                 "about": profile.about,
                 "experience_bullets": bullets,
                 "thinking": " ".join(profile.before_after_notes),
-                "live_browser": live_browser,
+                # Edits are applied by the user; LinkedIn browser automation is retired.
+                "live_browser": False,
+                **({"context_warning": context_warning} if context_warning else {}),
             },
             "messages": state["messages"]
             + [AIMessage(content="LinkedIn sections ready for review.")],
