@@ -1,5 +1,5 @@
 // CareerCraft AI — toolbar popup: pairing, status and permissions.
-import { isStaticOrigin, getSettings, setSettings, getActiveTask, CONTENT_SCRIPT_FILES, LOCAL_KEYS } from "./common.js";
+import { isStaticOrigin, getActiveTask, CONTENT_SCRIPT_FILES, LOCAL_KEYS } from "./common.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -42,6 +42,7 @@ async function render() {
   const who = user ? user.email || user.name : "your account";
   const device = status.device ? ` (${status.device.device_name})` : "";
   $("who").textContent = `Connected as ${who}${device}`;
+  renderAutoSubmit(status.device?.auto_submit);
 
   const active = status.activeTask;
   if (active && active.task) {
@@ -117,22 +118,16 @@ $("grant").addEventListener("click", async () => {
 
 // ── Auto-apply and one-click autofill ─────────────────────────────────────
 
-const AUTO_HINTS = {
-  false: "Off: you approve every application here before it is submitted.",
-  true: "On: applications that need nothing from you are submitted without the approval click. It still stops for sign-in, CAPTCHA, unanswered required questions, AI-drafted answers, validation errors and consent boxes.",
-};
-
-async function renderTools() {
-  const { autoApply } = await getSettings();
-  $("auto-apply").checked = autoApply;
-  $("auto-apply-hint").textContent = AUTO_HINTS[autoApply];
+// Auto-submit is the member's account setting, read from CareerCraft; the
+// server refuses an auto-approval whenever it is off.
+function renderAutoSubmit(autoSubmit) {
+  let text = "Off: you approve every application here before it is submitted.";
+  if (autoSubmit?.enabled) {
+    const left = Math.max(0, autoSubmit.daily_cap - autoSubmit.used_last_24h);
+    text = `On: forms answered only from your saved answers and profile are submitted without this click (${left} of ${autoSubmit.daily_cap} left today). It still stops for sign-in, CAPTCHA, unanswered or AI-drafted answers, validation errors and consent boxes.`;
+  }
+  $("auto-apply-hint").textContent = text;
 }
-
-$("auto-apply").addEventListener("change", async (event) => {
-  if (!event.isTrusted) return;
-  const next = await setSettings({ autoApply: $("auto-apply").checked });
-  $("auto-apply-hint").textContent = AUTO_HINTS[next.autoApply];
-});
 
 $("open-options").addEventListener("click", () => chrome.runtime.openOptionsPage());
 
@@ -183,4 +178,3 @@ $("autofill").addEventListener("click", async () => {
 });
 
 render();
-renderTools();

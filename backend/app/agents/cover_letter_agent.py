@@ -146,11 +146,23 @@ def cover_letter_node(state: AgentState) -> AgentState:
             logger.warning("Cover letter RAG retrieval failed, continuing: %s", rag_exc)
             resume_chunks, chunk_texts = [], []
         context_text = "\n\n".join(chunk_texts)
+        # An empty result can mean no resume or a failed lookup; say so rather
+        # than let a generic letter pass as grounded in the resume.
+        context_warning = None
+        if any((getattr(c, "metadata", None) or {}).get("rag_unavailable") for c in resume_chunks):
+            context_warning = (
+                "Document search was unavailable, so your saved profile text was used."
+            )
         if not context_text.strip():
             try:
                 context_text = fetch_user_profile_text(user_id) or ""
             except Exception as prof_exc:
                 logger.warning("Cover letter profile fallback failed, continuing: %s", prof_exc)
+        if not context_text.strip():
+            context_warning = (
+                "No resume text could be retrieved (no resume uploaded, or document search "
+                "was unavailable), so this letter is not grounded in your resume."
+            )
         emit(run_id, "tool_call", {"tool": "rag_retrieve", "input": {"k": 5}})
         emit(
             run_id,
@@ -208,6 +220,8 @@ def cover_letter_node(state: AgentState) -> AgentState:
         )
         if persist_warning:
             pending["persist_warning"] = persist_warning
+        if context_warning:
+            pending["context_warning"] = context_warning
         emit(run_id, "complete", {"result": {"document_id": document_id, "tone": tone}})
         return {
             **state,

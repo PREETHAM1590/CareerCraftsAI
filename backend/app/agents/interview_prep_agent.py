@@ -33,6 +33,12 @@ def interview_prep_agent_node(state: AgentState) -> AgentState:
         context_text = (
             "\n".join(c.page_content for c in chunks) if chunks else "No resume context available."
         )
+        context_warning = (
+            None
+            if chunks
+            else "No resume text could be retrieved (no resume uploaded, or document search "
+            "was unavailable), so this prep is generic."
+        )
 
         llm = build_agent_llm(model_settings)
 
@@ -66,6 +72,7 @@ def interview_prep_agent_node(state: AgentState) -> AgentState:
             "target_role": target_role,
             "company": company,
             **prep_data,
+            **({"context_warning": context_warning} if context_warning else {}),
         }
         return {
             **state,
