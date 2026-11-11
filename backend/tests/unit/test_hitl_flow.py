@@ -16,9 +16,7 @@ Bugs confirmed absent (audit P0):
 
 import json
 import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock, patch
 
 # ---------------------------------------------------------------------------
 # 1. Email HITL gate: approve_and_send rejects non-awaiting_approval runs
@@ -133,65 +131,24 @@ def test_email_agent_node_always_returns_awaiting_approval():
 
 
 # ---------------------------------------------------------------------------
-# 3. apply_to_any_portal always calls fill_and_submit_form with submit=False
+# 3. No server-side code path submits an application
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_apply_to_any_portal_always_calls_submit_false():
-    """apply_to_any_portal must NEVER pass submit=True to fill_and_submit_form.
+def test_server_side_submit_path_is_gone():
+    """Submission happens only in the member's browser extension, behind
+    approve-submit. The retired server browser path must not come back."""
+    import importlib.util
 
-    submit=True would cause the form filler to click the final Submit button,
-    bypassing the HITL checkpoint entirely.
-    """
-    from app.services.auto_apply_service import apply_to_any_portal
+    from app.services import browser_control_service
 
-    submit_values: list[bool] = []
-
-    async def _capture_fill(*args, **kwargs):
-        submit_values.append(kwargs.get("submit", False))
-        return {"status": "ready_for_review", "message": "ok"}
-
-    with (
-        patch("app.services.form_filler_service.fill_and_submit_form", side_effect=_capture_fill),
-        patch("app.services.auto_apply_service.emit"),
-        patch("app.services.auto_apply_service._human_delay", new=AsyncMock()),
+    assert not hasattr(browser_control_service, "apply_to_job")
+    for module in (
+        "app.services.auto_apply_service",
+        "app.services.form_filler_service",
+        "app.applications.adapters",
     ):
-        await apply_to_any_portal(
-            MagicMock(),
-            "usr_test",
-            "https://boards.greenhouse.io/company/jobs/123",
-            run_id="r1",
-        )
-
-    assert len(submit_values) == 1
-    assert submit_values[0] is False, (
-        f"fill_and_submit_form was called with submit={submit_values[0]}. "
-        "submit=True bypasses the HITL gate and submits the application immediately."
-    )
-
-
-# ---------------------------------------------------------------------------
-# 4. browser_control_service.apply_to_job: submit=False is the default
-# ---------------------------------------------------------------------------
-
-
-def test_apply_to_job_default_submit_is_false():
-    """apply_to_job in browser_control_service must default to submit=False.
-
-    The submit=True path exists for post-approval submission only. Any call
-    from the auto-apply pipeline without an explicit approval must use False.
-    """
-    import inspect
-    from app.services.browser_control_service import apply_to_job
-
-    sig = inspect.signature(apply_to_job)
-    submit_param = sig.parameters.get("submit")
-    assert submit_param is not None, "apply_to_job must have a 'submit' parameter"
-    assert submit_param.default is False, (
-        f"apply_to_job 'submit' param default is {submit_param.default!r}, expected False. "
-        "A True default would submit all applications without approval."
-    )
+        assert importlib.util.find_spec(module) is None, module
 
 
 def test_no_caller_passes_submit_true_to_apply_to_job():
