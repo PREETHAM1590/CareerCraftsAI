@@ -21,10 +21,10 @@ import re
 import secrets
 import uuid
 import zipfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.applications.answer_resolver import resolve_fields
@@ -65,19 +65,62 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+TOKEN_TTL = timedelta(days=90)
+# The extension swaps its token for a fresh one once it is this close to expiry.
+TOKEN_ROTATE_WITHIN = timedelta(days=30)
+MAX_DEVICES_PER_USER = 5
+
+
+def _new_token() -> str:
+    return TOKEN_PREFIX + secrets.token_urlsafe(32)
+
+
 async def pair_device(
     db: AsyncSession, user_id: uuid.UUID, name: str
 ) -> tuple[ExtensionDevice, str]:
-    token = TOKEN_PREFIX + secrets.token_urlsafe(32)
+    """Create a device token. At most MAX_DEVICES_PER_USER stay active: the
+    least recently used ones are revoked to make room; their ids are left on
+    the new device as `evicted_ids`."""
+    # Serialize pairings of one member so two at once cannot both skip the cap.
+    await db.execute(select(User.id).where(User.id == user_id).with_for_update())
+    active = (
+        (
+            await db.execute(
+                select(ExtensionDevice)
+                .where(ExtensionDevice.user_id == user_id, ExtensionDevice.revoked_at.is_(None))
+                .order_by(
+                    func.coalesce(ExtensionDevice.last_seen_at, ExtensionDevice.created_at),
+                    ExtensionDevice.created_at,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    evicted = list(active[: max(0, len(active) - (MAX_DEVICES_PER_USER - 1))])
+    for old in evicted:
+        await revoke_device(db, old, commit=False)
+    token = _new_token()
     device = ExtensionDevice(
         id=uuid.uuid4(),
         user_id=user_id,
         name=(name or "Browser").strip()[:100] or "Browser",
         token_hash=hash_token(token),
+        expires_at=datetime.now(UTC) + TOKEN_TTL,
     )
     db.add(device)
     await db.commit()
+    device.evicted_ids = [d.id for d in evicted]
     return device, token
+
+
+async def rotate_token(db: AsyncSession, device: ExtensionDevice) -> str:
+    """Replace the device's token; the old one stops working immediately."""
+    token = _new_token()
+    device.token_hash = hash_token(token)
+    device.expires_at = datetime.now(UTC) + TOKEN_TTL
+    await db.commit()
+    return token
 
 
 async def authenticate(db: AsyncSession, token: str) -> ExtensionDevice | None:
@@ -88,6 +131,10 @@ async def authenticate(db: AsyncSession, token: str) -> ExtensionDevice | None:
             select(ExtensionDevice).where(
                 ExtensionDevice.token_hash == hash_token(token),
                 ExtensionDevice.revoked_at.is_(None),
+                or_(
+                    ExtensionDevice.expires_at.is_(None),
+                    ExtensionDevice.expires_at > datetime.now(UTC),
+                ),
             )
         )
     ).scalar_one_or_none()
@@ -114,7 +161,7 @@ async def authenticate(db: AsyncSession, token: str) -> ExtensionDevice | None:
     return device
 
 
-async def revoke_device(db: AsyncSession, device: ExtensionDevice) -> None:
+async def revoke_device(db: AsyncSession, device: ExtensionDevice, *, commit: bool = True) -> None:
     """Revoke and return the device's unacknowledged claims to the pending pool."""
     device.revoked_at = datetime.now(UTC)
     await db.execute(
@@ -122,7 +169,8 @@ async def revoke_device(db: AsyncSession, device: ExtensionDevice) -> None:
         .where(ExtensionTask.device_id == device.id, ExtensionTask.status == "claimed")
         .values(status="pending", device_id=None, claimed_at=None)
     )
-    await db.commit()
+    if commit:
+        await db.commit()
 
 
 async def has_active_device(db: AsyncSession, user_id: uuid.UUID) -> bool:
@@ -227,7 +275,8 @@ def _narrative_generator(user_id: uuid.UUID, task: ExtensionTask, budget: list[i
     payload = task.payload or {}
 
     async def generate(field: ApplicationField) -> str | None:
-        if field.input_type not in {"textarea", "text"} or budget[0] <= 0:
+        # A value the page already shows (an ATS's resume parse) is kept.
+        if field.input_type not in {"textarea", "text"} or budget[0] <= 0 or field.value:
             return None
         budget[0] -= 1
         try:
@@ -316,7 +365,7 @@ async def _attach_custom_answer_keys(
     custom = {
         f.field_id: custom_question_key(f.label)
         for f in fields
-        if f.label and not normalize_question(f.label)
+        if f.label and not normalize_question(f.label) and not _section_of(f.label)
     }
     if not custom:
         return
@@ -351,6 +400,12 @@ async def plan_fields(db: AsyncSession, task: ExtensionTask, raw_fields: list[di
     user = await db.get(User, task.user_id)
     fields = extract_fields(raw_fields[:MAX_FIELDS])
     fields = [f for f in fields if f.visible and not f.disabled]
+    sections = await _section_answers(db, task.user_id, fields)
+    for field in fields:
+        if _section_of(field.label):
+            # Repeated work-history/education blocks are answered only from
+            # the member's own resume facts below, never drafted.
+            field.normalized_key = "section." + custom_question_key(field.label)
     await _attach_custom_answer_keys(db, task.user_id, fields)
     budget = [MAX_GENERATED_ANSWERS]
     resolved = await resolve_fields(
@@ -404,7 +459,21 @@ async def plan_fields(db: AsyncSession, task: ExtensionTask, raw_fields: list[di
                 requires_review=True,
                 missing_reason="Tick this yourself if it applies.",
             )
-        elif field.input_type in {"select", "radio"} and entry["value"] not in (None, ""):
+        if field.field_id in sections.answers:
+            entry.update(
+                value=sections.answers[field.field_id],
+                source="profile",
+                confidence=0.95,
+                requires_review=False,
+                missing_reason=None,
+            )
+        # A custom dropdown whose options the extension could not read is
+        # matched in the page, which reports a miss back as unresolved.
+        if (
+            field.input_type in {"select", "radio"}
+            and field.options
+            and entry["value"] not in (None, "")
+        ):
             option, confidence = await match_option(entry["value"], field.options, field.label)
             if option is None:
                 entry.update(
@@ -422,7 +491,163 @@ async def plan_fields(db: AsyncSession, task: ExtensionTask, raw_fields: list[di
         p["field_id"] for p in plan if p["required"] and p["value"] in (None, "")
     ]
     _remember_open_questions(task, plan)
-    return {"fields": plan, "unresolved_required": unresolved_required}
+    _remember_answer_sources(task, plan)
+    return {
+        "fields": plan,
+        "unresolved_required": unresolved_required,
+        "add_blocks": sections.add_blocks,
+    }
+
+
+# Sources auto-submit may rely on: answers the member saved or typed into
+# their profile. Anything else (an AI draft, a resume guess) needs a person.
+AUTO_SUBMIT_SOURCES = frozenset({"user", "profile"})
+_MAX_RECORDED_SOURCES = 200
+
+
+def _remember_answer_sources(task: ExtensionTask, plan: list[dict]) -> None:
+    """Record where every planned answer came from, across all steps of the
+    form, for the approval audit and the auto-submit check."""
+    payload = dict(task.payload or {})
+    sources = dict(payload.get("answer_sources") or {})
+    blockers = list(payload.get("auto_blockers") or [])
+    for entry in plan:
+        if entry["value"] in (None, ""):
+            continue
+        label = (entry["label"] or entry["field_id"] or "").strip()[:200]
+        if len(sources) < _MAX_RECORDED_SOURCES:
+            sources[label] = entry["source"]
+        if entry["source"] not in AUTO_SUBMIT_SOURCES and label not in blockers:
+            blockers.append(label)
+    payload["answer_sources"] = sources
+    payload["auto_blockers"] = blockers[:20]
+    task.payload = payload
+
+
+# ── Repeated Workday-style blocks (Work Experience N / Education N) ──────
+
+_SECTION_RE = re.compile(r"^(work experience|education)\s+(\d+):\s*(.+)$", re.I)
+_SECTION_ATTRS = {
+    "work_experience": (
+        (re.compile(r"description|summary", re.I), None),
+        (re.compile(r"currently work", re.I), "current"),
+        (re.compile(r"title|position", re.I), "role"),
+        (re.compile(r"company|employer", re.I), "employer"),
+        (re.compile(r"location", re.I), "location"),
+        (re.compile(r"^(from|start)", re.I), "start"),
+        (re.compile(r"^(to|end)\b", re.I), "end"),
+    ),
+    "education": (
+        (re.compile(r"school|university|institution|college", re.I), "institution"),
+        (re.compile(r"degree", re.I), "degree"),
+        (re.compile(r"^(from|start)", re.I), "start"),
+        (re.compile(r"^(to|end)\b", re.I), "end"),
+    ),
+}
+_NAME_ATTR = {"work_experience": "employer", "education": "institution"}
+_MONTHS = {
+    m: i + 1
+    for i, m in enumerate(
+        ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
+    )
+}
+_PRESENT_RE = re.compile(r"^(present|current|now|ongoing)$", re.I)
+
+
+def _section_of(label: str) -> tuple[str, int, str | None] | None:
+    """("work_experience", 2, "employer") for "Work Experience 2: Company*"."""
+    match = _SECTION_RE.match((label or "").strip())
+    if not match:
+        return None
+    kind = "work_experience" if match.group(1).lower().startswith("work") else "education"
+    name = match.group(3).replace("*", "").strip()
+    attr = next((a for pattern, a in _SECTION_ATTRS[kind] if pattern.search(name)), None)
+    return kind, int(match.group(2)), attr
+
+
+def _form_date(text: str | None) -> str | None:
+    """Resume dates ("Mar 2019", "2019-03", "03/2019", "2019") as the
+    MM/YYYY or YYYY the page's date inputs take; None for "Present"."""
+    text = (text or "").strip()
+    if not text or _PRESENT_RE.match(text):
+        return None
+    if match := re.fullmatch(r"(\d{4})-(\d{1,2})(?:-\d{1,2})?", text):
+        return f"{int(match.group(2)):02d}/{match.group(1)}"
+    if match := re.fullmatch(r"(\d{1,2})/(\d{4})", text):
+        return f"{int(match.group(1)):02d}/{match.group(2)}"
+    if match := re.fullmatch(r"([A-Za-z]{3})[a-z]*\.?\s+(\d{4})", text):
+        month = _MONTHS.get(match.group(1).lower())
+        return f"{month:02d}/{match.group(2)}" if month else None
+    if re.fullmatch(r"\d{4}", text):
+        return text
+    return None
+
+
+class _Sections:
+    def __init__(self) -> None:
+        self.answers: dict[str, object] = {}
+        self.add_blocks: dict[str, int] = {"work_experience": 0, "education": 0}
+
+
+async def _section_answers(
+    db: AsyncSession, user_id: uuid.UUID, fields: list[ApplicationField]
+) -> _Sections:
+    """Fill empty repeated blocks from the member's own resume facts.
+
+    Blocks the page already filled (an ATS resume parse) are left alone, and
+    facts whose employer/school already appears on the page are not used
+    again. `add_blocks` says how many more blocks the page needs for the
+    remaining facts; the extension clicks "Add" that many times."""
+    result = _Sections()
+    groups: dict[tuple[str, int], list[tuple[ApplicationField, str | None]]] = {}
+    for field in fields:
+        parsed = _section_of(field.label)
+        if parsed:
+            groups.setdefault(parsed[:2], []).append((field, parsed[2]))
+    from app.services.resume_facts import load_facts_row
+
+    row = await load_facts_row(db, user_id)
+    facts = dict(row.answer or {}) if row is not None else {}
+    entries = {
+        # Only values the member typed; older records may hold model output.
+        "work_experience": [
+            {k: e[k] for k in e.get("submitted") or [] if e.get(k)}
+            for e in facts.get("experience") or []
+            if isinstance(e, dict) and e.get("submitted")
+        ],
+        "education": [e for e in facts.get("education") or [] if isinstance(e, dict)],
+    }
+    for kind, items in entries.items():
+        name_attr = _NAME_ATTR[kind]
+        on_page = {
+            str(f.value).strip().casefold()
+            for (k, _), members in groups.items()
+            if k == kind
+            for f, attr in members
+            if attr == name_attr and f.value
+        }
+        remaining = [
+            e for e in items if e and str(e.get(name_attr, "")).strip().casefold() not in on_page
+        ]
+        empty = sorted(
+            n
+            for (k, n), members in groups.items()
+            if k == kind and not any(f.value and f.input_type != "checkbox" for f, _ in members)
+        )
+        for n, entry in zip(empty, remaining, strict=False):
+            current = _PRESENT_RE.match(str(entry.get("end", "")).strip()) is not None
+            for field, attr in groups[(kind, n)]:
+                if attr == "current":
+                    if current:
+                        result.answers[field.field_id] = True
+                elif attr in {"start", "end"}:
+                    value = _form_date(entry.get(attr))
+                    if value:
+                        result.answers[field.field_id] = value
+                elif attr and entry.get(attr):
+                    result.answers[field.field_id] = entry[attr]
+        result.add_blocks[kind] = max(0, len(remaining) - len(empty))
+    return result
 
 
 def _remember_open_questions(task: ExtensionTask, plan: list[dict]) -> None:
