@@ -37,7 +37,7 @@ const { chromium } = loadPlaywright();
 const here = path.dirname(fileURLToPath(import.meta.url));
 const extensionDir = path.resolve(here, "..");
 const fixture = (name) => fs.readFileSync(path.join(here, "fixtures", name), "utf8");
-const HOSTS = ["boards.greenhouse.io", "jobs.lever.co", "careers.indeed.com", "acme.wd5.myworkdayjobs.com", "jobs.smartrecruiters.com", "apply.workable.com"];
+const HOSTS = ["boards.greenhouse.io", "jobs.lever.co", "careers.indeed.com", "acme.wd5.myworkdayjobs.com", "jobs.smartrecruiters.com", "apply.workable.com", "acme.wd3.myworkdaysite.com"];
 
 // ── Fake job sites (HTTPS, self-signed) ─────────────────────────────────
 
@@ -97,6 +97,7 @@ const site = https.createServer(
       return html(page);
     }
     if (host === "acme.wd5.myworkdayjobs.com") return html(fixture("workday/index.html"));
+    if (host === "acme.wd3.myworkdaysite.com") return html(fixture("workday/full.html"));
     if (host === "jobs.smartrecruiters.com") return html(fixture("smartrecruiters/index.html"));
     if (host === "apply.workable.com") return html(fixture("workable/index.html"));
     res.writeHead(404);
@@ -124,6 +125,16 @@ function planFor(fields) {
     [/phone/i, "+91 90000 00000"],
     [/linkedin/i, "https://www.linkedin.com/in/ada"],
     [/hear about/i, "LinkedIn"],
+    // Workday multi-step fixture. The saved veteran answer is the member's
+    // own; the gender value from the profile must never be used.
+    [/address line 1/i, "1 Main St"],
+    [/^city/i, "Pune"],
+    [/postal/i, "411001"],
+    [/legally authorized/i, "Yes"],
+    [/when can you start/i, "2026-12-01"],
+    [/job title/i, "Should not overwrite"],
+    [/gender/i, "Female"],
+    [/veteran/i, "I am not a protected veteran", "user"],
   ];
   const groups = new Map();
   for (const f of fields) {
@@ -140,7 +151,7 @@ function planFor(fields) {
   for (const f of fields) {
     if (groups.has(f.name) || !f.visible) continue;
     const hit = byLabel.find(([re]) => re.test(f.label));
-    let entry = { field_id: f.id, label: f.label, input_type: ["email", "tel", "url"].includes(f.type) ? "text" : f.type, required: f.required, value: hit ? hit[1] : null, source: hit ? "profile" : "unresolved", confidence: hit ? 0.95 : 0, requires_review: !hit, missing_reason: null };
+    let entry = { field_id: f.id, label: f.label, input_type: ["email", "tel", "url"].includes(f.type) ? "text" : f.type, required: f.required, value: hit ? hit[1] : null, source: hit ? hit[2] || "profile" : "unresolved", confidence: hit ? 0.95 : 0, requires_review: !hit, missing_reason: null };
     if (f.type === "file") entry = { ...entry, value: "__resume__", source: "profile", confidence: 1, requires_review: false };
     if (f.type === "textarea") entry = { ...entry, value: "I build reliable backends.", source: "generated", confidence: 0.6, requires_review: true };
     plan.push(entry);
@@ -270,7 +281,7 @@ async function panelClick(page, selector) {
 }
 
 // For failure output: what the review panel (closed shadow root) shows.
-async function panelHtml(page) {
+async function panelHtml(page, limit = 1500) {
   const cdp = await page.context().newCDPSession(page);
   try {
     const { root } = await cdp.send("DOM.getDocument", { depth: -1, pierce: true });
@@ -285,7 +296,7 @@ async function panelHtml(page) {
     const shadow = find(root)?.shadowRoots?.[0];
     if (!shadow) return "(no panel)";
     const { outerHTML } = await cdp.send("DOM.getOuterHTML", { backendNodeId: shadow.backendNodeId });
-    return outerHTML.replace(/<style>[\s\S]*?<\/style>/, "").replace(/\s+/g, " ").slice(0, 1500);
+    return outerHTML.replace(/<style>[\s\S]*?<\/style>/, "").replace(/\s+/g, " ").slice(0, limit);
   } finally {
     await cdp.detach();
   }
@@ -404,6 +415,97 @@ const SCENARIOS = [
     verify: (s) => profileSubmitted(s) && s.sponsorship === "no",
   },
   {
+    // platform "generic": the driver must recognise Workday from the host.
+    name: "Workday multi-step: account → listboxes, prompt, dates, resume parse, validation, disclosures → Submit",
+    url: `https://acme.wd3.myworkdaysite.com:${sitePort}/acme/job/456`,
+    platform: "generic",
+    formHost: "acme.wd3.myworkdaysite.com",
+    async answer(page) {
+      const panelHas = async (text) => (await panelHtml(page, 20000)).includes(text);
+      await page.waitForURL(/\/apply$/, { timeout: 25000 });
+      await waitUntil(() => log.some((e) => e[3] === "login_required"), 20000, "login_required at account creation");
+      check(
+        await page.evaluate(() => Array.from(document.querySelectorAll("input[type=password]")).every((i) => i.value === "") && !document.querySelector("[data-automation-id=createAccountCheckbox]").checked),
+        "stopped at Create Account without touching it"
+      );
+      await page.evaluate(() => window.__signIn());
+      await panelClick(page, `[data-role="primary"]`);
+      // My Information: Workday rejects "+91 …"; the error is handed back.
+      await waitUntil(() => panelHas("without the country code"), 45000, "phone validation error handed back");
+      check(
+        await page.evaluate(
+          () =>
+            document.getElementById("legalNameSection_firstName").value === "Ada" &&
+            document.getElementById("addressSection_city").value === "Pune" &&
+            document.getElementById("phone-device-type").textContent.trim() === "Mobile" &&
+            document.querySelector("[data-automation-id=selectedItem]")?.textContent === "LinkedIn" &&
+            document.getElementById("addressSection_countryRegion").textContent.trim() === "India"
+        ),
+        "filled text fields, the Phone Device Type listbox and the source prompt; kept the pre-filled country"
+      );
+      await page.fill("#phone-number", "9000000000");
+      await panelClick(page, `[data-role="primary"]`);
+      // Application Questions: sponsorship is never guessed.
+      await waitUntil(() => panelHas('data-field-id="sponsorship"'), 60000, "sponsorship question handed back");
+      check(await page.evaluate(() => window.__wdValues.resume === "ada-resume.pdf" && window.__wdValues.job_title === "Engineer"), "uploaded the resume through the hidden input and kept the parsed work history");
+      check(
+        await page.evaluate(
+          () =>
+            document.getElementById("authorized").textContent.trim() === "Yes" &&
+            Array.from(document.querySelectorAll("[data-automation-id=formField-startDate] input")).map((i) => i.value).join("/") === "12/01/2026"
+        ),
+        "answered a listbox question and typed a split month/day/year date"
+      );
+      await pickNo(page, "sponsorship");
+      await panelClick(page, `[data-role="primary"]`);
+      // Voluntary Disclosures: consent is the member's to give.
+      await waitUntil(() => panelHas('data-field-id="terms"'), 45000, "consent checkbox handed back");
+      check(
+        await page.evaluate(() => document.getElementById("gender").textContent.trim() === "Select One" && document.getElementById("veteranStatus").textContent.trim() === "I am not a protected veteran"),
+        "left gender blank (a profile value is not a saved disclosure) and used the saved veteran answer"
+      );
+      await panelClick(page, `[data-field-id="terms"] input[type=checkbox]`);
+      await panelClick(page, `[data-role="primary"]`);
+      await page.waitForFunction(() => document.querySelector("h2")?.textContent === "Review", null, { timeout: 30000 });
+      check(submissions.length === 0, "reached Review without submitting");
+      await waitUntil(() => log.some((e) => e[3] === "review"), 15000, "review event");
+      await new Promise((r) => setTimeout(r, 800));
+    },
+    verify: (s) =>
+      s.first_name === "Ada" && s.last_name === "Lovelace" && s.phone === "9000000000" && s.device === "Mobile" && s.source === "LinkedIn" &&
+      s.country === "India" && s.city === "Pune" && s.job_title === "Engineer" && s.resume === "ada-resume.pdf" &&
+      s.linkedin === "https://www.linkedin.com/in/ada" && s.authorized === "Yes" && s.sponsorship === "No" && s.start === "12/01/2026" &&
+      s.gender === "" && s.veteran === "I am not a protected veteran" && s.terms === true,
+  },
+  {
+    name: "Auto-apply on: a form with open questions still stops for the person",
+    url: `https://boards.greenhouse.io:${sitePort}/acme/jobs/1`,
+    platform: "greenhouse",
+    formHost: "boards.greenhouse.io",
+    autoApply: true,
+    refuses: true,
+    async answer(page) {
+      await waitUntil(async () => (await panelHtml(page, 20000)).includes("Auto-apply paused"), 30000, "auto-apply pause");
+      await new Promise((r) => setTimeout(r, 1000));
+      check(submissions.length === 0 && !log.some((e) => e[1] === "/tasks/:id/approve-submit"), "nothing approved or submitted while sponsorship, consent and a draft need review");
+      await panelClick(page, `[data-role="cancel"]`);
+      await waitUntil(async () => task.status === "cancelled", 15000, "cancelled");
+      check(true, "cancel in the panel ends the application");
+    },
+  },
+  {
+    name: "Auto-apply on: a fully answered Lever form is submitted without the approval click",
+    url: `https://jobs.lever.co:${sitePort}/acme/1`,
+    platform: "lever",
+    formHost: "jobs.lever.co",
+    autoApply: true,
+    auto: true,
+    async answer() {
+      await waitUntil(async () => ["submitted", "failed"].includes(task.status), 45000, "auto-applied outcome");
+    },
+    verify: (s) => s.name === "Ada Lovelace" && s.email === "ada@example.com" && s.resume === "ada-resume.pdf",
+  },
+  {
     name: "SmartRecruiters: I'm interested → form inside a shadow root",
     url: `https://jobs.smartrecruiters.com:${sitePort}/Acme/123-backend-engineer`,
     platform: "smartrecruiters",
@@ -479,6 +581,7 @@ try {
     task = { id: `11111111-1111-4111-8111-11111111111${index}`, status: "pending", job_url: scenario.url, company: "Acme", role: "Engineer", platform: scenario.platform, has_resume: true };
     const jobHost = new URL(scenario.url).host;
     try {
+      await worker.evaluate((autoApply) => chrome.storage.local.set({ settings: { autoApply } }), !!scenario.autoApply);
       await app.bringToFront();
       await app.evaluate(() => window.postMessage({ source: "careercraft-app", type: "CAREERCRAFT_WAKE" }, location.origin));
       const page = await waitUntil(async () => context.pages().find((pg) => pg !== app && !pg.isClosed() && pg.url().startsWith(`https://${jobHost}/`)), 20000, "job tab");
@@ -488,6 +591,14 @@ try {
       if (scenario.refuses) {
         await page.close();
         await worker.evaluate(() => chrome.storage.session.clear()).catch(() => {});
+        continue;
+      }
+      if (scenario.auto) {
+        check(task.status === "submitted", `outcome reported: ${task.status}${task.result?.error ? ` (${task.result.error})` : ""}`);
+        check(log.some((e) => e[1] === "/tasks/:id/approve-submit"), "approved by the auto-apply opt-in, without the popup");
+        check(submissions.length === 1 && scenario.verify(submissions[0]), `exactly one submit ${JSON.stringify(submissions)}`);
+        check((await worker.evaluate(() => chrome.action.getBadgeText({}))) === "", "no approval badge");
+        await page.close();
         continue;
       }
       check(submissions.length === 0, "nothing submitted before review");
@@ -514,6 +625,66 @@ try {
       console.log("session:", JSON.stringify(await worker.evaluate(() => chrome.storage.session.get(null)).catch(() => null)));
       for (const pg of context.pages()) if (pg !== app) await pg.close();
       await worker.evaluate(() => chrome.storage.session.clear()).catch(() => {});
+    }
+  }
+  // "Autofill this page" without any CareerCraft task: what the popup button
+  // runs (the same content scripts and call), from the worker.
+  if (!process.env.ONLY || "Autofill".includes(process.env.ONLY)) {
+    console.log("\n# Autofill this page (no task): Workday My Information and a Greenhouse form");
+    submissions.length = 0;
+    await worker.evaluate(() => chrome.storage.local.set({ settings: { autoApply: false } }));
+    const profile = { firstName: "Ada", lastName: "Lovelace", email: "ada@example.com", phone: "9000000000", city: "Pune", howDidYouHear: "LinkedIn", gender: "" };
+    const resume = { filename: "local-cv.pdf", mime: "application/pdf", base64: Buffer.from("%PDF-1.4\n%local\n").toString("base64") };
+    const autofill = async (page, marker) =>
+      worker.evaluate(
+        async ({ marker, profile, resume }) => {
+          const tab = (await chrome.tabs.query({})).find((t) => (t.url || "").includes(marker));
+          const files = ["src/content/dom.js", "src/content/panel.js", "src/content/drivers.js", "src/content/workday.js", "src/content/autofill.js", "src/content/runner.js"];
+          await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, files });
+          const results = await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, func: (p) => window.CareerCraftAutofill.run(p), args: [{ profile, resume }] });
+          return results.map((r) => r.result);
+        },
+        { marker, profile, resume }
+      );
+    try {
+      const wd = await context.newPage();
+      await wd.goto(`https://acme.wd3.myworkdaysite.com:${sitePort}/acme/job/789/apply`);
+      await wd.evaluate(() => window.__signIn());
+      const [wdResult] = await autofill(wd, "/job/789/apply");
+      check(
+        wdResult?.ok &&
+          (await wd.evaluate(
+            () =>
+              document.getElementById("legalNameSection_firstName").value === "Ada" &&
+              document.getElementById("phone-number").value === "9000000000" &&
+              document.getElementById("phone-device-type").textContent.trim() === "Mobile" &&
+              document.querySelector("[data-automation-id=selectedItem]")?.textContent === "LinkedIn" &&
+              document.querySelector("h2").textContent === "My Information"
+          )),
+        `Workday step filled from the local profile and nothing advanced ${JSON.stringify(wdResult)}`
+      );
+      await wd.close();
+
+      const gh = await context.newPage();
+      await gh.goto(`https://boards.greenhouse.io:${sitePort}/acme/jobs/1`);
+      const ghResults = await autofill(gh, "/acme/jobs/1");
+      check(
+        ghResults.some((r) => r?.ok && r.attached) &&
+          (await gh.evaluate(
+            () =>
+              document.getElementById("first_name").value === "Ada" &&
+              document.getElementById("email").value === "ada@example.com" &&
+              document.getElementById("resume").files[0]?.name === "local-cv.pdf" &&
+              !document.querySelector("input[name=sponsorship]:checked") &&
+              !document.getElementById("consent").checked
+          )),
+        `Greenhouse form filled with the local resume; sponsorship and consent left alone ${JSON.stringify(ghResults)}`
+      );
+      await new Promise((r) => setTimeout(r, 500));
+      check(submissions.length === 0, "autofill never submits");
+      await gh.close();
+    } catch (e) {
+      check(false, `autofill: ${e.message}`);
     }
   }
 } catch (e) {

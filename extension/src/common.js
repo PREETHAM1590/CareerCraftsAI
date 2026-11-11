@@ -15,10 +15,16 @@ export const STATIC_HOST_ORIGINS = [
   "https://www.naukri.com",
   "https://*.greenhouse.io",
   "https://jobs.lever.co",
+  "https://jobs.eu.lever.co",
   "https://jobs.ashbyhq.com",
+  "https://*.ashbyhq.com",
   "https://*.myworkdayjobs.com",
+  "https://*.myworkdaysite.com",
+  "https://*.myworkday.com",
   "https://jobs.smartrecruiters.com",
+  "https://*.smartrecruiters.com",
   "https://apply.workable.com",
+  "https://*.workable.com",
   "https://*.icims.com",
   "https://*.taleo.net",
   "https://*.successfactors.com",
@@ -35,6 +41,8 @@ export const CONTENT_SCRIPT_FILES = [
   "src/content/dom.js",
   "src/content/panel.js",
   "src/content/drivers.js",
+  "src/content/workday.js",
+  "src/content/autofill.js",
   "src/content/runner.js",
 ];
 
@@ -44,7 +52,21 @@ export const BRIDGE_SCRIPT_FILE = "src/content/bridge.js";
 export const TERMINAL_STAGES = new Set(["submitted", "failed", "cancelled"]);
 export const OPEN_TASK_STATUSES = new Set(["claimed", "filling", "needs_input", "review", "login_required"]);
 
-export const LOCAL_KEYS = { PAIRING: "pairing" };
+export const LOCAL_KEYS = { PAIRING: "pairing", SETTINGS: "settings", AUTOFILL_PROFILE: "autofillProfile", AUTOFILL_RESUME: "autofillResume" };
+
+// Auto-apply is opt-in: without it every submit needs the popup approval.
+export const DEFAULT_SETTINGS = { autoApply: false };
+
+export async function getSettings() {
+  const { [LOCAL_KEYS.SETTINGS]: settings } = await chrome.storage.local.get(LOCAL_KEYS.SETTINGS);
+  return { ...DEFAULT_SETTINGS, ...(settings || {}) };
+}
+
+export async function setSettings(patch) {
+  const next = { ...(await getSettings()), ...patch };
+  await chrome.storage.local.set({ [LOCAL_KEYS.SETTINGS]: next });
+  return next;
+}
 export const SESSION_KEYS = { ACTIVE_TASK: "activeTask", HOST_PERMISSION_NEEDED: "hostPermissionNeeded" };
 
 export function appOrigin(value) {
