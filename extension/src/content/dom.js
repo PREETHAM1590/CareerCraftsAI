@@ -499,16 +499,71 @@
     el.blur();
   }
 
+  // ── Date-picker popups ──────────────────────────────────────────────────
+  // Some date inputs ignore typing and only take a click in their calendar
+  // popup (Workday's calendar icon). Open it, step month by month (or year by
+  // year for a month picker) to the target, then click the day or month.
+  const DATE_ICON = "[data-automation-id='dateIcon'], button[aria-label*='calendar' i], button[aria-label*='date picker' i]";
+  const PICKER = "[data-automation-id*='datePicker'], [data-automation-id*='monthPicker'], [role='dialog'][aria-label*='date' i]";
+  const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+
+  function shownMonthYear(picker) {
+    const header = picker.querySelector("[data-automation-id*='Header'], [data-automation-id*='MonthYear'], [aria-live], [role='heading'], h2, h3");
+    const text = textOf(header || picker).slice(0, 200).toLowerCase();
+    const both = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{4})\b/.exec(text);
+    if (both) return { y: Number(both[2]), m: MONTHS.indexOf(both[1]) + 1 };
+    const year = /\b(19|20)\d{2}\b/.exec(text);
+    return year ? { y: Number(year[0]), m: null } : null;
+  }
+
+  function pickerButton(picker, direction) {
+    const re = direction > 0 ? /next|forward|›|»|>/i : /prev|back|‹|«|</i;
+    return deepQueryAll(picker, "button, [role='button']").find((b) => isVisible(b) && re.test(`${b.getAttribute("aria-label") || ""} ${b.getAttribute("data-automation-id") || ""} ${textOf(b)}`));
+  }
+
+  async function pickDate(wrap, date) {
+    const icon = wrap.querySelector(DATE_ICON) || (wrap.parentElement && wrap.parentElement.querySelector(DATE_ICON));
+    if (!icon || !date.y) return false;
+    clickLike(icon);
+    const picker = await waitUntil(() => deepQueryAll(document, PICKER).find(isVisible), 1500);
+    if (!picker) return false;
+    const target = { y: Number(date.y), m: date.m ? Number(date.m) : null };
+    for (let i = 0; i < 600; i++) {
+      const shown = shownMonthYear(picker);
+      if (!shown) break;
+      const diff = shown.m && target.m ? (target.y - shown.y) * 12 + (target.m - shown.m) : target.y - shown.y;
+      if (diff === 0) break;
+      const step = pickerButton(picker, diff);
+      if (!step) break;
+      clickLike(step);
+      await delay(20, 40);
+    }
+    const want = date.d ? String(Number(date.d)) : target.m ? MONTHS[target.m - 1] : String(target.y);
+    const cells = deepQueryAll(picker, "[role='gridcell'], [role='option'], td, button").filter(
+      (c) => isVisible(c) && c.getAttribute("aria-disabled") !== "true" && !/outside|othermonth|other-month/i.test(`${c.className} ${c.getAttribute("data-automation-id") || ""}`)
+    );
+    const cell = cells.find((c) => normalize(textOf(c)) === want) || (!date.d && cells.find((c) => normalize(textOf(c)).startsWith(want)));
+    if (!cell) {
+      pressKey(document.activeElement || icon, "Escape");
+      return false;
+    }
+    clickLike(innermost(cell));
+    await waitUntil(() => !picker.isConnected || !isVisible(picker), 1000);
+    return true;
+  }
+
   async function fillDateGroup(wrap, value) {
     const date = parseDate(value);
     if (!date) return false;
     const parts = dateParts(wrap);
     const strip = (v) => String(v || "").replace(/^0+(?=\d)/, "");
+    const matches = () => ["m", "d", "y"].every((key) => !parts[key] || !date[key] || strip(parts[key].value) === strip(date[key]));
     for (const key of ["m", "d", "y"]) {
       if (!parts[key] || !date[key]) continue;
       await typeInto(parts[key], key === "y" ? date[key] : date[key].padStart(2, "0"));
     }
-    return ["m", "d", "y"].every((key) => !parts[key] || !date[key] || strip(parts[key].value) === strip(date[key]));
+    if (matches()) return true;
+    return (await pickDate(wrap, date)) && matches();
   }
 
   function setNativeValue(el, value) {
@@ -597,6 +652,9 @@
 
   async function fillCheckboxGroup(elements, values) {
     const wanted = new Set((Array.isArray(values) ? values : [values]).map(normalize));
+    const labels = new Set(elements.map(({ label }) => normalize(label)));
+    // An answer that is none of the boxes would silently tick nothing.
+    if ([...wanted].some((w) => !labels.has(w))) return false;
     for (const { el, label } of elements) {
       const shouldCheck = wanted.has(normalize(label));
       if (!!el.checked !== shouldCheck) clickLike(el);
