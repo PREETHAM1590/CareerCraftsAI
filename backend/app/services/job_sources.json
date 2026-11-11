@@ -384,14 +384,6 @@
     "policy": "official public board API; stop on denial; no browser fallback"
   },
   {
-    "id": "greenhouse:hubspot",
-    "family": "greenhouse",
-    "tenant": "hubspot",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
     "id": "greenhouse:intercom",
     "family": "greenhouse",
     "tenant": "intercom",
@@ -648,14 +640,6 @@
     "policy": "official public board API; stop on denial; no browser fallback"
   },
   {
-    "id": "smartrecruiters:bosch",
-    "family": "smartrecruiters",
-    "tenant": "bosch",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
     "id": "smartrecruiters:siemens",
     "family": "smartrecruiters",
     "tenant": "siemens",
@@ -672,129 +656,9 @@
     "policy": "official public board API; stop on denial; no browser fallback"
   },
   {
-    "id": "smartrecruiters:ikea",
-    "family": "smartrecruiters",
-    "tenant": "ikea",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "smartrecruiters:ikea-sweden",
-    "family": "smartrecruiters",
-    "tenant": "ikea-sweden",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
     "id": "smartrecruiters:spotify",
     "family": "smartrecruiters",
     "tenant": "spotify",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "smartrecruiters:skyscanner",
-    "family": "smartrecruiters",
-    "tenant": "skyscanner",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "smartrecruiters:klarna",
-    "family": "smartrecruiters",
-    "tenant": "klarna",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "smartrecruiters:king",
-    "family": "smartrecruiters",
-    "tenant": "king",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "smartrecruiters:mcdonalds",
-    "family": "smartrecruiters",
-    "tenant": "mcdonalds",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "smartrecruiters:pizza-hut",
-    "family": "smartrecruiters",
-    "tenant": "pizza-hut",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "smartrecruiters:burger-king",
-    "family": "smartrecruiters",
-    "tenant": "burger-king",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "smartrecruiters:wendys",
-    "family": "smartrecruiters",
-    "tenant": "wendys",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "smartrecruiters:marriott",
-    "family": "smartrecruiters",
-    "tenant": "marriott",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "smartrecruiters:hilton",
-    "family": "smartrecruiters",
-    "tenant": "hilton",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "smartrecruiters:hyatt",
-    "family": "smartrecruiters",
-    "tenant": "hyatt",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "smartrecruiters:airbnb-inc",
-    "family": "smartrecruiters",
-    "tenant": "airbnb-inc",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "smartrecruiters:expedia",
-    "family": "smartrecruiters",
-    "tenant": "expedia",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "smartrecruiters:salesforce",
-    "family": "smartrecruiters",
-    "tenant": "salesforce",
     "permitted": true,
     "provenance": "existing repository employer catalog; validated health required",
     "policy": "official public board API; stop on denial; no browser fallback"
@@ -848,14 +712,6 @@
     "policy": "official public board API; stop on denial; no browser fallback"
   },
   {
-    "id": "smartrecruiters:kpmg",
-    "family": "smartrecruiters",
-    "tenant": "kpmg",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
     "id": "smartrecruiters:ey",
     "family": "smartrecruiters",
     "tenant": "ey",
@@ -867,14 +723,6 @@
     "id": "smartrecruiters:accenture",
     "family": "smartrecruiters",
     "tenant": "accenture",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "smartrecruiters:unilever",
-    "family": "smartrecruiters",
-    "tenant": "unilever",
     "permitted": true,
     "provenance": "existing repository employer catalog; validated health required",
     "policy": "official public board API; stop on denial; no browser fallback"
@@ -896,14 +744,6 @@
     "policy": "official public board API; stop on denial; no browser fallback"
   },
   {
-    "id": "smartrecruiters:cocacola",
-    "family": "smartrecruiters",
-    "tenant": "cocacola",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
     "id": "smartrecruiters:pepsi",
     "family": "smartrecruiters",
     "tenant": "pepsi",
@@ -920,25 +760,9 @@
     "policy": "official public board API; stop on denial; no browser fallback"
   },
   {
-    "id": "smartrecruiters:amgen",
-    "family": "smartrecruiters",
-    "tenant": "amgen",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
     "id": "smartrecruiters:gilead",
     "family": "smartrecruiters",
     "tenant": "gilead",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "smartrecruiters:regeneron",
-    "family": "smartrecruiters",
-    "tenant": "regeneron",
     "permitted": true,
     "provenance": "existing repository employer catalog; validated health required",
     "policy": "official public board API; stop on denial; no browser fallback"
@@ -1269,6 +1093,411 @@
     "permitted": true,
     "refresh_hours": 12,
     "provenance": "board slug named in the MIT-licensed freehire repo; not yet live-validated",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "ashby:cohere",
+    "family": "ashby",
+    "tenant": "cohere",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via board_harvest probe (returned jobs)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "ashby:decagon",
+    "family": "ashby",
+    "tenant": "decagon",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via board_harvest probe (returned jobs)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "ashby:sierra",
+    "family": "ashby",
+    "tenant": "sierra",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via board_harvest probe (returned jobs)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "ashby:supabase",
+    "family": "ashby",
+    "tenant": "supabase",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via board_harvest probe (returned jobs)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "bamboohr:ea",
+    "family": "bamboohr",
+    "tenant": "ea",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via board_harvest probe (returned jobs)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "bamboohr:fig",
+    "family": "bamboohr",
+    "tenant": "fig",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via board_harvest probe (returned jobs)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "bamboohr:paramount",
+    "family": "bamboohr",
+    "tenant": "paramount",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via board_harvest probe (returned jobs)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "greenhouse:ramp",
+    "family": "greenhouse",
+    "tenant": "ramp",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via board_harvest probe (returned jobs)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "lever:binance",
+    "family": "lever",
+    "tenant": "binance",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via board_harvest probe (returned jobs)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "lever:cred",
+    "family": "lever",
+    "tenant": "cred",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via board_harvest probe (returned jobs)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "lever:matchgroup",
+    "family": "lever",
+    "tenant": "matchgroup",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via board_harvest probe (returned jobs)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "lever:meesho",
+    "family": "lever",
+    "tenant": "meesho",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via board_harvest probe (returned jobs)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "lever:palantir",
+    "family": "lever",
+    "tenant": "palantir",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via board_harvest probe (returned jobs)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "lever:shieldai",
+    "family": "lever",
+    "tenant": "shieldai",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via board_harvest probe (returned jobs)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "lever:spotify",
+    "family": "lever",
+    "tenant": "spotify",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via board_harvest probe (returned jobs)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "lever:weride",
+    "family": "lever",
+    "tenant": "weride",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via board_harvest probe (returned jobs)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "recruitee:bunq",
+    "family": "recruitee",
+    "tenant": "bunq",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via board_harvest probe (returned jobs)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "recruitee:personio",
+    "family": "recruitee",
+    "tenant": "personio",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via board_harvest probe (returned jobs)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "smartrecruiters:boschgroup",
+    "family": "smartrecruiters",
+    "tenant": "boschgroup",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via board_harvest probe (returned jobs)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "smartrecruiters:experian",
+    "family": "smartrecruiters",
+    "tenant": "experian",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via board_harvest probe (returned jobs)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "smartrecruiters:linkedin3",
+    "family": "smartrecruiters",
+    "tenant": "linkedin3",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via board_harvest probe (returned jobs)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "smartrecruiters:mcdonaldscorporation",
+    "family": "smartrecruiters",
+    "tenant": "mcdonaldscorporation",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via board_harvest probe (returned jobs)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "smartrecruiters:smartrecruiters",
+    "family": "smartrecruiters",
+    "tenant": "smartrecruiters",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via board_harvest probe (returned jobs)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "smartrecruiters:sodexo",
+    "family": "smartrecruiters",
+    "tenant": "sodexo",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via board_harvest probe (returned jobs)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "smartrecruiters:ubisoft2",
+    "family": "smartrecruiters",
+    "tenant": "ubisoft2",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via board_harvest probe (returned jobs)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workable:huggingface",
+    "family": "workable",
+    "tenant": "huggingface",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via board_harvest probe (returned jobs)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:3m-search",
+    "family": "workday",
+    "tenant": "3m.wd1.myworkdayjobs.com|3m|Search",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via CXS jobs endpoint (returned jobs)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:adobe-external_experienced",
+    "family": "workday",
+    "tenant": "adobe.wd5.myworkdayjobs.com|adobe|external_experienced",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via CXS jobs endpoint (returned jobs)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:autodesk-ext",
+    "family": "workday",
+    "tenant": "autodesk.wd1.myworkdayjobs.com|autodesk|Ext",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via CXS jobs endpoint (returned jobs)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:blackrock-blackrock_professional",
+    "family": "workday",
+    "tenant": "blackrock.wd1.myworkdayjobs.com|blackrock|BlackRock_Professional",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via CXS jobs endpoint (returned jobs)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:broadcom-external_career",
+    "family": "workday",
+    "tenant": "broadcom.wd1.myworkdayjobs.com|broadcom|External_Career",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via CXS jobs endpoint (returned jobs)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:cisco-cisco_careers",
+    "family": "workday",
+    "tenant": "cisco.wd5.myworkdayjobs.com|cisco|Cisco_Careers",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via CXS jobs endpoint (returned jobs)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:crowdstrike-crowdstrikecareers",
+    "family": "workday",
+    "tenant": "crowdstrike.wd5.myworkdayjobs.com|crowdstrike|crowdstrikecareers",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via CXS jobs endpoint (returned jobs)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:disney-disneycareer",
+    "family": "workday",
+    "tenant": "disney.wd5.myworkdayjobs.com|disney|disneycareer",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via CXS jobs endpoint (returned jobs)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:hpe-jobsathpe",
+    "family": "workday",
+    "tenant": "hpe.wd5.myworkdayjobs.com|hpe|Jobsathpe",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via CXS jobs endpoint (returned jobs)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:intel-external",
+    "family": "workday",
+    "tenant": "intel.wd1.myworkdayjobs.com|intel|External",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via CXS jobs endpoint (returned jobs)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:mastercard-corporatecareers",
+    "family": "workday",
+    "tenant": "mastercard.wd1.myworkdayjobs.com|mastercard|CorporateCareers",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via CXS jobs endpoint (returned jobs)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:motorolasolutions-careers",
+    "family": "workday",
+    "tenant": "motorola.wd5.myworkdayjobs.com|motorolasolutions|Careers",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via CXS jobs endpoint (returned jobs)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:paypal-jobs",
+    "family": "workday",
+    "tenant": "paypal.wd1.myworkdayjobs.com|paypal|jobs",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via CXS jobs endpoint (returned jobs)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:pg-1000",
+    "family": "workday",
+    "tenant": "pg.wd5.myworkdayjobs.com|pg|1000",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via CXS jobs endpoint (returned jobs)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:salesforce-external_career_site",
+    "family": "workday",
+    "tenant": "salesforce.wd12.myworkdayjobs.com|salesforce|External_Career_Site",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via CXS jobs endpoint (returned jobs)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:target-targetcareers",
+    "family": "workday",
+    "tenant": "target.wd5.myworkdayjobs.com|target|targetcareers",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via CXS jobs endpoint (returned jobs)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:wf-wellsfargojobs",
+    "family": "workday",
+    "tenant": "wellsfargo.wd1.myworkdayjobs.com|wf|WellsFargoJobs",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via CXS jobs endpoint (returned jobs)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:workday-workday",
+    "family": "workday",
+    "tenant": "workday.wd5.myworkdayjobs.com|workday|Workday",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via CXS jobs endpoint (returned jobs)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:zoom-zoom",
+    "family": "workday",
+    "tenant": "zoom.wd5.myworkdayjobs.com|zoom|Zoom",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-11 via CXS jobs endpoint (returned jobs)",
     "policy": "public keyless board feed; stop on denial; no browser fallback"
   }
 ]

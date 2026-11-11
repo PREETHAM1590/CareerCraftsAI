@@ -12,7 +12,13 @@ from pathlib import Path
 import httpx
 from sqlalchemy import text
 
-from app.services.job_connectors import Source, dedupe, fetch_page, normalize
+from app.services.job_connectors import (
+    SERVER_SIDE_SEARCH,
+    Source,
+    dedupe,
+    fetch_page,
+    normalize,
+)
 from app.services.jobs_database import AsyncSessionLocal
 
 logger = logging.getLogger(__name__)
@@ -24,8 +30,8 @@ PREFERRED_SOURCES = {
     "greenhouse:stripe",
     "greenhouse:gitlab",
     "greenhouse:figma",
-    "lever:netflix",
-    "lever:benchling",
+    "lever:palantir",
+    "lever:spotify",
     "ashby:linear",
     "ashby:vanta",
     "remotive",
@@ -236,6 +242,54 @@ async def refresh_source(source: Source, query="") -> tuple[list[dict], str | No
     return jobs, warning
 
 
+async def refresh_for_query(source: Source, queries: list[str]) -> tuple[list[dict], str | None]:
+    """Keyword read of a board whose server filters (Workday, Oracle, iCIMS, Workable).
+
+    The scheduled refresh only holds a board's first pages; asking the server for the
+    member's roles reaches postings beyond them. Matches are stored for everyone, but
+    health, cached jobs and stale-occurrence pruning are left to refresh_source, since
+    this view of the board is partial. A board that is backing off is not asked again."""
+    async with AsyncSessionLocal() as db:
+        health = (
+            (
+                await db.execute(
+                    text(
+                        "SELECT status, next_allowed_at, cached_jobs FROM job_source_health "
+                        "WHERE source_id=:id"
+                    ),
+                    {"id": source.id},
+                )
+            )
+            .mappings()
+            .first()
+        )
+    now = datetime.now(UTC)
+    if health and health["status"] == "degraded" and (health["next_allowed_at"] or now) > now:
+        return health["cached_jobs"] or [], f"{source.id}: backing off"
+    jobs: list[dict] = []
+    try:
+        for text_query in queries[:3]:
+            page = await asyncio.wait_for(fetch_page(source, text_query, None), 15)
+            jobs.extend(page.jobs)
+    except Exception as exc:
+        logger.warning(
+            "job_source_query_failure",
+            extra={"source_id": source.id, "error_type": type(exc).__name__},
+        )
+        return jobs, f"{source.id}: {type(exc).__name__}"
+    if jobs:
+        async with AsyncSessionLocal() as db:
+            await db.execute(
+                text(
+                    "INSERT INTO job_source_health(source_id) VALUES (:id) ON CONFLICT DO NOTHING"
+                ),
+                {"id": source.id},
+            )
+            await upsert_jobs(db, jobs, source.id)
+            await db.commit()
+    return jobs, None
+
+
 async def refresh_catalog() -> dict:
     semaphore = asyncio.Semaphore(8)
 
@@ -311,6 +365,11 @@ def _location_ok(job: dict, locations: list[str]) -> bool:
             if job_country is None or job_country == _country_of(city):
                 return True
     return False
+
+
+def location_matches(job: dict, locations: list[str]) -> bool:
+    """The job fits at least one of the requested places (all of them count)."""
+    return _location_ok(job, [loc for loc in locations if loc])
 
 
 def _role_patterns(query: dict) -> list[list[str]]:
@@ -495,9 +554,17 @@ async def _search_catalog_db(query: dict, public, live_ids, relevant_of):
         # the complete employer catalog.
         preferred = [s for s in public if s.id in PREFERRED_SOURCES]
 
+        roles = [
+            " ".join(w for w in role.split() if w.lower() not in _STOPWORDS)
+            for role in (query.get("titles") or [query.get("search_query") or ""])
+        ]
+        roles = [r for r in roles if r]
+
         async def one(source):
             async with semaphore:
                 try:
+                    if roles and source.family in SERVER_SIDE_SEARCH:
+                        return await refresh_for_query(source, roles)
                     return await refresh_source(source)
                 except Exception as exc:
                     return [], source.id + ": " + type(exc).__name__

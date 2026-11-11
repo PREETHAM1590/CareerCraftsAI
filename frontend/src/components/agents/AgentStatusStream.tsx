@@ -235,6 +235,20 @@ export function AgentStatusStream({ runId, onApprove, onCancel }: Props) {
           </div>
         </Bezel>
       )}
+      {typeof run.result?.notifications_scanned === "number" && (
+        <div role="status" className="rounded-2xl bg-muted/40 px-4 py-3 text-sm text-foreground ring-1 ring-foreground/10">
+          <p>
+            Scanned {run.result.notifications_scanned} email{run.result.notifications_scanned === 1 ? "" : "s"}
+            {Array.isArray(run.result.changes) ? `; ${run.result.changes.length} application status change${run.result.changes.length === 1 ? "" : "s"}` : ""}.
+          </p>
+          {typeof run.result.unclassified === "number" && run.result.unclassified > 0 && (
+            <p className="mt-1 text-warning">
+              {run.result.unclassified} email{run.result.unclassified === 1 ? "" : "s"} could not be classified and{" "}
+              {run.result.unclassified === 1 ? "was" : "were"} skipped. Check your AI model in Settings and scan again.
+            </p>
+          )}
+        </div>
+      )}
       {run.status === "awaiting_approval" && run.pendingAction && (
         <ApprovalModal
           runId={runId}

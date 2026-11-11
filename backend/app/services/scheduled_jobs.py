@@ -526,36 +526,51 @@ async def daily_search(payload: StatusCheckTrigger):
                 if isinstance(search_term, list):
                     search_term = search_term[0] if search_term else None
                 if isinstance(location, list):
-                    location = location[0] if location else None
+                    locations = list(dict.fromkeys(str(x).strip() for x in location if x))[:5]
+                else:
+                    locations = [str(location).strip()] if location else []
                 # No invented defaults: search only for what the member saved.
-                location = location or (
-                    "Remote" if prefs_row and prefs_row.work_mode == "remote" else None
-                )
-                if not search_term or not location:
+                if not locations and prefs_row and prefs_row.work_mode == "remote":
+                    locations = ["Remote"]
+                if not search_term or not locations:
                     logger.debug("Skipping daily search for %s: missing prefs", user_id)
                     continue
 
                 users_searched += 1
 
-                # Search all platforms
-                all_jobs = await scrape_all_platforms(
-                    search_term=search_term,
-                    location=location,
-                    results_wanted=15,
-                    include_indian=True,
-                    llm=llm,
-                    user_id=user_id,
-                )
-
-                # Also search Google Jobs for company-only postings
-                google_jobs = await search_google_jobs(
-                    llm=llm,
-                    user_id=user_id,
-                    search_term=search_term,
-                    location=location,
-                    results_wanted=10,
-                )
-                all_jobs.extend(google_jobs)
+                # Every saved location is searched; one failing place must not
+                # drop the others.
+                all_jobs, seen_urls = [], set()
+                for location in locations:
+                    try:
+                        batch = await scrape_all_platforms(
+                            search_term=search_term,
+                            location=location,
+                            results_wanted=15,
+                            include_indian=True,
+                            llm=llm,
+                            user_id=user_id,
+                        )
+                        # Also search Google Jobs for company-only postings
+                        batch = list(batch) + list(
+                            await search_google_jobs(
+                                llm=llm,
+                                user_id=user_id,
+                                search_term=search_term,
+                                location=location,
+                                results_wanted=10,
+                            )
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Daily search for %s failed in %s: %s", user_id, location, exc
+                        )
+                        continue
+                    for job in batch:
+                        key = job.job_url or id(job)
+                        if key not in seen_urls:
+                            seen_urls.add(key)
+                            all_jobs.append(job)
                 jobs_found += len(all_jobs)
 
                 # Normalize once: shared with other users' searches via the
@@ -586,7 +601,9 @@ async def daily_search(payload: StatusCheckTrigger):
                 # Same scoring and save rule as an interactive search: every
                 # match >= SAVE_MIN_SCORE becomes a saved application.
                 matches, _ = await rank_jobs(
-                    user_id, {"titles": [search_term], "location": location}, found
+                    user_id,
+                    {"titles": [search_term], "location": locations[0], "locations": locations},
+                    found,
                 )
                 applications_queued += await asyncio.to_thread(
                     _persist_saved_jobs, user_id, matches

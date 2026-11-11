@@ -211,7 +211,7 @@ export default function AutomationSettingsPage() {
                 <SwitchRow
                   icon={<Lightning size={16} weight="light" />}
                   title="Queue applications for strong matches"
-                  description="Tailors a resume and queues saved jobs that match 70% or more in your browser extension. You review every filled form before anything is submitted."
+                  description="Tailors a resume and queues saved jobs that match 70% or more in your browser extension. You review every filled form before anything is submitted, unless you turn on auto-submit under Applying."
                   checked={form.auto_apply_enabled}
                   onChange={(v) => set("auto_apply_enabled", v)}
                 />
