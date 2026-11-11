@@ -76,6 +76,7 @@
     resume: ["Profile", "profile"],
     generated: ["Draft — review", "draft"],
     unresolved: ["Unresolved", "unresolved"],
+    page: ["On page", "profile"],
   };
 
   let host, shadow, wrap, pending;
@@ -146,6 +147,23 @@
     );
   }
 
+  // A finished message (no spinner) with a close button.
+  function showNotice(text, sub) {
+    ensureMounted();
+    wrap.innerHTML = "";
+    wrap.appendChild(
+      h(`
+      <div class="cc-header">
+        <p class="cc-title">CareerCraft</p>
+        <p class="cc-sub">${escapeHtml(sub || "")}</p>
+      </div>
+      <div class="cc-body"><div class="cc-msg">${escapeHtml(text || "")}</div></div>
+      <div class="cc-footer"><div class="cc-btnrow"><button class="cc-btn" data-role="close">Close</button></div></div>
+    `)
+    );
+    wrap.querySelector("[data-role='close']").addEventListener("click", () => hide());
+  }
+
   function fieldOptions(field, optionsByFieldId) {
     return (optionsByFieldId && optionsByFieldId[field.field_id]) || [];
   }
@@ -212,7 +230,7 @@
 
   function fieldBlock(field, optionsByFieldId, editable) {
     const [badgeText, badgeClass] = BADGE_LABEL[field.source] || [field.source || "?", "unresolved"];
-    const needsEditor = editable && (field.requires_review || field.source === "unresolved" || field.source === "generated");
+    const needsEditor = editable && !field.readonly && (field.requires_review || field.source === "unresolved" || field.source === "generated");
     const valueLine =
       !needsEditor && field.value != null && field.value !== ""
         ? `<div class="cc-fvalue">${escapeHtml(Array.isArray(field.value) ? field.value.join(", ") : field.value)}</div>`
@@ -342,6 +360,7 @@
     mount,
     hide,
     showStatus,
+    showNotice,
     showReview,
     showNeedsInput,
     showLoginRequired,

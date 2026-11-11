@@ -1,5 +1,5 @@
 // CareerCraft AI — toolbar popup: pairing, status and permissions.
-import { isStaticOrigin } from "./common.js";
+import { isStaticOrigin, getSettings, setSettings, getActiveTask, CONTENT_SCRIPT_FILES, LOCAL_KEYS } from "./common.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -115,4 +115,72 @@ $("grant").addEventListener("click", async () => {
   }
 });
 
+// ── Auto-apply and one-click autofill ─────────────────────────────────────
+
+const AUTO_HINTS = {
+  false: "Off: you approve every application here before it is submitted.",
+  true: "On: applications that need nothing from you are submitted without the approval click. It still stops for sign-in, CAPTCHA, unanswered required questions, AI-drafted answers, validation errors and consent boxes.",
+};
+
+async function renderTools() {
+  const { autoApply } = await getSettings();
+  $("auto-apply").checked = autoApply;
+  $("auto-apply-hint").textContent = AUTO_HINTS[autoApply];
+}
+
+$("auto-apply").addEventListener("change", async (event) => {
+  if (!event.isTrusted) return;
+  const next = await setSettings({ autoApply: $("auto-apply").checked });
+  $("auto-apply-hint").textContent = AUTO_HINTS[next.autoApply];
+});
+
+$("open-options").addEventListener("click", () => chrome.runtime.openOptionsPage());
+
+async function injectAutofill(tabId, payload) {
+  const run = (target) =>
+    chrome.scripting
+      .executeScript({ target, files: CONTENT_SCRIPT_FILES })
+      .then(() => chrome.scripting.executeScript({ target, func: (p) => window.CareerCraftAutofill.run(p), args: [payload] }));
+  try {
+    // Every frame: Greenhouse and others are often embedded in an iframe.
+    return await run({ tabId, allFrames: true });
+  } catch (e) {
+    return run({ tabId });
+  }
+}
+
+$("autofill").addEventListener("click", async () => {
+  showError("");
+  const out = $("autofill-result");
+  out.textContent = "";
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab || !/^https?:/.test(tab.url || "")) return showError("Open a job application page first.");
+  const active = await getActiveTask();
+  if (active && active.tabId === tab.id) return showError("CareerCraft is already applying in this tab.");
+  const stored = await chrome.storage.local.get([LOCAL_KEYS.AUTOFILL_PROFILE, LOCAL_KEYS.AUTOFILL_RESUME]);
+  const profile = stored[LOCAL_KEYS.AUTOFILL_PROFILE];
+  if (!profile || !profile.email) {
+    showError("Add your details in Autofill profile & settings first.");
+    return chrome.runtime.openOptionsPage();
+  }
+  $("autofill").disabled = true;
+  out.textContent = "Filling…";
+  try {
+    const results = (await injectAutofill(tab.id, { profile, resume: stored[LOCAL_KEYS.AUTOFILL_RESUME] || null }))
+      .map((r) => r && r.result)
+      .filter(Boolean);
+    const best = results.filter((r) => r.ok).sort((a, b) => (b.filled || 0) - (a.filled || 0))[0];
+    const failure = results.find((r) => !r.ok);
+    if (best && (best.filled || best.attached)) out.textContent = best.message;
+    else if (failure) showError(failure.error);
+    else out.textContent = (best && best.message) || "No application form found on this page.";
+  } catch (e) {
+    showError(`Could not fill this page: ${e.message}. Use "Allow on this site" from a CareerCraft task or reload the page.`);
+    out.textContent = "";
+  } finally {
+    $("autofill").disabled = false;
+  }
+});
+
 render();
+renderTools();

@@ -20,6 +20,7 @@ import {
   jobUrl,
   taskSenderAllowed,
   snapshotKey,
+  getSettings,
 } from "./common.js";
 import {
   configureAgent,
@@ -311,7 +312,9 @@ async function requestTabPermission(active, url) {
 async function injectAndRun(tabId, task, submitting) {
   try {
     await chrome.scripting.executeScript({ target: { tabId }, files: CONTENT_SCRIPT_FILES });
-    await chrome.tabs.sendMessage(tabId, { type: "RUN_TASK", task, submitting: !!submitting });
+    const { autoApply } = await getSettings();
+    // Top frame only: autofill may have left runners in the page's iframes.
+    await chrome.tabs.sendMessage(tabId, { type: "RUN_TASK", task, submitting: !!submitting, autoApply }, { frameId: 0 });
   } catch (e) {
     // Common and harmless: chrome:// pages, PDF viewer tabs, or a tab that
     // navigated away again before the script could run.
@@ -442,6 +445,7 @@ async function handleMessage(msg, sender) {
       // same tab (never a new one), within the hop budget. `to` is null for
       // an in-page Apply button the runner clicks itself; it still counts.
       const active = await getActiveTask();
+      if (!active) return { error: "This application is no longer active." };
       if (active.submitting || active.review) return { error: "The application is already under review." };
       const hops = (active.navigations || 0) + 1;
       if (hops > MAX_NAVIGATIONS) return { error: "Could not find the application form after following the Apply links." };
@@ -466,6 +470,21 @@ async function handleMessage(msg, sender) {
       const active = await getActiveTask();
       if (!active || active.taskId !== msg.taskId) return { error: "This application is no longer active." };
       await setActiveTask({ ...active, review: { ...res.data, snapshot: msg.snapshot }, submitPermit: null });
+      // Auto-apply: the driver found nothing that needs the person, and the
+      // person opted in (checked here, never taken from the page's word).
+      // Their standing opt-in is the confirmation for this one review hash.
+      if (msg.auto && (await getSettings()).autoApply) {
+        const approval = await apiFetch(pairing, `/extension/device/tasks/${msg.taskId}/approve-submit`, {
+          method: "POST",
+          json: { review_hash: res.data.review_hash, user_confirmed: true },
+        });
+        if (approval.ok) {
+          const current = await getActiveTask();
+          await setActiveTask({ ...current, submitPermit: { token: approval.data.submission_token, expiresAt: approval.data.expires_at } });
+          return { data: { ...res.data, autoApproved: true } };
+        }
+        // Fall back to the manual approval below.
+      }
       // The user approves the final form in the popup: point them at it.
       await setBadge("1", "#2563eb");
       await openPopupIfPossible();
