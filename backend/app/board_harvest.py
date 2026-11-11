@@ -37,6 +37,7 @@ PATTERNS = [
     ("teamtailor", rf"{S}\.teamtailor\.com"),
     ("breezy", rf"{S}\.breezy\.hr"),
     ("smartrecruiters", rf"jobs\.smartrecruiters\.com/{S}"),
+    ("icims", rf"{S}\.icims\.com"),
 ]
 LEVER_EU = re.compile(rf"jobs\.eu\.lever\.co/{S}", re.I)
 WORKDAY = re.compile(
