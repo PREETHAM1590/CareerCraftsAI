@@ -608,7 +608,7 @@ def _search_public_ats_jobs(
             return _search_smartrecruiters_jobs(client, c)
 
         def _wd(t):
-            return _search_workday_company(client, t)
+            return _search_workday_company(client, t, query)
 
         def _bh(t):
             return _search_bamboohr_company(client, t)
@@ -623,15 +623,21 @@ def _search_public_ats_jobs(
                 futures.append(pool.submit(_ab, company))
             for company in SMARTRECRUITERS_COMPANIES:
                 futures.append(pool.submit(_sr, company))
-            for tenant in WORKDAY_TENANTS:
-                futures.append(pool.submit(_wd, tenant))
+            for board in _configured_workday_boards():
+                futures.append(pool.submit(_wd, board))
             for tenant in BAMBOOHR_TENACTS:
                 futures.append(pool.submit(_bh, tenant))
-            for fut in as_completed(futures, timeout=30):
-                try:
-                    jobs.extend(fut.result() or [])
-                except Exception as exc:
-                    logger.debug("ATS future failed: %s", exc)
+            try:
+                for fut in as_completed(futures, timeout=30):
+                    try:
+                        jobs.extend(fut.result() or [])
+                    except Exception as exc:
+                        logger.debug("ATS future failed: %s", exc)
+            except TimeoutError:
+                # Keep what finished instead of discarding every board's results.
+                logger.warning("ATS fan-out timed out; returning partial results")
+                for fut in futures:
+                    fut.cancel()
 
     filtered = [
         job
@@ -1103,61 +1109,51 @@ BAMBOOHR_TENACTS = (
 )
 
 
-def _search_workday_company(client: httpx.Client, tenant: str) -> list[dict]:
-    """Public Workday job board — most companies expose JSON via the
-    ``/en-US/external/search`` POST endpoint with a ``searchRequest`` payload.
+def _configured_workday_boards() -> list[str]:
+    """`host|tenant|site` of every Workday board in the source catalog. The bare
+    tenant names in WORKDAY_TENANTS carry no site, so they cannot be queried."""
+    try:
+        from app.services.job_catalog import sources
 
-    Endpoint varies between wd1/wd2/wd3/wd4/wd5 — we try wd5 first (most
-    common in 2026) and walk back. Returns [] for tenants that don't expose
-    JSON (HTML-only tenants require browser-use; the dork strategy covers them).
-    """
+        return [s.tenant for s in sources() if s.family == "workday"]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Workday board list unavailable: %s", type(exc).__name__)
+        return []
+
+
+def _search_workday_company(client: httpx.Client, board: str, query: str = "") -> list[dict]:
+    """Public Workday CXS board (`host|tenant|site`): POST /wday/cxs/{tenant}/{site}/jobs
+    with the keyword as `searchText`, so Workday filters server-side."""
+    try:
+        host, tenant, site = board.split("|")
+    except ValueError:
+        return []
+    try:
+        r = client.post(
+            f"https://{host}/wday/cxs/{tenant}/{site}/jobs",
+            json={"appliedFacets": {}, "limit": 20, "offset": 0, "searchText": query or ""},
+            timeout=10,
+        )
+        r.raise_for_status()
+        data = r.json() or {}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Workday %s failed: %s", tenant, type(exc).__name__)
+        return []
     out: list[dict] = []
-    for wd_idx in (5, 1, 2, 3, 4):
-        url = f"https://{tenant}.wd{wd_idx}.myworkdaysite.com/en-US/external/search"
-        try:
-            r = client.post(
-                url,
-                json={
-                    "appliedFacets": {},
-                    "limit": 20,
-                    "offset": 0,
-                    "searchText": "",
-                },
-                timeout=10,
-            )
-        except Exception as exc:
-            logger.debug("Workday %s wd%d connection failed: %s", tenant, wd_idx, exc)
+    for j in data.get("jobPostings") or []:
+        ext = j.get("externalPath") or ""
+        if not j.get("title") or not ext.startswith("/"):
             continue
-        if r.status_code != 200:
-            continue
-        try:
-            data = r.json() or {}
-        except Exception:
-            continue
-        # Workday's response shape: {"jobPostings": [{"title":..., "externalPath":..., "locationsText":...}]}
-        for j in data.get("jobPostings") or []:
-            title = j.get("title") or j.get("bulletFields", [""])[0]
-            ext = j.get("externalPath") or ""
-            loc = j.get("locationsText") or j.get("location", "")
-            full_url = (
-                f"https://{tenant}.wd{wd_idx}.myworkdaysite.com/en-US{ext}"
-                if ext.startswith("/")
-                else ext
-            )
-            if not title:
-                continue
-            out.append(
-                {
-                    "title": title,
-                    "company": tenant,
-                    "location": loc,
-                    "description": (j.get("shortDescription") or "")[:600],
-                    "job_url": full_url,
-                    "platform": "workday",
-                }
-            )
-        if out:
-            return out  # one wd_N is enough
+        out.append(
+            {
+                "title": j["title"],
+                "company": tenant,
+                "location": j.get("locationsText") or "",
+                "description": "",
+                "job_url": f"https://{host}/en-US/{site}{ext}",
+                "platform": "workday",
+            }
+        )
     return out
 
 
@@ -1167,12 +1163,15 @@ def _search_bamboohr_company(client: httpx.Client, tenant: str) -> list[dict]:
     Returns the full list of public job postings. No auth required.
     """
     try:
+        # /jobs/list.json now answers 404; /careers/list returns JSON when asked.
         r = client.get(
-            f"https://{tenant}.bamboohr.com/jobs/list.json",
+            f"https://{tenant}.bamboohr.com/careers/list",
+            headers={"Accept": "application/json"},
             timeout=10,
+            follow_redirects=True,
         )
     except Exception as exc:
-        logger.debug("BambooHR %s connection failed: %s", tenant, exc)
+        logger.warning("BambooHR %s failed: %s", tenant, type(exc).__name__)
         return []
     if r.status_code != 200:
         return []
@@ -1183,19 +1182,16 @@ def _search_bamboohr_company(client: httpx.Client, tenant: str) -> list[dict]:
     out: list[dict] = []
     for j in items:
         loc_obj = j.get("location") or {}
-        loc = loc_obj.get("city", "")
-        if loc_obj.get("state"):
-            loc = f"{loc}, {loc_obj['state']}" if loc else loc_obj["state"]
-        if loc_obj.get("country"):
-            loc = f"{loc}, {loc_obj['country']}" if loc else loc_obj["country"]
+        loc = ", ".join(p for p in (loc_obj.get("city"), loc_obj.get("state")) if p)
+        if not j.get("jobOpeningName"):
+            continue
         out.append(
             {
-                "title": j.get("title", ""),
+                "title": j["jobOpeningName"],
                 "company": tenant,
-                "location": loc or "—",
-                "description": (j.get("description", "") or "")[:600],
-                "job_url": j.get("absolute_url", "")
-                or f"https://{tenant}.bamboohr.com/jobs/view.php?id={j.get('id', '')}",
+                "location": loc or ("Remote" if str(j.get("locationType")) == "1" else "—"),
+                "description": "",
+                "job_url": f"https://{tenant}.bamboohr.com/careers/{j.get('id', '')}",
                 "platform": "bamboohr",
             }
         )
@@ -1403,7 +1399,7 @@ def _search_open_job_apis(
             for j in r.json().get("data") or []:
                 title = j.get("title", "")
                 tags = " ".join(j.get("tags") or [])
-                if not _relevant(f"{title} {tags} {j.get('description','')[:300]}"):
+                if not _relevant(f"{title} {tags} {j.get('description', '')[:300]}"):
                     continue
                 jobs.append(
                     {
