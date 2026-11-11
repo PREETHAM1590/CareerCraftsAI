@@ -135,13 +135,12 @@ def test_one_platform_failure_still_returns_others():
             {
                 "open_apis": MagicMock(side_effect=Exception("boom")),
                 "jobspy": MagicMock(return_value=[{**_job(0), "platform": "x"}]),
-                "ats": MagicMock(return_value=[]),
                 "remoteok": MagicMock(return_value=[]),
             },
         ):
             return await svc.search_all_platforms(
                 {"titles": ["Backend"], "locations": [], "max_results": 10},
-                ["open_apis", "jobspy", "ats"],
+                ["open_apis", "jobspy"],
             )
 
     jobs, warnings = asyncio.run(go())

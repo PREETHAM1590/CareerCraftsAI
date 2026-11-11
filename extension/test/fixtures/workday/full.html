@@ -31,11 +31,57 @@
   const listbox = (id, label, options, current = "") =>
     `<div data-automation-id="formField-${id}"><label id="${id}-label">${label}</label>
       <button type="button" id="${id}" aria-haspopup="listbox" data-automation-id="${id}" data-options="${esc(JSON.stringify(options))}" aria-label="${esc(label)} ${esc(current || "Select One")}">${esc(current || "Select One")}</button><div class="alert"></div></div>`;
-  const dateField = (id, label) =>
-    `<div data-automation-id="formField-${id}"><label>${label}</label><div data-automation-id="dateInputWrapper">
-      <input data-automation-id="dateSectionMonth-input" role="spinbutton" aria-label="Month" maxlength="2" size="2">/
-      <input data-automation-id="dateSectionDay-input" role="spinbutton" aria-label="Day" maxlength="2" size="2">/
-      <input data-automation-id="dateSectionYear-input" role="spinbutton" aria-label="Year" maxlength="4" size="4"></div><div class="alert"></div></div>`;
+  // kind "day" (M/D/Y) or "month" (M/Y) date inputs that ignore typing and
+  // only take a click in the calendar popup; "year" is a typed year alone.
+  const section = (part, label, max) =>
+    `<input data-automation-id="dateSection${part}-input" role="spinbutton" aria-label="${label}" maxlength="${max}" size="${max}">`;
+  const dateField = (id, label, kind = "day") =>
+    `<div data-automation-id="formField-${id}"><label>${label}</label><div data-automation-id="dateInputWrapper" ${kind === "year" ? "" : `data-picker="${kind}"`}>
+      ${kind === "year" ? section("Year", "Year", 4) : kind === "month" ? `${section("Month", "Month", 2)}/${section("Year", "Year", 4)}` : `${section("Month", "Month", 2)}/${section("Day", "Day", 2)}/${section("Year", "Year", 4)}`}</div>
+      ${kind === "year" ? "" : `<button type="button" data-automation-id="dateIcon" aria-label="Calendar">&#128197;</button>`}<div class="alert"></div></div>`;
+
+  // ── Calendar popups: step with Previous/Next, click a day or a month ───
+  const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  document.addEventListener("click", (e) => {
+    const icon = e.target.closest("[data-automation-id=dateIcon]");
+    if (!icon) return;
+    closePopups();
+    const wrap = icon.parentElement.querySelector("[data-automation-id=dateInputWrapper]");
+    const kind = wrap.dataset.picker;
+    const now = new Date();
+    let year = now.getFullYear();
+    let month = now.getMonth();
+    const popup = document.createElement("div");
+    popup.className = "popup";
+    popup.setAttribute("data-automation-id", kind === "month" ? "monthPicker" : "datePicker");
+    const set = (part, value) => { const el = wrap.querySelector(`[data-automation-id=dateSection${part}-input]`); if (el) el.value = value; };
+    function draw() {
+      const header = kind === "month" ? String(year) : `${MONTH_NAMES[month]} ${year}`;
+      const cells = kind === "month"
+        ? MONTH_NAMES.map((m, i) => `<button type="button" role="gridcell" data-month="${i + 1}">${m.slice(0, 3)}</button>`).join("")
+        : Array.from({ length: new Date(year, month + 1, 0).getDate() }, (_, i) => `<button type="button" role="gridcell" data-day="${i + 1}">${i + 1}</button>`).join("");
+      popup.innerHTML = `<div><button type="button" aria-label="Previous ${kind === "month" ? "Year" : "Month"}" data-step="-1">&lsaquo;</button>
+        <span data-automation-id="datePickerHeader">${header}</span>
+        <button type="button" aria-label="Next ${kind === "month" ? "Year" : "Month"}" data-step="1">&rsaquo;</button></div><div role="grid">${cells}</div>`;
+    }
+    popup.addEventListener("click", (ev) => {
+      const stepBtn = ev.target.closest("[data-step]");
+      if (stepBtn) {
+        const delta = Number(stepBtn.dataset.step);
+        if (kind === "month") year += delta;
+        else { month += delta; if (month < 0) { month = 11; year -= 1; } if (month > 11) { month = 0; year += 1; } }
+        draw();
+        return;
+      }
+      const cell = ev.target.closest("[role=gridcell]");
+      if (!cell) return;
+      if (kind === "month") { set("Month", String(cell.dataset.month).padStart(2, "0")); set("Year", String(year)); }
+      else { set("Month", String(month + 1).padStart(2, "0")); set("Day", String(cell.dataset.day).padStart(2, "0")); set("Year", String(year)); }
+      closePopups();
+    });
+    draw();
+    document.body.appendChild(popup);
+  });
 
   // ── Listbox popups: options exist only while open ──────────────────────
   function closePopups() { document.querySelectorAll(".popup").forEach((p) => p.remove()); }
@@ -93,12 +139,44 @@
   // ── Date sections handle digits themselves, like Workday's spinbuttons ──
   function wireDates() {
     for (const el of document.querySelectorAll("[data-automation-id^=dateSection]")) {
+      if (el.dataset.wired) continue;
+      el.dataset.wired = "1";
+      const pickerOnly = !!el.closest("[data-picker]");
       el.addEventListener("keydown", (e) => {
+        if (pickerOnly) {
+          // Typing does nothing here: only the calendar sets this date.
+          e.preventDefault();
+          return;
+        }
         if (!/^\d$/.test(e.key)) return;
         e.preventDefault();
         const max = Number(el.getAttribute("maxlength"));
         el.value = (el.value + e.key).slice(-max);
       });
+      if (pickerOnly) el.addEventListener("input", () => { el.value = ""; });
+    }
+  }
+
+  // ── "Add" in Work Experience / Education creates one more empty block ──
+  function wireAdd() {
+    for (const [sectionId, listId, prefix, make] of [
+      ["workExperienceSection", "experience", "workExperience", (n) => `<h4>Work Experience ${n}</h4>
+        ${text(`jobTitle-${n}`, "Job Title*")}${text(`company-${n}`, "Company*")}
+        ${dateField(`from-${n}`, "From*", "month")}${dateField(`to-${n}`, "To", "month")}`],
+      ["educationSection", "education", "education", (n) => `<h4>Education ${n}</h4>
+        ${text(`school-${n}`, "School or University*")}${listbox(`degree-${n}`, "Degree*", ["Bachelor's Degree", "Master's Degree"])}
+        ${dateField(`eduFrom-${n}`, "From", "year")}${dateField(`eduTo-${n}`, "To (Actual or Expected)", "year")}`],
+    ]) {
+      const button = document.querySelector(`[data-automation-id=${sectionId}] > [data-automation-id=Add]`);
+      if (!button) continue;
+      button.onclick = () => {
+        const list = document.getElementById(listId);
+        const n = list.querySelectorAll(`[data-automation-id^=${prefix}-]`).length + 1;
+        setTimeout(() => {
+          list.insertAdjacentHTML("beforeend", `<div data-automation-id="${prefix}-${n}">${make(n)}</div>`);
+          wireDates();
+        }, 150);
+      };
     }
   }
 
@@ -130,6 +208,7 @@
     wirePrompt();
     wireDates();
     wireUpload();
+    wireAdd();
     document.getElementById("next").onclick = next;
   }
 
@@ -172,7 +251,10 @@
         country: btn("addressSection_countryRegion"), device: btn("phone-device-type"), phone });
     } else if (step === 1) {
       if (!check([["resume", !!values.resume, "Error: Upload your resume"]])) return;
-      Object.assign(values, { job_title: val("jobTitle"), company: val("company"), linkedin: val("linkedinQuestion") });
+      Object.assign(values, { job_title: val("jobTitle"), company: val("company"), linkedin: val("linkedinQuestion"),
+        job2_title: val("jobTitle-2"), job2_company: val("company-2"), job2_from: date("from-2"), job2_to: date("to-2"),
+        school: val("school-1"), degree: document.getElementById("degree-1") ? btn("degree-1") : "",
+        edu_from: date("eduFrom-1"), edu_to: date("eduTo-1") });
     } else if (step === 2) {
       if (!check([
         ["authorized", !!btn("authorized"), "Error: This question is required"],
@@ -213,11 +295,12 @@
           <div data-automation-id="formField-resume"><div data-automation-id="file-upload-drop-zone"><label for="cv">Upload Resume*</label><button type="button" data-automation-id="select-files">Select files</button>
           <input type="file" id="cv" data-automation-id="file-upload-input-ref"></div><div id="uploaded"></div><div class="alert"></div></div></div>
         <div data-automation-id="workExperienceSection"><h3>Work Experience</h3><div id="experience"></div><button type="button" data-automation-id="Add">Add</button></div>
+        <div data-automation-id="educationSection"><h3>Education</h3><div id="education"></div><button type="button" data-automation-id="Add">Add</button></div>
         ${text("linkedinQuestion", "LinkedIn")}`);
     } else if (step === 2) {
       page(`${listbox("authorized", "Are you legally authorized to work in India?*", ["Yes", "No"])}
         ${listbox("sponsorship", "Will you now or in the future require visa sponsorship?*", ["Yes", "No"])}
-        ${dateField("startDate", "When can you start?*")}`);
+        ${dateField("startDate", "When can you start?*", "day")}`);
     } else if (step === 3) {
       page(`${listbox("gender", "Gender", ["Female", "Male", "I do not wish to answer"])}
         ${listbox("veteranStatus", "Veteran Status*", ["I am a protected veteran", "I am not a protected veteran", "I do not wish to answer"])}
