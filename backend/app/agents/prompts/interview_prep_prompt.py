@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from . import _COMMON
+from . import _COMMON, one_line, untrusted
 
 SYSTEM_PROMPT = _COMMON + """
 You build an interview preparation pack: 12-18 questions, a 5-day study plan, ranked topics, and questions for the candidate to ask the interviewer.
@@ -55,9 +55,9 @@ def build_user_prompt(context: dict, rag_chunks: list[str] | None = None) -> str
         "the material given; stay explicitly generic rather than inventing company-specific "
         "detail. Return JSON only."
     ).format(
-        role=role,
-        company=company,
-        jd=jd,
-        research=research,
-        chunks=chunks or "NOT_PROVIDED",
+        role=one_line(role),
+        company=one_line(company),
+        jd=untrusted(jd),
+        research=untrusted(research),
+        chunks=untrusted(chunks),
     )
