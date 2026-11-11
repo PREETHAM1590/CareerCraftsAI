@@ -51,6 +51,8 @@ FAMILIES = {
     "gem",
     "reed",
     "usajobs",
+    "oracle",
+    "icims",
 }
 
 
@@ -165,6 +167,9 @@ ATS_HOSTS = (
     "trakstar.com",
     "hibob.com",
     "gem.com",
+    "oraclecloud.com",
+    "taleo.net",
+    "applytojob.com",
 )
 _COMPANY_SUFFIX = re.compile(
     r"\b(inc|llc|ltd|limited|pvt|private|corp|corporation|co|gmbh|technologies|technology|"
@@ -606,6 +611,12 @@ async def _fetch_workday(source: Source, query: str, cursor: str | None) -> Page
     ):
         raise ValueError("Invalid Workday source")
     offset = int(cursor or "0")
+    # myworkdaysite.com boards are served under /recruiting/{tenant}/{site}.
+    base = (
+        f"https://{host}/en-US/recruiting/{tenant}/{site}"
+        if host.endswith("myworkdaysite.com")
+        else f"https://{host}/en-US/{site}"
+    )
     if offset < 0 or offset >= _WORKDAY_PAGE * _WORKDAY_MAX_PAGES:
         raise ValueError("Pagination limit exceeded")
     response = await public_get(
@@ -625,7 +636,7 @@ async def _fetch_workday(source: Source, query: str, cursor: str | None) -> Page
             "id": j.get("externalPath"),
             "title": j.get("title"),
             "company": tenant,
-            "url": f"https://{host}/en-US/{site}{j.get('externalPath')}",
+            "url": f"{base}{j.get('externalPath')}",
             "location": j.get("locationsText"),
             "posted_at": workday_posted(j.get("postedOn")),
         }
