@@ -70,9 +70,16 @@ async def pair(
     current_user: User = Depends(get_current_user),
 ):
     """Create a device token. It is returned once — paste it into the
-    extension (or let the web app hand it over) and it is never shown again."""
+    extension (or let the web app hand it over) and it is never shown again.
+    Pairing beyond the device limit revokes the least recently used browser."""
     device, token = await extension_service.pair_device(db, current_user.id, body.name)
-    return {"device_id": str(device.id), "name": device.name, "token": token}
+    return {
+        "device_id": str(device.id),
+        "name": device.name,
+        "token": token,
+        "expires_at": device.expires_at.isoformat() if device.expires_at else None,
+        "revoked_device_ids": [str(i) for i in getattr(device, "evicted_ids", [])],
+    }
 
 
 @router.get("/download")
@@ -122,9 +129,11 @@ async def list_devices(
                 "name": d.name,
                 "created_at": d.created_at.isoformat() if d.created_at else None,
                 "last_seen_at": d.last_seen_at.isoformat() if d.last_seen_at else None,
+                "expires_at": d.expires_at.isoformat() if d.expires_at else None,
             }
             for d in rows
-        ]
+        ],
+        "max_devices": extension_service.MAX_DEVICES_PER_USER,
     }
 
 
@@ -243,11 +252,29 @@ async def device_me(
     db: AsyncSession = Depends(get_db),
 ):
     user = await db.get(User, device.user_id)
+    expires_at = device.expires_at
     return {
         "device_id": str(device.id),
         "device_name": device.name,
         "user": {"email": user.email if user else None, "name": user.full_name if user else None},
+        "token_expires_at": expires_at.isoformat() if expires_at else None,
+        "rotate_token": expires_at is None
+        or expires_at - datetime.now(UTC) < extension_service.TOKEN_ROTATE_WITHIN,
+        # Read-only here: the member changes it in the web app's settings.
+        "auto_submit": await extension_service.auto_submit_status(db, device.user_id),
     }
+
+
+@router.post("/device/token/rotate")
+@limiter.limit("10/hour")
+async def rotate_device_token(
+    request: Request,
+    device: ExtensionDevice = Depends(get_device),
+    db: AsyncSession = Depends(get_db),
+):
+    """Swap this browser's token for a fresh one; the old token stops working."""
+    token = await extension_service.rotate_token(db, device)
+    return {"token": token, "expires_at": device.expires_at.isoformat()}
 
 
 @router.delete("/device/me")
@@ -272,7 +299,15 @@ async def claim_task(
     await _signal(task.workflow_id, {"stage": "claimed"})
     if not getattr(task, "redelivered", False):
         await _record_progress(db, task, "claimed", STAGE_MESSAGES["claimed"])
-    return extension_service.task_view(task)
+    view = extension_service.task_view(task)
+    # A hint for the extension; approve-submit re-checks everything.
+    status = await extension_service.auto_submit_status(db, task.user_id)
+    view["auto_submit"] = (
+        status["enabled"]
+        and not extension_service.auto_submit_host_blocked(task)
+        and status["used_last_24h"] < status["daily_cap"]
+    )
+    return view
 
 
 @router.get("/device/tasks/{task_id}")
@@ -334,6 +369,11 @@ class ReviewRequest(BaseModel):
 class SubmitApproval(BaseModel):
     review_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     user_confirmed: Literal[True]
+    # True when no person pressed Submit: the member's auto-submit setting
+    # stands in for the click, and the server decides whether it may. Required
+    # (None = an extension older than 0.6.0, which could auto-submit on a
+    # local switch the server never saw).
+    auto_approved: bool | None = None
 
 
 def _review_url(url: str) -> None:
@@ -407,6 +447,8 @@ async def review_task(
     task.review_hash = hashlib.sha256(json.dumps(binding, sort_keys=True).encode()).hexdigest()
     task.review_url = body.url
     task.review_expires_at = datetime.now(UTC) + timedelta(minutes=5)
+    # Kept for the approval audit: these exact answers are what gets submitted.
+    task.payload = {**(task.payload or {}), "review_fields": snapshot["fields"]}
     attempt.state = "awaiting_approval"
     await db.commit()
     return {"review_hash": task.review_hash, "expires_at": task.review_expires_at.isoformat()}
@@ -421,6 +463,11 @@ async def approve_submit(
     device: ExtensionDevice = Depends(get_device),
     db: AsyncSession = Depends(get_db),
 ):
+    if body.auto_approved is None:
+        raise HTTPException(
+            status_code=426,
+            detail="Update the CareerCraft extension (0.6.0 or newer) to submit applications.",
+        )
     task = await _device_task(db, device, task_id)
     now = datetime.now(UTC)
     if (
@@ -434,6 +481,13 @@ async def approve_submit(
     attempt = await _task_attempt(db, task)
     if attempt.state != "awaiting_approval":
         raise HTTPException(status_code=409, detail="Application cannot be submitted again")
+    if body.auto_approved:
+        status = await extension_service.auto_submit_status(db, task.user_id, lock=True)
+        refusal = extension_service.auto_submit_refusal(status, task)
+        if refusal:
+            # The extension falls back to asking the member in its popup.
+            raise HTTPException(status_code=403, detail=refusal)
+    extension_service.record_approval(db, task, device, auto=body.auto_approved)
     token = secrets.token_urlsafe(32)
     task.submission_token_hash = hashlib.sha256(token.encode()).hexdigest()
     task.submission_expires_at = now + timedelta(minutes=2)
@@ -443,6 +497,122 @@ async def approve_submit(
     attempt.approved_snapshot_hash = task.review_hash
     await db.commit()
     return {"submission_token": token, "expires_at": task.submission_expires_at.isoformat()}
+
+
+MAX_SCREENSHOT_BYTES = 2 * 1024 * 1024
+_JPEG_DATA_URL = "data:image/jpeg;base64,"
+
+
+class EvidenceRequest(BaseModel):
+    review_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    screenshot: str = Field(max_length=len(_JPEG_DATA_URL) + MAX_SCREENSHOT_BYTES * 4 // 3 + 4)
+
+
+@router.post("/device/tasks/{task_id}/evidence")
+@limiter.limit("10/minute")
+async def task_evidence(
+    request: Request,
+    task_id: uuid.UUID,
+    body: EvidenceRequest,
+    device: ExtensionDevice = Depends(get_device),
+    db: AsyncSession = Depends(get_db),
+):
+    """A screenshot of the reviewed form, kept with the submit approval."""
+    import base64
+    import binascii
+
+    from app.models.db import ApplicationSubmitApproval
+    from app.services.storage_service import delete_file, upload_file
+
+    task = await _device_task(db, device, task_id)
+    if not task.review_hash or task.review_hash != body.review_hash:
+        raise HTTPException(status_code=409, detail="This review is no longer current")
+    if not body.screenshot.startswith(_JPEG_DATA_URL):
+        raise HTTPException(status_code=422, detail="Screenshot must be a JPEG data URL")
+    try:
+        content = base64.b64decode(body.screenshot[len(_JPEG_DATA_URL) :], validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(status_code=422, detail="Screenshot is not valid base64") from None
+    if not content.startswith(b"\xff\xd8\xff") or len(content) > MAX_SCREENSHOT_BYTES:
+        raise HTTPException(status_code=422, detail="Screenshot must be a JPEG under 2 MB")
+    path = await asyncio.to_thread(
+        upload_file, str(task.user_id), "review.jpg", content, "image/jpeg"
+    )
+    previous = ((task.payload or {}).get("review_screenshot") or {}).get("path")
+    task.payload = {
+        **(task.payload or {}),
+        "review_screenshot": {"review_hash": task.review_hash, "path": path},
+    }
+    approval = (
+        await db.execute(
+            select(ApplicationSubmitApproval).where(
+                ApplicationSubmitApproval.extension_task_id == task.id,
+                ApplicationSubmitApproval.review_hash == task.review_hash,
+            )
+        )
+    ).scalar_one_or_none()
+    kept = previous
+    if approval is not None:
+        kept = approval.screenshot_path
+        approval.screenshot_path = approval.screenshot_path or path
+    await db.commit()
+    if previous and previous != path and previous != kept:
+        try:
+            await asyncio.to_thread(delete_file, previous, str(task.user_id))
+        except Exception as exc:  # an orphaned file is harmless; the account folder goes on erasure
+            logger.info("Old review screenshot not deleted: %s", type(exc).__name__)
+    return {"status": "stored"}
+
+
+async def _latest_approval(db: AsyncSession, user_id: uuid.UUID, application_id: uuid.UUID):
+    from app.models.db import ApplicationSubmitApproval
+
+    return (
+        await db.execute(
+            select(ApplicationSubmitApproval)
+            .where(
+                ApplicationSubmitApproval.user_id == user_id,
+                ApplicationSubmitApproval.job_application_id == application_id,
+            )
+            .order_by(ApplicationSubmitApproval.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+@router.get("/applications/{application_id}/submission")
+async def application_submission(
+    application_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Who approved this application's submission, when, and with which answers."""
+    approval = await _latest_approval(db, current_user.id, application_id)
+    return {"submission": extension_service.approval_view(approval) if approval else None}
+
+
+@router.get("/applications/{application_id}/submission/screenshot")
+async def application_submission_screenshot(
+    application_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from app.services.storage_service import download_file
+
+    approval = await _latest_approval(db, current_user.id, application_id)
+    if approval is None or not approval.screenshot_path:
+        raise HTTPException(status_code=404, detail="No screenshot for this application")
+    try:
+        content = await asyncio.to_thread(
+            download_file, approval.screenshot_path, str(current_user.id)
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=404, detail="Screenshot is no longer available") from exc
+    return Response(
+        content=content,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 async def _record_progress(db: AsyncSession, task: ExtensionTask, stage: str, message: str) -> None:
@@ -714,6 +884,9 @@ async def save_answer(
     question is filled automatically next time."""
     from app.applications import profile_service
 
+    if extension_service.is_section_label(body.label):
+        # "Work Experience 2: Company" belongs to one block of one form.
+        return {"question_key": None}
     key = body.question_key or extension_service.answer_key(body.label)
     await profile_service.save_approved_answer(db, device.user_id, key, body.label, body.value)
     await db.commit()

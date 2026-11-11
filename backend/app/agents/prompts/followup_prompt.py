@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from . import _COMMON
+from . import _COMMON, one_line, untrusted
 
 SYSTEM_PROMPT = _COMMON + """
 You draft application follow-up emails: <=110 words, polite, low-pressure, never needy or accusatory. Reference the exact role title, the company, and the date of the application or last contact — all taken from the provided context, never estimated. If the role, company, or date is absent from the context, write "NOT_PROVIDED" in the body where it would appear rather than inferring it.
@@ -42,11 +42,11 @@ def build_user_prompt(context: dict, rag_chunks: list[str] | None = None) -> str
         "role, company, and dates given; do not estimate them. Draft only; a human "
         "approves the send. Return JSON only."
     ).format(
-        context=context,
-        role=role,
-        company=company,
-        applied_on=applied_on,
-        stage=stage,
-        thread=thread,
-        chunks=chunks or "NOT_PROVIDED",
+        context=untrusted(context),
+        role=one_line(role),
+        company=one_line(company),
+        applied_on=one_line(applied_on, 40),
+        stage=one_line(stage, 20),
+        thread=untrusted(thread),
+        chunks=untrusted(chunks),
     )

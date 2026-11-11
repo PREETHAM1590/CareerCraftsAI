@@ -20,6 +20,11 @@ _RULES: list[tuple[re.Pattern[str], str]] = [
         ),
         "authorization.work_authorized",
     ),
+    # Voluntary disclosures: only ever answered from an answer the member saved.
+    (re.compile(r"veteran", re.I), "disclosure.veteran_status"),
+    (re.compile(r"disabilit|disabled", re.I), "disclosure.disability_status"),
+    (re.compile(r"\brace\b|ethnic|hispanic|latin[oax]", re.I), "disclosure.race_ethnicity"),
+    (re.compile(r"gender|\bsex\b", re.I), "disclosure.gender"),
     (
         re.compile(r"willing\s+to\s+relocate|open\s+to\s+relocat", re.I),
         "location.willing_to_relocate",
