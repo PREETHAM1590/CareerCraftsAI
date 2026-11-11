@@ -32,6 +32,7 @@ router.include_router(basis_router)
 logger = logging.getLogger(__name__)
 
 VALID_STATUSES = {"saved", "applied", "viewed", "interview", "offer", "rejected"}
+MAX_LOCATIONS = 5
 
 
 class JobSearchRequest(JobSearchQuerySchema):
@@ -366,6 +367,8 @@ async def _resolve_search_context(
 
     requested_location = payload.location.strip()
     location = requested_location or "Remote"
+    # Every place the member asked for counts, not just the first.
+    locations = [location]
     work_modes = _split_pref_values(payload.work_mode)
     preferred_locations = [
         str(loc).strip() for loc in (payload.preferred_locations or []) if str(loc).strip()
@@ -386,6 +389,7 @@ async def _resolve_search_context(
             and preferred_locations
         ):
             location = preferred_locations[0]
+            locations = list(dict.fromkeys(preferred_locations))[:MAX_LOCATIONS]
     work_mode = ",".join(work_modes)
 
     source = {
@@ -394,6 +398,7 @@ async def _resolve_search_context(
             "preferences" if prefs and location != requested_location else "custom"
         ),
         "work_mode": work_mode or None,
+        "locations": locations,
         "experience_level": experience_level,
         "years_experience": years_experience,
         "job_type": payload.job_type or (prefs.job_type if prefs else None),
@@ -448,7 +453,11 @@ async def get_job_search_profile(
         if prefs
         else []
     )
-    location = "Remote" if primary_work_mode == "remote" else (locations[0] if locations else "Any")
+    location = (
+        "Remote"
+        if primary_work_mode == "remote"
+        else (", ".join(locations[:MAX_LOCATIONS]) if locations else "Any")
+    )
 
     missing_fields: list[str] = []
     if not resume:
@@ -709,6 +718,10 @@ async def search_jobs(
         search_query = " ".join(titles)
     if structured_locations:
         location = structured_locations[0]
+    search_locations = structured_locations or [
+        str(loc) for loc in (search_source.get("locations") or []) if loc
+    ]
+    search_locations = search_locations[:MAX_LOCATIONS] or [location]
     # Leave unset so job_search_service uses DEFAULT_PLATFORMS
     # (open_apis, jobspy, ats, remoteok).
     #
@@ -731,7 +744,7 @@ async def search_jobs(
         "persona_id": str(persona.id) if persona else None,
         "posted_within_days": payload.posted_within_days,
         "titles": sorted(set(titles)),
-        "locations": sorted(set(structured_locations)),
+        "locations": sorted(set(search_locations)),
         "platforms": sorted(platforms),
         "remote": remote,
     }
