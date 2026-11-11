@@ -21,10 +21,10 @@ import re
 import secrets
 import uuid
 import zipfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.applications.answer_resolver import resolve_fields
@@ -65,19 +65,62 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+TOKEN_TTL = timedelta(days=90)
+# The extension swaps its token for a fresh one once it is this close to expiry.
+TOKEN_ROTATE_WITHIN = timedelta(days=30)
+MAX_DEVICES_PER_USER = 5
+
+
+def _new_token() -> str:
+    return TOKEN_PREFIX + secrets.token_urlsafe(32)
+
+
 async def pair_device(
     db: AsyncSession, user_id: uuid.UUID, name: str
 ) -> tuple[ExtensionDevice, str]:
-    token = TOKEN_PREFIX + secrets.token_urlsafe(32)
+    """Create a device token. At most MAX_DEVICES_PER_USER stay active: the
+    least recently used ones are revoked to make room; their ids are left on
+    the new device as `evicted_ids`."""
+    # Serialize pairings of one member so two at once cannot both skip the cap.
+    await db.execute(select(User.id).where(User.id == user_id).with_for_update())
+    active = (
+        (
+            await db.execute(
+                select(ExtensionDevice)
+                .where(ExtensionDevice.user_id == user_id, ExtensionDevice.revoked_at.is_(None))
+                .order_by(
+                    func.coalesce(ExtensionDevice.last_seen_at, ExtensionDevice.created_at),
+                    ExtensionDevice.created_at,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    evicted = list(active[: max(0, len(active) - (MAX_DEVICES_PER_USER - 1))])
+    for old in evicted:
+        await revoke_device(db, old, commit=False)
+    token = _new_token()
     device = ExtensionDevice(
         id=uuid.uuid4(),
         user_id=user_id,
         name=(name or "Browser").strip()[:100] or "Browser",
         token_hash=hash_token(token),
+        expires_at=datetime.now(UTC) + TOKEN_TTL,
     )
     db.add(device)
     await db.commit()
+    device.evicted_ids = [d.id for d in evicted]
     return device, token
+
+
+async def rotate_token(db: AsyncSession, device: ExtensionDevice) -> str:
+    """Replace the device's token; the old one stops working immediately."""
+    token = _new_token()
+    device.token_hash = hash_token(token)
+    device.expires_at = datetime.now(UTC) + TOKEN_TTL
+    await db.commit()
+    return token
 
 
 async def authenticate(db: AsyncSession, token: str) -> ExtensionDevice | None:
@@ -88,6 +131,10 @@ async def authenticate(db: AsyncSession, token: str) -> ExtensionDevice | None:
             select(ExtensionDevice).where(
                 ExtensionDevice.token_hash == hash_token(token),
                 ExtensionDevice.revoked_at.is_(None),
+                or_(
+                    ExtensionDevice.expires_at.is_(None),
+                    ExtensionDevice.expires_at > datetime.now(UTC),
+                ),
             )
         )
     ).scalar_one_or_none()
@@ -114,7 +161,7 @@ async def authenticate(db: AsyncSession, token: str) -> ExtensionDevice | None:
     return device
 
 
-async def revoke_device(db: AsyncSession, device: ExtensionDevice) -> None:
+async def revoke_device(db: AsyncSession, device: ExtensionDevice, *, commit: bool = True) -> None:
     """Revoke and return the device's unacknowledged claims to the pending pool."""
     device.revoked_at = datetime.now(UTC)
     await db.execute(
@@ -122,7 +169,8 @@ async def revoke_device(db: AsyncSession, device: ExtensionDevice) -> None:
         .where(ExtensionTask.device_id == device.id, ExtensionTask.status == "claimed")
         .values(status="pending", device_id=None, claimed_at=None)
     )
-    await db.commit()
+    if commit:
+        await db.commit()
 
 
 async def has_active_device(db: AsyncSession, user_id: uuid.UUID) -> bool:
