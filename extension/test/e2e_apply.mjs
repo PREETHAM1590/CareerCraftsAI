@@ -115,9 +115,20 @@ let task = null;
 let log = [];
 let reviewHash = null;
 let permit = null;
+const approvals = []; // auto_approved flag of each approve-submit call
+const evidence = []; // sizes of review screenshots received
 
 function planFor(fields) {
   const byLabel = [
+    // Blocks the driver adds with "Add", filled from the member's resume facts.
+    [/^work experience 2: job title/i, "Analyst"],
+    [/^work experience 2: company/i, "Babbage & Co"],
+    [/^work experience 2: from/i, "03/2018"],
+    [/^work experience 2: to/i, "06/2020"],
+    [/^education 1: school/i, "University of London"],
+    [/^education 1: degree/i, "Bachelor's Degree"],
+    [/^education 1: from/i, "2012"],
+    [/^education 1: to/i, "2016"],
     [/first name/i, "Ada"],
     [/last name/i, "Lovelace"],
     [/full name/i, "Ada Lovelace"],
@@ -156,7 +167,10 @@ function planFor(fields) {
     if (f.type === "textarea") entry = { ...entry, value: "I build reliable backends.", source: "generated", confidence: 0.6, requires_review: true };
     plan.push(entry);
   }
-  return { fields: plan, unresolved_required: plan.filter((p) => p.required && (p.value == null || p.value === "")).map((p) => p.field_id) };
+  // Like the server: the facts hold two jobs and one school.
+  const blocks = (re) => new Set(fields.map((f) => re.exec(f.label || "")?.[1]).filter(Boolean)).size;
+  const add_blocks = { work_experience: Math.max(0, 2 - blocks(/^Work Experience (\d+):/)), education: Math.max(0, 1 - blocks(/^Education (\d+):/)) };
+  return { fields: plan, unresolved_required: plan.filter((p) => p.required && (p.value == null || p.value === "")).map((p) => p.field_id), add_blocks };
 }
 
 const api = http.createServer(async (req, res) => {
@@ -206,8 +220,17 @@ const api = http.createServer(async (req, res) => {
     reviewHash = (Date.now().toString(16) + "a".repeat(64)).slice(0, 64);
     return send(200, { review_hash: reviewHash, expires_at: new Date(Date.now() + 5 * 60000).toISOString() });
   }
+  if (action === "evidence") {
+    if (json.review_hash !== reviewHash || !/^data:image\/jpeg;base64,/.test(json.screenshot || "")) return send(422, { detail: "bad evidence" });
+    evidence.push(json.screenshot.length);
+    return send(200, { status: "stored" });
+  }
   if (action === "approve-submit") {
+    if (typeof json.auto_approved !== "boolean") return send(426, { detail: "Update the CareerCraft extension" });
     if (task.status !== "review" || json.review_hash !== reviewHash || !json.user_confirmed) return send(409, { detail: "Review expired, changed or already approved" });
+    approvals.push(json.auto_approved);
+    // Like the server: auto-approval only when this member's setting allows it.
+    if (json.auto_approved && !task.server_allows_auto) return send(403, { detail: "Auto-submit is off in your CareerCraft settings." });
     task.status = "submitting";
     permit = `permit-${task.id}`;
     return send(200, { submission_token: permit, expires_at: new Date(Date.now() + 2 * 60000).toISOString() });
@@ -475,7 +498,10 @@ const SCENARIOS = [
       s.first_name === "Ada" && s.last_name === "Lovelace" && s.phone === "9000000000" && s.device === "Mobile" && s.source === "LinkedIn" &&
       s.country === "India" && s.city === "Pune" && s.job_title === "Engineer" && s.resume === "ada-resume.pdf" &&
       s.linkedin === "https://www.linkedin.com/in/ada" && s.authorized === "Yes" && s.sponsorship === "No" && s.start === "12/01/2026" &&
-      s.gender === "" && s.veteran === "I am not a protected veteran" && s.terms === true,
+      s.gender === "" && s.veteran === "I am not a protected veteran" && s.terms === true &&
+      // Added with "Add" and filled, dates through the calendar popups.
+      s.job2_title === "Analyst" && s.job2_company === "Babbage & Co" && s.job2_from === "03/2018" && s.job2_to === "06/2020" &&
+      s.school === "University of London" && s.degree === "Bachelor's Degree" && s.edu_from === "2012" && s.edu_to === "2016",
   },
   {
     name: "Auto-apply on: a form with open questions still stops for the person",
@@ -502,6 +528,23 @@ const SCENARIOS = [
     auto: true,
     async answer() {
       await waitUntil(async () => ["submitted", "failed"].includes(task.status), 45000, "auto-applied outcome");
+    },
+    verify: (s) => s.name === "Ada Lovelace" && s.email === "ada@example.com" && s.resume === "ada-resume.pdf",
+  },
+  {
+    // The extension cannot auto-submit when the server says no (setting
+    // turned off since the claim, cap reached, a drafted answer…).
+    name: "Auto-apply refused by the server: falls back to the popup approval",
+    url: `https://jobs.lever.co:${sitePort}/acme/1`,
+    platform: "lever",
+    formHost: "jobs.lever.co",
+    autoApply: true,
+    serverRefuses: true,
+    skipPanel: true,
+    async answer(page) {
+      await waitUntil(async () => approvals.length === 1, 45000, "refused auto-approval");
+      await waitUntil(async () => (await panelHtml(page, 4000)).includes("Auto-submit paused"), 10000, "refusal shown in the page");
+      check(task.status === "review" && submissions.length === 0, "nothing submitted after the server refused auto-submit");
     },
     verify: (s) => s.name === "Ada Lovelace" && s.email === "ada@example.com" && s.resume === "ada-resume.pdf",
   },
@@ -578,10 +621,23 @@ try {
     console.log(`\n# ${scenario.name}`);
     log = [];
     submissions.length = 0;
-    task = { id: `11111111-1111-4111-8111-11111111111${index}`, status: "pending", job_url: scenario.url, company: "Acme", role: "Engineer", platform: scenario.platform, has_resume: true };
+    approvals.length = 0;
+    evidence.length = 0;
+    // auto_submit is what the server tells the extension at claim time;
+    // server_allows_auto is what it decides at approve-submit.
+    task = {
+      id: `11111111-1111-4111-8111-1111111111${String(index).padStart(2, "0")}`,
+      status: "pending",
+      job_url: scenario.url,
+      company: "Acme",
+      role: "Engineer",
+      platform: scenario.platform,
+      has_resume: true,
+      auto_submit: !!scenario.autoApply,
+      server_allows_auto: !!scenario.autoApply && !scenario.serverRefuses,
+    };
     const jobHost = new URL(scenario.url).host;
     try {
-      await worker.evaluate((autoApply) => chrome.storage.local.set({ settings: { autoApply } }), !!scenario.autoApply);
       await app.bringToFront();
       await app.evaluate(() => window.postMessage({ source: "careercraft-app", type: "CAREERCRAFT_WAKE" }, location.origin));
       const page = await waitUntil(async () => context.pages().find((pg) => pg !== app && !pg.isClosed() && pg.url().startsWith(`https://${jobHost}/`)), 20000, "job tab");
@@ -595,14 +651,15 @@ try {
       }
       if (scenario.auto) {
         check(task.status === "submitted", `outcome reported: ${task.status}${task.result?.error ? ` (${task.result.error})` : ""}`);
-        check(log.some((e) => e[1] === "/tasks/:id/approve-submit"), "approved by the auto-apply opt-in, without the popup");
+        check(JSON.stringify(approvals) === "[true]", `approved as auto_approved by the server-side setting, without the popup ${JSON.stringify(approvals)}`);
         check(submissions.length === 1 && scenario.verify(submissions[0]), `exactly one submit ${JSON.stringify(submissions)}`);
         check((await worker.evaluate(() => chrome.action.getBadgeText({}))) === "", "no approval badge");
+        check(evidence.length === 1, `a screenshot of the reviewed form was stored (${evidence.length})`);
         await page.close();
         continue;
       }
       check(submissions.length === 0, "nothing submitted before review");
-      await panelClick(page, `[data-role="primary"]`);
+      if (!scenario.skipPanel) await panelClick(page, `[data-role="primary"]`);
 
       await waitUntil(async () => log.some((e) => e[1] === "/tasks/:id/review"), 20000, "final review request");
       await new Promise((r) => setTimeout(r, 1500));
@@ -615,6 +672,9 @@ try {
       check(submissions.length === 1 && scenario.verify(submissions[0]), `exactly one submit with the reviewed values ${JSON.stringify(submissions)}`);
       check(new URL(task.result.confirmation_url).hostname === scenario.formHost, "confirmation read from the form's page");
       check((await worker.evaluate(() => chrome.action.getBadgeText({}))) === "", "badge cleared");
+      const expected = scenario.serverRefuses ? "[true,false]" : "[false]";
+      check(JSON.stringify(approvals) === expected, `approvals recorded as ${expected} (auto_approved flags): ${JSON.stringify(approvals)}`);
+      check(evidence.length === 1, `a screenshot of the reviewed form was stored (${evidence.length})`);
       await page.close();
     } catch (e) {
       check(false, e.message);
@@ -632,7 +692,6 @@ try {
   if (!process.env.ONLY || "Autofill".includes(process.env.ONLY)) {
     console.log("\n# Autofill this page (no task): Workday My Information and a Greenhouse form");
     submissions.length = 0;
-    await worker.evaluate(() => chrome.storage.local.set({ settings: { autoApply: false } }));
     const profile = { firstName: "Ada", lastName: "Lovelace", email: "ada@example.com", phone: "9000000000", city: "Pune", howDidYouHear: "LinkedIn", gender: "" };
     const resume = { filename: "local-cv.pdf", mime: "application/pdf", base64: Buffer.from("%PDF-1.4\n%local\n").toString("base64") };
     const autofill = async (page, marker) =>

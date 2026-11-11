@@ -193,18 +193,24 @@
   // submitted without the review panel or the popup approval. Anything a
   // person should look at (an empty required answer, an AI draft, a value the
   // page refused) still stops at the review panel.
+  // Answers auto-submit may rely on: the member's saved answers ("user"),
+  // their profile, and values the site itself already shows ("page").
+  const AUTO_SOURCES = new Set(["user", "profile", "page"]);
+  const NO_AUTO_HOST_RE = /(^|\.)(linkedin|naukri)\.com\.?$/i;
+
   function needsAttention(fields, typed) {
     return fields.filter((f) => {
       if (f.readonly) return false;
       const value = typed && Object.prototype.hasOwnProperty.call(typed, f.field_id) ? typed[f.field_id] : f.value;
       if (f.required && isEmpty(value)) return true;
+      if (!isEmpty(value) && f.source && !AUTO_SOURCES.has(f.source)) return true;
       return !!f.requires_review && !isEmpty(value);
     });
   }
 
   async function reviewOrAuto(ctx, opts) {
     // canAuto=false: the submit control was only guessed, so a person confirms.
-    if (ctx.autoApply && opts.canAuto !== false) {
+    if (ctx.autoApply && opts.canAuto !== false && !NO_AUTO_HOST_RE.test(location.hostname)) {
       const blocking = needsAttention(opts.fields || []);
       if (!blocking.length) {
         ctx.panel.showStatus("Auto-apply is on: everything is filled, submitting now…", [ctx.task.company, ctx.task.role].filter(Boolean).join(" · "));
@@ -873,6 +879,7 @@
   //   restrict(plan, stepName)  drops answers a step must not get automatically
   //   keepFilled                never overwrite a value the page already shows
   //   prepare(ctx, root)        runs before planning (e.g. resume upload first)
+  //   expand(ctx, root, plan)   adds blocks the plan asks for; true = re-plan
   //   blocked()                 a reason this application cannot go on
   //   stepErrors(root)          visible validation messages
   //   signature()               changes whenever the step changes
@@ -929,9 +936,16 @@
           ctx.panel.showStatus(`Filling ${cfg.label}${where}…`, subtitle(ctx));
 
           if (cfg.prepare) await cfg.prepare(ctx, m);
-          const snap = cfg.snapshot ? await cfg.snapshot(m) : await dom.loadWidgetOptions(dom.snapshot(m));
-          const plan = snap.fields.length ? await ctx.api.plan(location.href, snap.fields) : { fields: [], unresolved_required: [] };
-          if (!plan) throw new Error("Could not reach CareerCraft to plan this step");
+          let snap;
+          let plan;
+          for (let pass = 0; pass < 2; pass++) {
+            snap = cfg.snapshot ? await cfg.snapshot(m) : await dom.loadWidgetOptions(dom.snapshot(m));
+            plan = snap.fields.length ? await ctx.api.plan(location.href, snap.fields) : { fields: [], unresolved_required: [] };
+            if (!plan) throw new Error("Could not reach CareerCraft to plan this step");
+            // The page may need more repeated blocks (work history, education)
+            // than it shows: add them once, then plan the step again.
+            if (pass > 0 || !cfg.expand || !(await cfg.expand(ctx, m, plan))) break;
+          }
           plan.unresolved_required = plan.unresolved_required || [];
           if (cfg.restrict) cfg.restrict(plan, stepName);
 

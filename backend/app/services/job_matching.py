@@ -16,7 +16,7 @@ from app.services.search_basis import basis_text
 
 
 def rule_score(
-    job: dict, basis: str, query: str, location: str = "", github_skills=()
+    job: dict, basis: str, query: str, location: str | list = "", github_skills=()
 ) -> tuple[int, list[str]]:
     def tokens(value):
         return set(re.findall(r"[a-z][a-z0-9+#.]{2,}", value.lower()))
@@ -31,13 +31,16 @@ def rule_score(
     overlap = len(profile & (title | description)) / max(1, min(len(profile), 40))
     score = 55 * role + 30 * min(1, overlap)
     reasons = [f"Role keyword match: {round(role*100)}%"]
-    if (
-        location
-        and location.lower() != "any"
+    places = [location] if isinstance(location, str) else list(location or [])
+    job_place = str(job.get("location") or "").lower()
+    if any(
+        place
+        and place.lower() != "any"
         and (
-            location.lower() in job.get("location", "").lower()
-            or (location.lower() == "remote" and job.get("remote") == "remote")
+            place.lower() in job_place
+            or (place.lower() == "remote" and job.get("remote") == "remote")
         )
+        for place in map(str, places)
     ):
         score += 10
         reasons.append("Matches preferred location")
@@ -158,7 +161,9 @@ async def rank_jobs(user_id: str, context: dict, jobs: list[dict]):
     funded = await funded_among([job.get("company", "") for job in jobs])
     matches = []
     for job in jobs:
-        score, reasons = rule_score(job, basis, query, context.get("location", ""), skills)
+        score, reasons = rule_score(
+            job, basis, query, context.get("locations") or context.get("location", ""), skills
+        )
         if _squash(job.get("company", "")) in funded:
             score = with_bonus(score)
             reasons.append("Company raised funding recently")

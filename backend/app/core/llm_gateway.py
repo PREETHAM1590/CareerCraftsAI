@@ -374,7 +374,11 @@ async def proxy_llm_request(path: str, request: Request) -> Response:
             "total_tokens": usage.get("total_tokens", 0),
         },
     }
-    return Response(content=redact_keys(json.dumps(response)), media_type="application/json")
+    # The exact key is removed too: unprefixed provider keys match no pattern.
+    return Response(
+        content=redact_keys(json.dumps(response), secrets=(key,)),
+        media_type="application/json",
+    )
 
 
 async def get_gateway_llm(user_id: str, db):

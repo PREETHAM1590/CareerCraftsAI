@@ -14,6 +14,7 @@ import {
   ArrowSquareOut,
   Lightning,
   Globe,
+  Buildings,
   Copy,
   Check,
   CaretDown,
@@ -32,6 +33,9 @@ import { setPendingJd } from "@/lib/job-handoff";
 import { fetchApplications, fetchApplicationJd, type ApplicationFilters, type ApplicationPage } from "@/lib/applications-api";
 import { apiClient, getApiErrorMessage } from "@/lib/api";
 import { JobSearchBasis } from "@/components/jobs/JobSearchBasis";
+import { PortalSearchPanel } from "@/components/jobs/PortalSearchPanel";
+import type { PortalSearchResult } from "@/lib/job-boards-api";
+import { pickSearchLocations } from "@/lib/job-boards";
 import { LocationInput } from "@/components/ui/LocationInput";
 import { wakeExtension } from "@/lib/extension-bridge";
 import { cn } from "@/lib/utils";
@@ -1226,6 +1230,8 @@ export default function JobsPage() {
     requestAnimationFrame(() => document.getElementById("search-profile")?.scrollIntoView({ behavior: "smooth", block: "start" }));
   };
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showPortal, setShowPortal] = useState(false);
+  const [portalResult, setPortalResult] = useState<PortalSearchResult | null>(null);
   const [xrayQuery, setXrayQuery] = useState(XRAY_TEMPLATES[0]);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchBasis, setSearchBasis] = useState("");
@@ -1407,6 +1413,7 @@ export default function JobsPage() {
       job_type?: string;
       target_roles?: string[];
       preferred_locations?: string[];
+      locations?: string[];
     }) =>
       apiClient.post("/jobs/search", payload),
     onSuccess: (res) => {
@@ -1535,7 +1542,8 @@ export default function JobsPage() {
       ? jobs.reduce((best, j) => ((j.match_score ?? -1) > (best.match_score ?? -1) ? j : best), jobs[0])
       : null;
   const otherJobs = featuredJob ? jobs.filter((j) => j.id !== featuredJob.id) : [];
-  const selectedJob = jobs.find((j) => j.id === selectedId) ?? featuredJob;
+  const selectedJob =
+    jobs.find((j) => j.id === selectedId) ?? portalResult?.jobs.find((j) => j.id === selectedId) ?? featuredJob;
 
   const searchBusy = searchMutation.isPending || agentRunning;
 
@@ -1589,6 +1597,13 @@ export default function JobsPage() {
       : profileForm.work_mode || (selectedLocation ? "" : prefs?.work_mode ?? "");
     const locationFromProfile = manualLocations[0] ?? "";
     const primaryWorkMode = primaryCsvValue(workMode);
+    // Every selected city and saved city is searched, not just the first.
+    const searchLocations = pickSearchLocations({
+      typed: typedLocation,
+      selected: Array.from(activeFilters).filter((f) => LOCATION_FILTERS.includes(f)),
+      profile: manualLocations,
+      remote: primaryWorkMode === "remote",
+    });
     searchMutation.mutate({
       resume_id: searchBasis.startsWith("resume:") ? searchBasis.split(":")[1] : undefined,
       persona_id: searchBasis.startsWith("persona:") ? searchBasis.split(":")[1] : undefined,
@@ -1607,6 +1622,7 @@ export default function JobsPage() {
       job_type: profileForm.job_type,
       target_roles: manualRoles,
       preferred_locations: manualLocations,
+      ...(searchLocations.length > 0 ? { locations: searchLocations } : {}),
     });
   }
 
@@ -1651,6 +1667,14 @@ export default function JobsPage() {
                 >
                   Advanced search
                 </DisclosurePill>
+                <DisclosurePill
+                  open={showPortal}
+                  onToggle={() => setShowPortal((v) => !v)}
+                  controls="jobs-portal-panel"
+                  icon={<Buildings size={14} weight="light" />}
+                >
+                  Company careers page
+                </DisclosurePill>
                 {Array.from(activeFilters).map((chip) => (
                   <button
                     key={chip}
@@ -1685,6 +1709,14 @@ export default function JobsPage() {
                 {showAdvanced && (
                   <motion.div key="xray-panel" id="jobs-xray-panel" variants={swapVariants} initial="hidden" animate="show" exit="exit">
                     <XraySearchPanel query={xrayQuery} setQuery={setXrayQuery} />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              <AnimatePresence initial={false}>
+                {showPortal && (
+                  <motion.div key="portal-panel" id="jobs-portal-panel" variants={swapVariants} initial="hidden" animate="show" exit="exit">
+                    <PortalSearchPanel onResults={setPortalResult} />
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -1727,6 +1759,39 @@ export default function JobsPage() {
             </li>)}</ul>
           </div>}
           {searchOutcome?.status === "failed" && <p role="alert" className="rounded-xl bg-destructive/10 p-3 text-sm text-destructive">{searchOutcome.output?.error || "Job search failed. Try again."}</p>}
+          {portalResult && (
+            <div aria-label="Company portal results" className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="pl-1 text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                  {portalResult.board.label} · <span className="tabular-nums">{portalResult.total_found}</span> matching{" "}
+                  {portalResult.total_found === 1 ? "role" : "roles"}
+                  {portalResult.total_found > portalResult.jobs.length && ` (showing ${portalResult.jobs.length})`}
+                </p>
+                <IslandButton tone="ghost" size="sm" onClick={() => setPortalResult(null)} icon={<X size={13} weight="light" />}>
+                  Clear
+                </IslandButton>
+              </div>
+              {portalResult.jobs.length === 0 ? (
+                <p className="pl-1 text-sm text-muted-foreground">
+                  No open roles matched. Try other keywords or remove the location.
+                </p>
+              ) : (
+                <ul className="space-y-3">
+                  {portalResult.jobs.map((job) => (
+                    <li key={job.id}>
+                      <JobRow
+                        job={job}
+                        selected={selectedJob?.id === job.id}
+                        onOpenDetails={openJobDetails}
+                        onPrepareApply={prepareApply}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+
           <SectionHeading
             eyebrow="Saved matches"
             title="Ranked against your resume"
