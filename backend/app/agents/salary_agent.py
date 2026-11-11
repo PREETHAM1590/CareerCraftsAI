@@ -23,6 +23,7 @@ from langchain_core.messages import AIMessage
 from pydantic import BaseModel, Field
 
 from app.agents._llm_json import call_llm_json
+from app.agents.prompts import one_line
 from app.agents.state import AgentState
 from app.core.model_router import build_agent_llm
 from app.core.sync_db import _get_sync_factory, fetch_model_settings
@@ -266,9 +267,9 @@ def _generate_negotiation_script(
 
     Returns dict with: opening, counter_offer, justifications.
     """
-    company_text = f" at {company}" if company else ""
+    company_text = f" at {one_line(company)}" if company else ""
     prompt_content = (
-        f"Role: {role}{company_text}\n"
+        f"Role: {one_line(role)}{company_text}\n"
         f"Market Salary Data (annual, {currency}):\n"
         f"  - 25th percentile: {format_amount(p25, currency)}\n"
         f"  - 50th percentile (median): {format_amount(p50, currency)}\n"
