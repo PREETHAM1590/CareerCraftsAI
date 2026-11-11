@@ -259,6 +259,9 @@ async def test_pairing_stores_only_a_hash_and_authenticates_the_raw_token():
     db = MagicMock()
     db.add = MagicMock(side_effect=added.append)
     db.commit = AsyncMock()
+    no_devices = MagicMock()
+    no_devices.scalars.return_value.all.return_value = []
+    db.execute = AsyncMock(return_value=no_devices)
 
     device, token = await extension_service.pair_device(db, uuid.uuid4(), "  Work laptop  ")
 

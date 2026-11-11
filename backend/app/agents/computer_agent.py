@@ -1,6 +1,8 @@
 """One durable, user-reviewed browser step at a time; no credential tools."""
 
 import json
+import re
+from urllib.parse import unquote_plus
 
 from fastapi import HTTPException
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -141,7 +143,13 @@ async def plan(run: AgentRun, note="") -> dict:
         }
     if len(calls) != 1 or calls[0]["name"] != "propose_browser_step":
         raise ValueError("The model must propose one browser action at a time")
-    proposal = calls[0]["args"]
+    proposal = calls[0].get("args")
+    if (
+        not isinstance(proposal, dict)
+        or not isinstance(proposal.get("operation"), str)
+        or not isinstance(proposal.get("parameters"), dict)
+    ):
+        raise ValueError("The model proposed a malformed browser step; ask again")
     action = ComputerAction(
         operation=proposal["operation"],
         parameters=proposal["parameters"],
@@ -154,6 +162,15 @@ async def plan(run: AgentRun, note="") -> dict:
         and action.parameters["snapshotId"] != snapshot["snapshotId"]
     ):
         raise ValueError("The proposed step must reference the current page snapshot")
+    if action.operation == "navigate" and _url_leaks_profile(
+        str(action.parameters["url"]), profile, task
+    ):
+        # A page can ask the model to "verify" the user by visiting a link
+        # that carries their details; approval alone is too easy to misjudge.
+        raise ValueError(
+            "The proposed step would send your personal details to a website "
+            "in its link, so it was blocked"
+        )
     return {
         "status": "awaiting_approval",
         "tokens_used": tokens,
@@ -172,9 +189,29 @@ async def plan(run: AgentRun, note="") -> dict:
             ),
             "warnings": [
                 "Review the visible page. A click may submit an application or send a message."
-            ],
+            ]
+            + (
+                [f"Opens {action.parameters['url'][:300]}"]
+                if action.operation == "navigate"
+                else []
+            ),
         },
     }
+
+
+def _url_leaks_profile(url: str, profile: dict, task: str) -> bool:
+    """True when a URL the model chose embeds the user's email or phone.
+
+    URLs the user typed into the task are exempt.
+    """
+    if url in task:
+        return False
+    decoded = unquote_plus(url).lower()
+    email = str(profile.get("email") or "").lower()
+    if email and email in decoded:
+        return True
+    phone = re.sub(r"\D", "", str(profile.get("phone") or ""))
+    return len(phone) >= 7 and phone in re.sub(r"\D", "", decoded)
 
 
 def needs_permission(exc: HTTPException) -> bool:

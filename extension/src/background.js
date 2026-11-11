@@ -20,7 +20,7 @@ import {
   jobUrl,
   taskSenderAllowed,
   snapshotKey,
-  getSettings,
+  autoSubmitBlockedHost,
 } from "./common.js";
 import {
   configureAgent,
@@ -129,6 +129,45 @@ async function hasHostPermission(urlString) {
     return await chrome.permissions.contains({ origins: [u.origin + "/*"] });
   } catch (e) {
     return false;
+  }
+}
+
+// A screenshot of the reviewed form, stored with the submit approval. Only
+// when the application's tab is the one showing in its window, so another
+// tab is never captured; best effort (no screenshot never blocks a submit).
+async function captureReview(pairing, taskId, tabId, reviewHash, pageUrl) {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (!tab.active || !tab.url || new URL(tab.url).origin !== new URL(pageUrl).origin) return false;
+    const screenshot = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "jpeg", quality: 60 });
+    if (!screenshot.startsWith("data:image/jpeg;base64,") || screenshot.length > 2_700_000) return false;
+    const res = await apiFetch(pairing, `/extension/device/tasks/${taskId}/evidence`, {
+      method: "POST",
+      json: { review_hash: reviewHash, screenshot },
+    });
+    return res.ok;
+  } catch (e) {
+    console.info("CareerCraft: no review screenshot", e && e.message);
+    return false;
+  }
+}
+
+// Tokens expire after 90 days; swap for a fresh one well before that.
+const ROTATION_CHECK_MS = 12 * 60 * 60 * 1000;
+
+async function rotateTokenIfDue() {
+  const pairing = await getPairing();
+  if (!pairing) return;
+  const { lastRotationCheck } = await chrome.storage.session.get("lastRotationCheck");
+  if (lastRotationCheck && Date.now() - lastRotationCheck < ROTATION_CHECK_MS) return;
+  await chrome.storage.session.set({ lastRotationCheck: Date.now() });
+  const me = await apiFetch(pairing, "/extension/device/me");
+  if (!me.ok || !me.data?.rotate_token) return;
+  const rotated = await apiFetch(pairing, "/extension/device/token/rotate", { method: "POST" });
+  const current = await getPairing();
+  // Only if nothing re-paired meanwhile; the old token is already dead server-side.
+  if (rotated.ok && rotated.data?.token && current?.token === pairing.token) {
+    await setPairing({ ...current, token: rotated.data.token });
   }
 }
 
@@ -312,7 +351,10 @@ async function requestTabPermission(active, url) {
 async function injectAndRun(tabId, task, submitting) {
   try {
     await chrome.scripting.executeScript({ target: { tabId }, files: CONTENT_SCRIPT_FILES });
-    const { autoApply } = await getSettings();
+    // The server's per-task answer to "may this be auto-submitted?"; it
+    // re-checks at approval time, so this only spares a doomed attempt.
+    const tab = await chrome.tabs.get(tabId);
+    const autoApply = task.auto_submit === true && !autoSubmitBlockedHost(tab.url || task.job_url);
     // Top frame only: autofill may have left runners in the page's iframes.
     await chrome.tabs.sendMessage(tabId, { type: "RUN_TASK", task, submitting: !!submitting, autoApply }, { frameId: 0 });
   } catch (e) {
@@ -470,25 +512,29 @@ async function handleMessage(msg, sender) {
       const active = await getActiveTask();
       if (!active || active.taskId !== msg.taskId) return { error: "This application is no longer active." };
       await setActiveTask({ ...active, review: { ...res.data, snapshot: msg.snapshot }, submitPermit: null });
-      // Auto-apply: the driver found nothing that needs the person, and the
-      // person opted in (checked here, never taken from the page's word).
-      // Their standing opt-in is the confirmation for this one review hash.
-      if (msg.auto && (await getSettings()).autoApply) {
+      // Evidence first, so an approval (which may follow at once) finds it.
+      await captureReview(pairing, msg.taskId, active.tabId, res.data.review_hash, sender.url);
+      let autoRefused = null;
+      // Auto-submit: the driver found nothing that needs the person, and the
+      // server said this member's setting allows it (never the page's word).
+      // The server checks again and refuses (403) when it may not.
+      if (msg.auto && active.task?.auto_submit === true && !autoSubmitBlockedHost(sender.url)) {
         const approval = await apiFetch(pairing, `/extension/device/tasks/${msg.taskId}/approve-submit`, {
           method: "POST",
-          json: { review_hash: res.data.review_hash, user_confirmed: true },
+          json: { review_hash: res.data.review_hash, user_confirmed: true, auto_approved: true },
         });
         const current = await getActiveTask();
         if (approval.ok && current && current.taskId === msg.taskId) {
           await setActiveTask({ ...current, submitPermit: { token: approval.data.submission_token, expiresAt: approval.data.expires_at } });
           return { data: { ...res.data, autoApproved: true } };
         }
-        // Fall back to the manual approval below.
+        // Fall back to the manual approval below, saying why.
+        autoRefused = approval.error || "Auto-submit was not allowed for this application.";
       }
       // The user approves the final form in the popup: point them at it.
       await setBadge("1", "#2563eb");
       await openPopupIfPossible();
-      return { data: res.data };
+      return { data: { ...res.data, autoRefused } };
     }
 
     case "CC_APPROVE_SUBMIT": {
@@ -496,7 +542,7 @@ async function handleMessage(msg, sender) {
       const pairing = await getPairing();
       if (!active?.review || !pairing || active.taskId !== msg.taskId || active.review.review_hash !== msg.reviewHash) return { error: "Review changed; reopen the popup." };
       if (active.submitPermit || active.submitting) return { error: "Already approved; do not submit again." };
-      const res = await apiFetch(pairing, `/extension/device/tasks/${active.taskId}/approve-submit`, { method: "POST", json: { review_hash: active.review.review_hash, user_confirmed: true } });
+      const res = await apiFetch(pairing, `/extension/device/tasks/${active.taskId}/approve-submit`, { method: "POST", json: { review_hash: active.review.review_hash, user_confirmed: true, auto_approved: false } });
       if (!res.ok) return { error: res.error };
       await setActiveTask({ ...active, submitPermit: { token: res.data.submission_token, expiresAt: res.data.expires_at } });
       await setBadge("");
@@ -650,6 +696,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === POLL_ALARM) {
     pollOnce();
     startCommandLoop();
+    rotateTokenIfDue().catch(() => {});
   }
 });
 chrome.runtime.onInstalled.addListener(() => {

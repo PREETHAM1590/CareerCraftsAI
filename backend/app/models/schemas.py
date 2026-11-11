@@ -82,6 +82,10 @@ class UserPreferencesSchema(BaseModel):
     # auto_apply_enabled above is its pause switch.
     auto_rule_min_match: int | None = Field(default=None, ge=0, le=100)
     auto_rule_action: Literal["apply", "outreach", "both", "notify"] | None = None
+    # Submit fully answered forms without the popup approval (never on
+    # LinkedIn or Naukri); capped per rolling 24 hours.
+    auto_submit_enabled: bool | None = None
+    auto_submit_daily_cap: int | None = Field(default=None, ge=1, le=50)
     # Resume preferences (asked once on first auto-apply; resume_prefs_set_at
     # stays null until then). The client sets resume_prefs_set_at when saving.
     resume_template: str | None = Field(None, max_length=50)
