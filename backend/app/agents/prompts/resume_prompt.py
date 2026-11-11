@@ -4,7 +4,7 @@ import re
 
 from pydantic import BaseModel, Field
 
-from . import _COMMON
+from . import _COMMON, one_line, untrusted
 
 SYSTEM_PROMPT = _COMMON + """
 Write resume_markdown as a clean, single-column ATS resume in exactly this shape:
@@ -106,11 +106,11 @@ def build_user_prompt(context: dict, rag_chunks: list[str] | None = None) -> str
         "facts present in the resume source; put unmet JD requirements in keywords_missing "
         "rather than inventing them. Return JSON only."
     ).format(
-        jd=jd,
-        title=title,
-        tone=tone,
+        jd=untrusted(jd),
+        title=one_line(title),
+        tone=one_line(tone, 40),
         length=length,
-        chunks=chunks or "NOT_PROVIDED",
+        chunks=untrusted(chunks),
         facts_block=facts_block,
     )
 
