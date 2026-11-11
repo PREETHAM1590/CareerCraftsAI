@@ -7,8 +7,10 @@ stores them in the approval queue, and returns a human-review checkpoint.
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from typing import Any
+from urllib.parse import urlsplit
 
 from langchain_core.messages import AIMessage
 
@@ -50,6 +52,43 @@ async def _persist_queue_items(
     return queued
 
 
+_CONTACT_DETAIL = re.compile(
+    r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+|https?://\S+|www\.\S+|\+?\d[\d\s().-]{6,}\d"
+)
+
+
+def _without_contact_details(resume_text: str) -> str:
+    """Resume text minus its header line and any email, phone or link.
+
+    A resume starts with the candidate's name and contact line, which must not
+    end up in a note to a stranger.
+    """
+    lines = [line for line in (resume_text or "").splitlines() if line.strip()]
+    body = " ".join(lines[1:] if len(lines) > 1 else lines)
+    return " ".join(_CONTACT_DETAIL.sub(" ", body).split())
+
+
+def _supplied_contacts(value: Any) -> list[dict[str, Any]]:
+    """Contacts the user typed, kept only with a name and a LinkedIn profile URL."""
+    contacts: list[dict[str, Any]] = []
+    for item in value if isinstance(value, list) else []:
+        if not isinstance(item, dict):
+            continue
+        name = " ".join(str(item.get("name") or "").split())[:100]
+        title = " ".join(str(item.get("title") or "").split())[:150]
+        url = str(item.get("linkedin_url") or "").strip()
+        parsed = urlsplit(url)
+        host = (parsed.hostname or "").lower()
+        if (
+            not name
+            or parsed.scheme != "https"
+            or not (host == "linkedin.com" or host.endswith(".linkedin.com"))
+        ):
+            continue
+        contacts.append({"name": name, "title": title, "linkedin_url": url[:300]})
+    return contacts[:5]
+
+
 async def _build_outreach(state: AgentState) -> AgentState:
     user_id = state["user_id"]
     ctx = state["context"]
@@ -59,12 +98,17 @@ async def _build_outreach(state: AgentState) -> AgentState:
     if not company:
         return {**state, "status": "failed", "error": "company_name is required"}
 
-    contacts = await ProxycurlService().find_contacts(company, role_context or None)
-    relevant_contacts = filter_contacts_by_title(contacts) or contacts
-    relevant_contacts = [
-        c for c in relevant_contacts[:10]
-        if c.get("name") and c.get("linkedin_url")
-    ][:5]
+    supplied = _supplied_contacts(ctx.get("contacts"))
+    if supplied:
+        relevant_contacts = supplied
+    else:
+        # Proxycurl lookup is optional (and may be unavailable); it returns []
+        # without a key, which leads to the notice below.
+        contacts = await ProxycurlService().find_contacts(company, role_context or None)
+        relevant_contacts = filter_contacts_by_title(contacts) or contacts
+        relevant_contacts = [
+            c for c in relevant_contacts[:10] if c.get("name") and c.get("linkedin_url")
+        ][:5]
 
     if not relevant_contacts:
         return {
@@ -75,11 +119,13 @@ async def _build_outreach(state: AgentState) -> AgentState:
                 "company": company,
                 "contacts": [],
                 "messages": [],
-                "notice": "No recruiter or hiring contacts found. Check Proxycurl configuration or try another company.",
+                "notice": (
+                    "No recruiter or hiring contacts found. Add the people you want to "
+                    "reach (name, title and LinkedIn profile URL) and run it again."
+                ),
             },
-            "messages": state["messages"] + [
-                AIMessage(content=f"No LinkedIn outreach contacts found for {company}.")
-            ],
+            "messages": state["messages"]
+            + [AIMessage(content=f"No LinkedIn outreach contacts found for {company}.")],
         }
 
     try:
@@ -88,7 +134,11 @@ async def _build_outreach(state: AgentState) -> AgentState:
         logger.warning("LinkedIn outreach profile fetch failed for user %s: %s", user_id, exc)
         profile_text = ""
 
-    user_experience = (profile_text or role_context or "software engineering and product delivery").strip()
+    user_experience = (
+        role_context
+        or _without_contact_details(profile_text)
+        or "software engineering and product delivery"
+    )
     drafts = []
     for contact in relevant_contacts:
         message = draft_outreach_message(
@@ -127,9 +177,8 @@ async def _build_outreach(state: AgentState) -> AgentState:
             "messages": queued,
             "queue_ids": [item["queue_id"] for item in queued],
         },
-        "messages": state["messages"] + [
-            AIMessage(content=f"LinkedIn outreach drafts ready for {company}.")
-        ],
+        "messages": state["messages"]
+        + [AIMessage(content=f"LinkedIn outreach drafts ready for {company}.")],
     }
 
 
