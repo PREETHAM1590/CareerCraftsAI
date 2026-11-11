@@ -20,11 +20,15 @@
   // Controls that lead from a job description to its application form.
   const APPLY_LINK_RE = /^(apply|apply now|apply here|apply for this (job|position|role)|apply to this job|apply online|start (your )?application|i'?m interested)$/i;
   // Hosted application forms that company career sites embed in an iframe.
-  const ATS_FRAME_RE = /(^|\.)(greenhouse\.io|lever\.co|ashbyhq\.com|workable\.com|smartrecruiters\.com|jobvite\.com|icims\.com|bamboohr\.com|recruitee\.com|myworkdayjobs\.com|taleo\.net|successfactors\.(com|eu)|darwinbox\.(in|com)|keka\.com)$/i;
+  const ATS_FRAME_RE = /(^|\.)(greenhouse\.io|lever\.co|ashbyhq\.com|workable\.com|smartrecruiters\.com|jobvite\.com|icims\.com|bamboohr\.com|recruitee\.com|myworkdayjobs\.com|myworkdaysite\.com|taleo\.net|successfactors\.(com|eu)|darwinbox\.(in|com)|keka\.com)$/i;
 
   // Returned by a driver that sent the tab to another page: the runner stops
   // quietly and the background re-runs it once that page has loaded.
   const NAVIGATING = "navigating";
+
+  // Workday tenants on a company domain still carry these markers.
+  const WORKDAY_MARKERS =
+    "[data-automation-id=\"adventureButton\"], [data-automation-id=\"jobPostingHeader\"], [data-automation-id=\"applyFlowPage\"], [data-automation-id=\"bottom-navigation-next-button\"], [data-automation-id=\"pageFooterNextButton\"]";
 
   // ── Small shared helpers ────────────────────────────────────────────────
 
@@ -109,7 +113,8 @@
     opts = opts || {};
     const fields = (plan.fields || []).map((f) => {
       if (f.input_type === "file" && f.value === "__resume__") {
-        return { ...f, value: opts.resumeFilename ? `Resume: ${opts.resumeFilename}` : f.value };
+        if (opts.resumeFilename) return { ...f, value: `Resume: ${opts.resumeFilename}` };
+        return { ...f, value: null, source: "unresolved", requires_review: true, missing_reason: "The resume could not be attached; attach it yourself in the page." };
       }
       return f;
     });
@@ -125,6 +130,10 @@
     }
     const el = snap.byId.get(fieldId);
     if (!el) return false;
+    const widget = snap.widgets && snap.widgets.get(fieldId);
+    if (widget === "listbox") return dom.fillListbox(el, value);
+    if (widget === "combobox" || widget === "multiselect") return dom.fillCombobox(el, value);
+    if (widget === "date") return dom.fillDateGroup(el, value);
     if (inputType === "select") return dom.fillSelect(el, value);
     if (inputType === "checkbox") return dom.fillSingleCheckbox(el, value);
     if (inputType === "radio") {
@@ -137,15 +146,76 @@
   // Fills every planned field into the live DOM, pacing each fill. `typed`
   // (field_id -> value) overrides plan values for fields the user edited in
   // the panel. File inputs are skipped here — see attachResumeIfNeeded.
-  async function applyPlan(ctx, snap, planFields, typed) {
+  // Returns the ids of fields whose value could not be put on the page (no
+  // matching option, a widget that did not take it) so callers can ask the
+  // person instead of assuming they were filled.
+  async function applyPlan(ctx, snap, planFields, typed, opts) {
+    const failed = [];
     for (const field of planFields) {
       if (field.input_type === "file") continue;
       const hasOverride = typed && Object.prototype.hasOwnProperty.call(typed, field.field_id);
       const value = hasOverride ? typed[field.field_id] : field.value;
       if (value === null || value === undefined || value === "") continue;
+      if (!hasOverride && opts && opts.skip && opts.skip(field)) continue;
       await ctx.delay();
-      await applyOne(snap, field.field_id, field.input_type, value);
+      let ok = false;
+      try {
+        ok = await applyOne(snap, field.field_id, field.input_type, value);
+      } catch (e) {
+        ok = false;
+      }
+      if (ok === false) failed.push(field.field_id);
     }
+    return failed;
+  }
+
+  // Required fields still empty after filling: what the plan could not
+  // answer plus required answers the page refused.
+  function unresolvedIds(plan, failed) {
+    flagFailed(plan.fields, failed);
+    const required = new Set(plan.fields.filter((f) => f.required).map((f) => f.field_id));
+    return Array.from(new Set([...(plan.unresolved_required || []), ...failed.filter((id) => required.has(id))]));
+  }
+
+  // Marks fields the page did not accept so they show up as unresolved.
+  function flagFailed(planFields, failed) {
+    const ids = new Set(failed);
+    for (const f of planFields) {
+      if (!ids.has(f.field_id)) continue;
+      f.requires_review = true;
+      f.source = "unresolved";
+      f.missing_reason = `Could not set "${Array.isArray(f.value) ? f.value.join(", ") : f.value}" on the page; choose it yourself.`;
+    }
+  }
+
+  // ── Auto-apply ──────────────────────────────────────────────────────────
+  // With the member's opt-in, a form that needs nothing from them is
+  // submitted without the review panel or the popup approval. Anything a
+  // person should look at (an empty required answer, an AI draft, a value the
+  // page refused) still stops at the review panel.
+  function needsAttention(fields, typed) {
+    return fields.filter((f) => {
+      if (f.readonly) return false;
+      const value = typed && Object.prototype.hasOwnProperty.call(typed, f.field_id) ? typed[f.field_id] : f.value;
+      if (f.required && isEmpty(value)) return true;
+      return !!f.requires_review && !isEmpty(value);
+    });
+  }
+
+  async function reviewOrAuto(ctx, opts) {
+    // canAuto=false: the submit control was only guessed, so a person confirms.
+    if (ctx.autoApply && opts.canAuto !== false) {
+      const blocking = needsAttention(opts.fields || []);
+      if (!blocking.length) {
+        ctx.panel.showStatus("Auto-apply is on: everything is filled, submitting now…", [ctx.task.company, ctx.task.role].filter(Boolean).join(" · "));
+        return { action: "submit", typed: {}, remember: false, auto: true };
+      }
+      opts = {
+        ...opts,
+        message: [opts.message, `Auto-apply paused: ${blocking.map((f) => f.label || f.field_id).slice(0, 6).join(", ")} need${blocking.length === 1 ? "s" : ""} your review.`].filter(Boolean).join(" "),
+      };
+    }
+    return ctx.panel.showReview(opts);
   }
 
   async function attachResumeIfNeeded(ctx, snap, planFields) {
@@ -278,8 +348,21 @@
     return hasEmail && inputs.length >= 3;
   }
 
+  // Single-page ATS front ends (Ashby, some Greenhouse and Lever boards)
+  // render the application without a <form> element.
+  const FORMLESS_CONTAINERS =
+    ".ashby-application-form-container, [class*='application-form' i], [id*='application-form' i], [data-testid*='application' i], [data-ui='application-form'], main, [role='main']";
+
   function findApplicationForm() {
-    const scored = Array.from(document.forms)
+    const forms = Array.from(document.forms);
+    if (!forms.some(looksLikeApplication)) {
+      const container = Array.from(document.querySelectorAll(FORMLESS_CONTAINERS)).find((el) => !el.closest("form") && looksLikeApplication(el));
+      if (container) {
+        const submit = findSubmitControl(container);
+        if (submit) return { form: container, submit, inputs: container.querySelectorAll("input,select,textarea").length };
+      }
+    }
+    const scored = forms
       .filter(looksLikeApplication)
       .map((f) => ({ form: f, submit: findSubmitControl(f), inputs: f.querySelectorAll("input,select,textarea").length }));
     if (!scored.length) return null;
@@ -370,11 +453,11 @@
       const { form, submit } = found;
 
       await ctx.api.event("filling", { message: "Filling the application" });
-      const snap = dom.snapshot(form);
+      const snap = await dom.loadWidgetOptions(dom.snapshot(form));
       const plan = await ctx.api.plan(location.href, snap.fields);
       if (!plan) throw new Error("Could not reach CareerCraft to plan this form");
 
-      await applyPlan(ctx, snap, plan.fields);
+      flagFailed(plan.fields, await applyPlan(ctx, snap, plan.fields));
       const resumeInfo = await attachResumeIfNeeded(ctx, snap, plan.fields);
 
       if (await guardCaptcha(ctx, form)) return;
@@ -384,13 +467,15 @@
       let decision;
       let message;
       for (;;) {
-        decision = await ctx.panel.showReview({
+        const reviewOpts = {
           company: ctx.task.company,
           role: ctx.task.role,
           message,
           fields: merged.fields,
           optionsByFieldId: merged.optionsByFieldId,
-        });
+          canAuto: !!submit,
+        };
+        decision = message ? await ctx.panel.showReview(reviewOpts) : await reviewOrAuto(ctx, reviewOpts);
         if (decision.action !== "submit") {
           await ctx.api.event("cancelled", { message: "Cancelled before submitting" });
           return;
@@ -412,7 +497,7 @@
       if (!submitEl) throw new Error("Could not find the submit control for this application");
 
       await ctx.delay();
-      await ctx.api.markSubmitting(form, submitEl);
+      await ctx.api.markSubmitting(form, submitEl, { auto: !!decision.auto });
       dom.clickLike(submitEl);
 
       const result = await waitForConfirmation(ctx, GENERIC_SUCCESS_RE, 15000);
@@ -499,19 +584,19 @@
 
         if (await guardCaptcha(ctx, m)) return;
 
-        const snap = dom.snapshot(m);
+        const snap = await dom.loadWidgetOptions(dom.snapshot(m));
         const plan = await ctx.api.plan(location.href, snap.fields);
         if (!plan) throw new Error("Could not reach CareerCraft to plan this step");
-        await applyPlan(ctx, snap, plan.fields);
+        const unresolved = unresolvedIds(plan, await applyPlan(ctx, snap, plan.fields));
         const resumeInfo = await attachResumeIfNeeded(ctx, snap, plan.fields);
         const merged = mergeFields(snap.fields, plan, { resumeFilename: resumeInfo && resumeInfo.filename });
 
-        if (plan.unresolved_required.length) {
+        if (unresolved.length) {
           await ctx.api.event("needs_input", { message: "A few required questions need your answer." });
           const res = await ctx.panel.showNeedsInput({
             company: ctx.task.company,
             role: ctx.task.role,
-            fields: merged.fields.filter((f) => plan.unresolved_required.includes(f.field_id) || f.requires_review),
+            fields: merged.fields.filter((f) => unresolved.includes(f.field_id) || f.requires_review),
             optionsByFieldId: merged.optionsByFieldId,
           });
           if (res.action !== "continue") {
@@ -531,11 +616,12 @@
 
         if (primary.kind === "submit") {
           await ctx.api.event("review", { message: "Ready for your review" });
-          const decision = await ctx.panel.showReview({
+          const decision = await reviewOrAuto(ctx, {
             company: ctx.task.company,
             role: ctx.task.role,
             fields: merged.fields,
             optionsByFieldId: merged.optionsByFieldId,
+            canAuto: LINKEDIN_SUBMIT_RE.test(dom.textOf(primary.el)),
           });
           if (decision.action !== "submit") {
             await ctx.api.event("cancelled", { message: "Cancelled before submitting" });
@@ -545,7 +631,7 @@
           if (decision.remember) await rememberAnswers(ctx, merged.fields, decision.typed);
 
           await ctx.delay();
-          await ctx.api.markSubmitting(m, primary.el);
+          await ctx.api.markSubmitting(m, primary.el, { auto: !!decision.auto });
           dom.clickLike(primary.el);
           const result = await waitForConfirmation(ctx, LINKEDIN_CONFIRM_RE, 20000);
           await reportConfirmationResult(ctx, result, "LinkedIn did not show a submission confirmation.");
@@ -632,7 +718,7 @@
       // Naukri's own Apply button submits immediately — the review panel
       // must appear *before* we click it, never after.
       await ctx.api.event("review", { message: "Ready to apply on Naukri" });
-      const decision = await ctx.panel.showReview({
+      const decision = await reviewOrAuto(ctx, {
         company: ctx.task.company,
         role: ctx.task.role,
         message: "Naukri applies with your Naukri profile — submit?",
@@ -645,7 +731,7 @@
       }
 
       await ctx.delay();
-      await ctx.api.markSubmitting(document, applyBtn);
+      await ctx.api.markSubmitting(document, applyBtn, { auto: !!decision.auto });
       dom.clickLike(applyBtn);
 
       await dom.delay(900, 1200);
@@ -696,38 +782,6 @@
   }
 
   const ANY_BUTTON = "button, input[type=submit], input[type=button], [role=button]";
-
-  const workdayAdvance = '[data-automation-id="bottom-navigation-next-button"], [data-automation-id="pageFooterNextButton"]';
-  const workdayCfg = {
-    label: "Workday",
-    success: ATS_SUCCESS_RE,
-    stepDelay: [1200, 1700],
-    loginMessage: "Sign in or create your Workday account in this tab, then press Continue. CareerCraft never sees your password.",
-    signedOut: () =>
-      !!visibleOne('[data-automation-id="signInContent"], [data-automation-id="signInSubmitButton"], [data-automation-id="createAccountSubmitButton"]'),
-    findRoot() {
-      const next = visibleOne(workdayAdvance);
-      return next ? next.closest('[data-automation-id="applyFlowPage"], main, [role="main"]') || document.body : null;
-    },
-    findPrimary(root) {
-      const nav = primaryFrom(dom.deepQueryAll(document, workdayAdvance));
-      return nav.el ? nav : primaryFrom(dom.deepQueryAll(root, ANY_BUTTON));
-    },
-    // Job page → Apply → "Apply Manually" (never the resume auto-parse, so
-    // answers come from CareerCraft's own plan) → account step → form.
-    async enter(ctx) {
-      const manualSel = '[data-automation-id="applyManually"]';
-      const ready = () => visibleOne(manualSel) || workdayCfg.findRoot() || workdayCfg.signedOut();
-      if (!visibleOne(manualSel)) {
-        const apply = visibleOne('[data-automation-id="adventureButton"]') || findApplyControl();
-        if (!apply) return null;
-        if ((await clickThrough(ctx, apply, ready)) === NAVIGATING) return NAVIGATING;
-      }
-      const manual = visibleOne(manualSel);
-      if (!manual) return null;
-      return clickThrough(ctx, manual, () => workdayCfg.findRoot() || workdayCfg.signedOut());
-    },
-  };
 
   const smartRecruitersCfg = {
     label: "SmartRecruiters",
@@ -813,8 +867,37 @@
     return true;
   }
 
+  // Optional cfg hooks (Workday uses them all):
+  //   snapshot(root)            async snapshot of the current step
+  //   stepName()                the step's title, for messages
+  //   restrict(plan, stepName)  drops answers a step must not get automatically
+  //   keepFilled                never overwrite a value the page already shows
+  //   prepare(ctx, root)        runs before planning (e.g. resume upload first)
+  //   blocked()                 a reason this application cannot go on
+  //   stepErrors(root)          visible validation messages
+  //   signature()               changes whenever the step changes
   function makeAtsDriver(cfg) {
+    const errorsOf = cfg.stepErrors || ((root) => stepErrors(root).map((e) => dom.textOf(e) || "A field is marked invalid"));
+    const signature =
+      cfg.signature ||
+      (() => {
+        const root = cfg.findRoot();
+        return root ? dom.textOf(root).slice(0, 600) : "";
+      });
+    const subtitle = (ctx) => [ctx.task.company, ctx.task.role].filter(Boolean).join(" · ");
+
+    async function handBack(ctx, message) {
+      await ctx.api.event("needs_input", { message: message.slice(0, 480) });
+      const res = await ctx.panel.showNeedsInput({ company: ctx.task.company, role: ctx.task.role, message, fields: [], optionsByFieldId: {} });
+      if (res.action !== "continue") {
+        await ctx.api.event("cancelled", { message: "Cancelled by user" });
+        return false;
+      }
+      return true;
+    }
+
     return {
+      cfg,
       async run(ctx) {
         if (!(await ensureSignedIn(ctx, cfg))) return;
         if (await guardCaptcha(ctx)) return;
@@ -829,54 +912,88 @@
 
         await ctx.api.event("filling", { message: `Filling the ${cfg.label} application` });
         const answered = new Map(); // what earlier steps filled, for the final review
-        for (let step = 0; step < 20; step++) {
-          const m = cfg.findRoot();
+        let stuck = 0;
+        for (let step = 0; step < 25; step++) {
+          // Workday can ask for an account (or a verification code) mid-flow.
+          if (cfg.signedOut() && !(await ensureSignedIn(ctx, cfg))) return;
+          const blocked = cfg.blocked && cfg.blocked();
+          if (blocked) {
+            await ctx.api.event("failed", { error: blocked });
+            return;
+          }
+          const m = await waitFor(cfg.findRoot, 10000);
           if (!m) throw new Error(`The ${cfg.label} form closed unexpectedly`);
           if (await guardCaptcha(ctx, m)) return;
+          const stepName = cfg.stepName ? cfg.stepName() : "";
+          const where = stepName ? ` (${stepName})` : "";
+          ctx.panel.showStatus(`Filling ${cfg.label}${where}…`, subtitle(ctx));
 
-          const snap = dom.snapshot(m);
+          if (cfg.prepare) await cfg.prepare(ctx, m);
+          const snap = cfg.snapshot ? await cfg.snapshot(m) : await dom.loadWidgetOptions(dom.snapshot(m));
           const plan = snap.fields.length ? await ctx.api.plan(location.href, snap.fields) : { fields: [], unresolved_required: [] };
           if (!plan) throw new Error("Could not reach CareerCraft to plan this step");
-          await applyPlan(ctx, snap, plan.fields);
+          plan.unresolved_required = plan.unresolved_required || [];
+          if (cfg.restrict) cfg.restrict(plan, stepName);
+
+          let skip = null;
+          if (cfg.keepFilled) {
+            const onPage = new Map(snap.fields.filter((f) => !isEmpty(f.value) && f.type !== "radio" && f.type !== "checkbox" && f.type !== "file").map((f) => [f.id, f.value]));
+            skip = (f) => onPage.has(f.field_id);
+            for (const f of plan.fields) {
+              if (!onPage.has(f.field_id)) continue;
+              Object.assign(f, { value: onPage.get(f.field_id), source: "page", requires_review: false, missing_reason: null });
+              plan.unresolved_required = plan.unresolved_required.filter((id) => id !== f.field_id);
+            }
+          }
+          const unresolved = unresolvedIds(plan, await applyPlan(ctx, snap, plan.fields, null, { skip }));
           const resumeInfo = await attachResumeIfNeeded(ctx, snap, plan.fields);
           const merged = mergeFields(snap.fields, plan, { resumeFilename: resumeInfo && resumeInfo.filename });
 
-          if (plan.unresolved_required.length) {
-            await ctx.api.event("needs_input", { message: "A few required questions need your answer." });
+          if (unresolved.length) {
+            await ctx.api.event("needs_input", { message: `A few required questions need your answer${where}.` });
             const res = await ctx.panel.showNeedsInput({
               company: ctx.task.company,
               role: ctx.task.role,
-              fields: merged.fields.filter((f) => plan.unresolved_required.includes(f.field_id) || f.requires_review),
+              message: ctx.autoApply ? `Auto-apply paused${where}: these need your answer.` : undefined,
+              fields: merged.fields.filter((f) => unresolved.includes(f.field_id) || f.requires_review),
               optionsByFieldId: merged.optionsByFieldId,
             });
             if (res.action !== "continue") {
               await ctx.api.event("cancelled", { message: "Cancelled by user" });
               return;
             }
-            await applyPlan(ctx, snap, plan.fields, res.typed);
+            const failed = await applyPlan(ctx, snap, plan.fields, res.typed);
             if (res.remember) await rememberAnswers(ctx, merged.fields, res.typed);
             for (const f of merged.fields) {
               if (res.typed && Object.prototype.hasOwnProperty.call(res.typed, f.field_id)) f.value = res.typed[f.field_id];
             }
+            if (failed.length) {
+              const labels = merged.fields.filter((f) => failed.includes(f.field_id)).map((f) => f.label || f.field_id);
+              if (!(await handBack(ctx, `Set these yourself in the page, then press Continue: ${labels.join(", ")}`))) return;
+            }
           }
-          for (const f of merged.fields) if (!isEmpty(f.value)) answered.set(`${f.label}|${f.field_id}`, f);
 
           let primary = cfg.findPrimary(m);
           if (!primary.el) {
             const chosen = await decideAdvanceButton(ctx, primary.buttons || []);
             // An unrecognised button is treated as the final step unless it is
             // plainly "Next": a "Finish" or "Apply" click must go through review.
-            if (chosen) primary = { el: chosen, kind: NEXT_BTN_RE.test(buttonLabel(chosen)) ? "next" : "submit" };
+            if (chosen) primary = { el: chosen, kind: NEXT_BTN_RE.test(buttonLabel(chosen)) ? "next" : "submit", guessed: true };
           }
           if (!primary.el) throw new Error(`Could not find the Next or Submit button in ${cfg.label}`);
 
           if (primary.kind === "submit") {
+            // Earlier steps are already saved by the site: show them, but only
+            // this step's answers can still be edited here.
+            const current = new Set(merged.fields.map((f) => f.field_id));
+            const earlier = Array.from(answered.values()).filter((f) => !current.has(f.field_id)).map((f) => ({ ...f, readonly: true, requires_review: false }));
             await ctx.api.event("review", { message: "Ready for your review" });
-            const decision = await ctx.panel.showReview({
+            const decision = await reviewOrAuto(ctx, {
               company: ctx.task.company,
               role: ctx.task.role,
-              fields: Array.from(answered.values()),
+              fields: [...earlier, ...merged.fields],
               optionsByFieldId: merged.optionsByFieldId,
+              canAuto: !primary.guessed && SUBMIT_BTN_RE.test(buttonLabel(primary.el)),
             });
             if (decision.action !== "submit") {
               await ctx.api.event("cancelled", { message: "Cancelled before submitting" });
@@ -886,31 +1003,42 @@
             if (decision.remember) await rememberAnswers(ctx, merged.fields, decision.typed);
 
             await ctx.delay();
-            await ctx.api.markSubmitting(m, primary.el);
+            await ctx.api.markSubmitting(m, primary.el, { auto: !!decision.auto });
             dom.clickLike(primary.el);
             const result = await waitForConfirmation(ctx, cfg.success, 20000);
             await reportConfirmationResult(ctx, result, `${cfg.label} did not show a submission confirmation.`);
             return;
           }
+          for (const f of merged.fields) if (!isEmpty(f.value)) answered.set(f.field_id, f);
 
+          const before = signature();
           await ctx.delay();
           dom.clickLike(primary.el);
+          // Wait for the site to save the step: a new step, validation errors
+          // or a sign-in prompt. A fixed sleep re-filled slow steps and could
+          // press Next twice.
+          const moved = await waitFor(() => {
+            if (cfg.signedOut()) return "signin";
+            const root = cfg.findRoot();
+            if (root && errorsOf(root).length) return "errors";
+            return signature() !== before ? "moved" : null;
+          }, cfg.stepTimeout || 12000, 300);
           await dom.delay(...cfg.stepDelay);
 
           const after = cfg.findRoot();
-          if (after && stepErrors(after).length) {
-            await ctx.api.event("needs_input", { message: `${cfg.label} flagged some answers — fix them, then press Continue.` });
-            const res = await ctx.panel.showNeedsInput({
-              company: ctx.task.company,
-              role: ctx.task.role,
-              message: `${cfg.label} flagged some answers — fix them in the form (dropdowns and date pickers included), then press Continue.`,
-              fields: [],
-              optionsByFieldId: {},
-            });
-            if (res.action !== "continue") {
-              await ctx.api.event("cancelled", { message: "Cancelled by user" });
-              return;
-            }
+          const errors = after ? errorsOf(after) : [];
+          if (errors.length) {
+            stuck = 0;
+            const list = Array.from(new Set(errors)).slice(0, 5).join("; ");
+            const ok = await handBack(ctx, `${cfg.label} flagged some answers${where}: ${list}. Fix them in the form (dropdowns and date pickers included), then press Continue.`);
+            if (!ok) return;
+            continue;
+          }
+          if (!moved && ++stuck >= 2) {
+            stuck = 0;
+            if (!(await handBack(ctx, `${cfg.label} did not move past this step${where}. Finish it in the page, then press Continue.`))) return;
+          } else if (moved) {
+            stuck = 0;
           }
         }
         throw new Error(`${cfg.label} had too many steps`);
@@ -918,7 +1046,6 @@
     };
   }
 
-  const workdayDriver = makeAtsDriver(workdayCfg);
   const smartRecruitersDriver = makeAtsDriver(smartRecruitersCfg);
   const workableDriver = makeAtsDriver(workableCfg);
   const icimsDriver = makeAtsDriver(icimsCfg);
@@ -935,7 +1062,7 @@
   function atsKey(task) {
     const host = location.hostname;
     const platform = (task && task.platform) || "";
-    if (/(^|\.)myworkdayjobs\.com$/.test(host) || /(^|\.)myworkdaysite\.com$/.test(host) || platform === "workday" || document.querySelector('[data-automation-id="adventureButton"], [data-automation-id="jobPostingHeader"]')) return "workday";
+    if (/(^|\.)myworkdayjobs\.com$/.test(host) || /(^|\.)myworkday(site)?\.com$/.test(host) || platform === "workday" || document.querySelector(WORKDAY_MARKERS)) return "workday";
     if (/(^|\.)smartrecruiters\.com$/.test(host) || platform === "smartrecruiters") return "smartrecruiters";
     if (/(^|\.)workable\.com$/.test(host) || platform === "workable") return "workable";
     if (/(^|\.)icims\.com$/.test(host) || platform === "icims") return "icims";
@@ -947,7 +1074,6 @@
   }
 
   const ATS_DRIVERS = {
-    workday: workdayDriver,
     smartrecruiters: smartRecruitersDriver,
     workable: workableDriver,
     icims: icimsDriver,
@@ -961,7 +1087,10 @@
     const platform = (task && task.platform) || "";
     if (platform === "linkedin" || /(^|\.)linkedin\.com$/.test(location.hostname)) return linkedinDriver;
     if (platform === "naukri" || /naukri\.com$/.test(location.hostname)) return naukriDriver;
-    return ATS_DRIVERS[atsKey(task)] || genericDriver;
+    const key = atsKey(task);
+    // workday.js loads after this file and registers its driver.
+    if (key === "workday" && window.CareerCraftDrivers.workdayDriver) return window.CareerCraftDrivers.workdayDriver;
+    return ATS_DRIVERS[key] || genericDriver;
   }
 
   // The submit click navigated to a new page (common on ATS forms): the
@@ -974,5 +1103,37 @@
     await reportConfirmationResult(ctx, result, "The page after submitting does not show a confirmation.");
   }
 
-  window.CareerCraftDrivers = { select, confirmAfterNavigation, genericDriver, linkedinDriver, naukriDriver, workdayDriver, smartRecruitersDriver, workableDriver, icimsDriver, taleoDriver, successFactorsDriver, darwinboxDriver, kekaDriver, NAVIGATING };
+  window.CareerCraftDrivers = {
+    select,
+    confirmAfterNavigation,
+    atsKey,
+    genericDriver,
+    linkedinDriver,
+    naukriDriver,
+    smartRecruitersDriver,
+    workableDriver,
+    icimsDriver,
+    taleoDriver,
+    successFactorsDriver,
+    darwinboxDriver,
+    kekaDriver,
+    NAVIGATING,
+    // For workday.js and autofill.js (loaded after this file).
+    _shared: {
+      makeAtsDriver,
+      ensureSignedIn,
+      visibleOne,
+      primaryFrom,
+      buttonLabel,
+      clickThrough,
+      findApplyControl,
+      findApplicationForm,
+      waitFor,
+      applyPlan,
+      unresolvedIds,
+      isEmpty,
+      ATS_SUCCESS_RE,
+      ANY_BUTTON,
+    },
+  };
 })();

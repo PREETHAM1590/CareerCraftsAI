@@ -147,7 +147,9 @@ async def refresh_source(source: Source, query="") -> tuple[list[dict], str | No
         await db.commit()
     jobs, warning, cursor, retry_after = [], None, None, None
     try:
-        for _ in range(3):
+        # Workday/Oracle boards hold thousands of postings; three pages would
+        # leave most of them unsearchable.
+        for _ in range(10 if source.family in {"workday", "oracle"} else 3):
             for attempt in range(2):
                 try:
                     result = await asyncio.wait_for(fetch_page(source, query, cursor), 15)
@@ -188,6 +190,10 @@ async def refresh_source(source: Source, query="") -> tuple[list[dict], str | No
             extra={"source_id": source.id, "error_type": type(exc).__name__},
         )
         jobs = cached["cached_jobs"] or []
+    if not warning and not jobs and ":" in source.id:
+        # A wrong board id often answers 200 with an empty list (e.g. SmartRecruiters),
+        # which would otherwise be recorded as a healthy source.
+        logger.warning("job_source_empty", extra={"source_id": source.id})
     interval = timedelta(hours=24 if source.family == "remotive" else source.refresh_hours)
     if warning:
         interval = timedelta(minutes=min(60, 2 ** min(int(cached["failures"] or 0) + 1, 6)))
