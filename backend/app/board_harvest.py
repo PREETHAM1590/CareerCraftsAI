@@ -2,6 +2,7 @@
 
     python -m app.board_harvest probe --family greenhouse --slugs slugs.txt --out candidates.json
     python -m app.board_harvest detect --websites sites.txt --out candidates.json
+    python -m app.board_harvest health [--prune] [--report report.json]
 
 It writes a candidates file only; a human reviews it and merges entries into
 services/job_sources.json by hand. It makes many outbound requests (throttled
@@ -18,6 +19,8 @@ import sys
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
+
+import httpx
 
 from app.services import job_connectors
 from app.services.job_connectors import Source, fetch_page
@@ -162,6 +165,62 @@ async def detect(sites, concurrency=4, delay=0.5, timeout=20):
     return found
 
 
+
+DEAD_STATUSES = {404, 410}
+# Aggregators and keyed APIs have no per-board identity to check without credentials.
+NOT_BOARDS = {"adzuna", "careerjet", "jooble", "reed", "usajobs", "google_cse", "getro", "rss"}
+
+
+async def check_source(source: Source, timeout=20) -> str:
+    """ok (has jobs), empty (answered, zero jobs), dead (404/410) or error (anything else)."""
+    try:
+        page = await asyncio.wait_for(fetch_page(source, "", None), timeout)
+    except httpx.HTTPStatusError as exc:
+        return "dead" if exc.response.status_code in DEAD_STATUSES else "error"
+    except Exception:
+        return "error"
+    return "ok" if page.jobs else "empty"
+
+
+async def health(rows, concurrency=4, delay=0.3, timeout=20, log=sys.stderr):
+    """Probe every board entry politely. Returns {source_id: status}."""
+    sem, throttle, result = asyncio.Semaphore(concurrency), Throttle(delay), {}
+
+    async def one(row):
+        keys = ("id", "family", "tenant", "permitted", "url", "refresh_hours")
+        source = Source(**{k: row[k] for k in keys if k in row})
+        async with sem:
+            await throttle.wait(source.family)
+            result[source.id] = await check_source(source, timeout)
+        print(f"\rchecked {len(result)}/{len(rows)}", end="", file=log)
+
+    await asyncio.gather(*(one(r) for r in rows if r["family"] not in NOT_BOARDS))
+    print(file=log)
+    return result
+
+
+def health_counts(rows, statuses) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {}
+    for row in rows:
+        if row["id"] in statuses:
+            family = counts.setdefault(row["family"], dict.fromkeys(("ok", "empty", "dead", "error"), 0))
+            family[statuses[row["id"]]] += 1
+    return counts
+
+
+def run_health(args) -> dict[str, dict[str, int]]:
+    rows = json.loads(SOURCES.read_text("utf-8"))
+    statuses = asyncio.run(health(rows, args.concurrency))
+    counts = health_counts(rows, statuses)
+    if args.report:
+        Path(args.report).write_text(json.dumps(statuses, indent=2, sort_keys=True) + "\n", "utf-8")
+    if args.prune:
+        kept = [r for r in rows if statuses.get(r["id"]) != "dead"]
+        SOURCES.write_text(json.dumps(kept, indent=2, ensure_ascii=False) + "\n", "utf-8")
+    print(json.dumps(counts, indent=2, sort_keys=True))
+    return counts
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="app.board_harvest", description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="mode", required=True)
@@ -170,10 +229,17 @@ def main(argv=None):
     p.add_argument("--slugs", required=True)
     d = sub.add_parser("detect")
     d.add_argument("--websites", required=True)
+    h = sub.add_parser("health")
+    h.add_argument("--prune", action="store_true", help="drop dead (404/410) entries")
+    h.add_argument("--report", help="write per-source statuses as JSON")
     for s in (p, d):
         s.add_argument("--out", required=True)
+    for s in (p, d, h):
         s.add_argument("--concurrency", type=int, default=4, choices=range(1, 9), metavar="1-8")
     a = ap.parse_args(argv)
+    if a.mode == "health":
+        run_health(a)
+        return
     text = Path(a.slugs if a.mode == "probe" else a.websites).read_text("utf-8")
     if a.mode == "probe":
         if a.family not in job_connectors.FAMILIES:

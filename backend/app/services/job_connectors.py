@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import html
 import json
 import re
+import weakref
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from html.parser import HTMLParser
@@ -54,6 +56,40 @@ FAMILIES = {
     "oracle",
     "icims",
 }
+
+
+# At most this many requests in flight per upstream host, per event loop.
+HOST_CONCURRENCY = 4
+_RETRY_STATUSES = {429, 503}
+_MAX_RETRIES = 2
+_MAX_BACKOFF_S = 8.0
+_host_gates: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
+def _gate(url: str) -> asyncio.Semaphore:
+    gates = _host_gates.setdefault(asyncio.get_running_loop(), {})
+    return gates.setdefault(urlsplit(url).hostname or "", asyncio.Semaphore(HOST_CONCURRENCY))
+
+
+def _backoff(response, attempt: int) -> float:
+    try:
+        wait = float(response.headers.get("retry-after", ""))
+    except (TypeError, ValueError, AttributeError):
+        wait = 2.0**attempt
+    return min(max(wait, 0.0), _MAX_BACKOFF_S)
+
+
+async def _polite_get(url: str, **kwargs):
+    """public_get with a per-host concurrency cap and short backoff on 429/503.
+
+    The last response is returned (not raised) so callers keep their own
+    status handling, e.g. the catalog's long cooldown after a 429."""
+    for attempt in range(_MAX_RETRIES + 1):
+        async with _gate(url):
+            response = await public_get(url, **kwargs)
+        if getattr(response, "status_code", 200) not in _RETRY_STATUSES or attempt == _MAX_RETRIES:
+            return response
+        await asyncio.sleep(_backoff(response, attempt))
 
 
 @dataclass(frozen=True)
@@ -439,13 +475,13 @@ async def _fetch_getro(source: Source, query: str, page: int) -> tuple[list[dict
     if not network:
         if not board:
             raise ValueError("Getro source needs a network id or board url")
-        home = await public_get(board, max_bytes=2_000_000)
+        home = await _polite_get(board, max_bytes=2_000_000)
         home.raise_for_status()
         network = getro_network_id(home.text)
         if not network:
             raise ValueError("Could not find the Getro network id on the board page")
         _getro_networks[source.id] = network
-    response = await public_get(
+    response = await _polite_get(
         f"https://api.getro.com/api/v2/collections/{network}/search/jobs",
         # Getro answers 406 to the default `Accept: */*`.
         headers={"Accept": "application/json"},
@@ -497,7 +533,7 @@ async def _fetch_google_cse(source: Source, query: str, page: int) -> tuple[list
     q = " ".join(part for part in (source.url, query) if part).strip()
     if not q:
         raise ValueError("Google search source needs a query")
-    response = await public_get(
+    response = await _polite_get(
         "https://www.googleapis.com/customsearch/v1?"
         + urlencode(
             {
@@ -518,7 +554,7 @@ async def _fetch_google_cse(source: Source, query: str, page: int) -> tuple[list
 async def _fetch_hn_hiring(page: int) -> tuple[list[dict], str | None]:
     """The latest monthly "Ask HN: Who is hiring?" thread, one page of posts
     at a time, through HN's public Algolia search."""
-    found = await public_get(
+    found = await _polite_get(
         "https://hn.algolia.com/api/v1/search_by_date?"
         + urlencode({"tags": "story,author_whoishiring", "query": "who is hiring"})
         + "&hitsPerPage=5"
@@ -537,7 +573,7 @@ async def _fetch_hn_hiring(page: int) -> tuple[list[dict], str | None]:
     story = thread["objectID"]
     if not re.fullmatch(r"\d{1,12}", str(story)):
         return [], None
-    response = await public_get(
+    response = await _polite_get(
         "https://hn.algolia.com/api/v1/search_by_date?"
         + urlencode({"tags": f"comment,story_{story}", "hitsPerPage": 100, "page": page - 1})
     )
@@ -622,7 +658,7 @@ async def _fetch_workday(source: Source, query: str, cursor: str | None) -> Page
     )
     if offset < 0 or offset >= _WORKDAY_PAGE * _WORKDAY_MAX_PAGES:
         raise ValueError("Pagination limit exceeded")
-    response = await public_get(
+    response = await _polite_get(
         f"https://{host}/wday/cxs/{tenant}/{site}/jobs",
         json_body={
             "appliedFacets": {},
@@ -804,7 +840,7 @@ async def _fetch_ats_board(source: Source, tenant: str, page: int) -> Page:
             "query": _GEM_LIST,
             "variables": {"boardId": tenant},
         }
-    response = await public_get(url, headers=headers, json_body=body)
+    response = await _polite_get(url, headers=headers, json_body=body)
     response.raise_for_status()
     next_cursor = None
     if family == "personio":
@@ -813,7 +849,7 @@ async def _fetch_ats_board(source: Source, tenant: str, page: int) -> Page:
             # Posts published only in a non-default locale have an empty body; the
             # English feed usually has it. Best effort.
             try:
-                en = await public_get(url + "?language=en")
+                en = await _polite_get(url + "?language=en")
                 en.raise_for_status()
                 bodies = {r["id"]: r["description"] for r in parse_personio(en.text, tenant)}
                 for r in rows:
@@ -974,7 +1010,7 @@ async def _fetch_oracle(source: Source, query: str, cursor: str | None) -> Page:
         f"findReqs;siteNumber={site},limit={_ORACLE_PAGE},offset={offset},"
         f"sortBy=POSTING_DATES_DESC" + (f",keyword={keyword}" if keyword else "")
     )
-    response = await public_get(
+    response = await _polite_get(
         f"https://{host}/hcmRestApi/resources/latest/recruitingCEJobRequisitions?"
         + urlencode(
             {"onlyData": "true", "expand": "requisitionList.secondaryLocations", "finder": finder},
@@ -1015,7 +1051,7 @@ async def _fetch_workable_public(source: Source, query: str, cursor: str | None)
     body = {"query": query or "", "location": [], "department": [], "worktype": [], "remote": []}
     if cursor:
         body["token"] = cursor
-    response = await public_get(
+    response = await _polite_get(
         f"https://apply.workable.com/api/v3/accounts/{tenant}/jobs", json_body=body
     )
     response.raise_for_status()
@@ -1090,7 +1126,7 @@ def parse_icims(page_html: str, tenant: str) -> list[dict]:
 
 
 async def _fetch_icims(source: Source, tenant: str, query: str, page: int) -> Page:
-    response = await public_get(
+    response = await _polite_get(
         f"https://{tenant}.icims.com/jobs/search?"
         + urlencode({"ss": 1, "searchKeyword": query or "", "pr": page - 1, "in_iframe": 1}),
         max_bytes=2_000_000,
@@ -1178,7 +1214,7 @@ async def fetch_page(source: Source, query: str = "", cursor: str | None = None)
         url = canonical_url(source.url)
         parsed = urlsplit(url)
         robots_url = f"https://{parsed.netloc}/robots.txt"
-        robots = await public_get(robots_url, max_bytes=200_000)
+        robots = await _polite_get(robots_url, max_bytes=200_000)
         if robots.status_code not in (200, 404):
             raise ValueError("Robots policy unavailable")
         if robots.status_code == 200:
@@ -1235,7 +1271,7 @@ async def fetch_page(source: Source, query: str = "", cursor: str | None = None)
         )
     else:
         url = urls[family]
-    response = await public_get(
+    response = await _polite_get(
         url,
         headers=headers,
         json_body=jooble_body if family == "jooble" else None,
