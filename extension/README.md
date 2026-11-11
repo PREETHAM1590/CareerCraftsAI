@@ -4,8 +4,10 @@ Applies to jobs **in your own browser**, where you are already signed in to
 LinkedIn, Naukri and company career sites. CareerCraft never runs a browser
 for you on its servers and never sees your job-site passwords or cookies.
 
-Every application ends with **you** pressing **Submit application** in the
-extension's review panel. Nothing is submitted before that.
+By default every application ends with **you** pressing **Submit
+application** in the extension's review panel and then **Submit this
+application** in the popup. Nothing is submitted before that, unless you turn
+on **Auto-apply** (see below).
 
 ## Install (unpacked, for now)
 
@@ -62,11 +64,23 @@ code is shown once and only its hash is stored on the server.
 Dedicated handlers (step-by-step loop: fill the step, ask about what is
 never guessed, press Next, repeat; only the final Submit goes through the
 review and popup approval):
-- **Workday** — job page → Apply → *Apply Manually* (never the resume
-  auto-parse) → your account → My Information… → Review → Submit. If you are
-  signed out the panel waits for you to sign in or create the account;
-  passwords are never read. Dropdown and date-picker questions that the
-  extension cannot fill are flagged for you to complete before it continues.
+- **Workday** (`*.myworkdayjobs.com`, `*.myworkdaysite.com`, and tenants on
+  company domains, recognised by Workday's `data-automation-id` markup) —
+  job page → Apply → *Apply Manually* → your account → My Information → My
+  Experience → Application Questions → Voluntary Disclosures / Self Identify
+  → Review → Submit (`src/content/workday.js`). It fills text fields,
+  listbox dropdowns (options are read by opening them), search prompts such
+  as *How did you hear about us* and skills, split month/day/year dates and
+  the hidden resume upload. On My Experience it uploads the resume first so
+  Workday parses work history and education; values already on the page are
+  never overwritten, and repeated blocks are labelled *Work Experience 1:
+  Job Title* so answers are not mixed up. Voluntary disclosures (gender,
+  race/ethnicity, veteran, disability) are filled **only** from answers you
+  saved yourself; otherwise they stay blank and are flagged. After each Next
+  it waits for the step to change and hands Workday's validation messages
+  back to you. Sign-in, account creation, verification codes and the legal
+  notice are always left to you; passwords are never read. "Already
+  applied" ends the task.
 - **SmartRecruiters** — *I'm interested* → the application, including forms
   that live inside open shadow roots.
 - **Workable** — *Apply for this job* → the single-page form.
@@ -78,6 +92,25 @@ send you to an external site from LinkedIn/Naukri are reported as such.
 
 If you are signed out, a CAPTCHA appears, or a question needs you, the
 panel says so and waits. Closing the tab cancels the application.
+
+## Auto-apply (opt-in, off by default)
+
+Turn it on in the popup or in **Autofill profile & settings**. When an
+application needs nothing from you, the extension skips the review panel and
+the popup approval and submits it; your opt-in is sent as the confirmation
+for that one reviewed form. It still stops and hands the tab back to you for:
+sign-in, account creation, verification codes, CAPTCHAs, required questions
+it could not answer or the page refused, AI-drafted answers, validation
+errors, consent/legal checkboxes, and any submit button it only guessed.
+
+## Autofill this page (no CareerCraft task needed)
+
+**Autofill this page** in the popup fills the application form on the
+current tab (every frame, so embedded Greenhouse forms work too) from the
+profile and resume saved in **Autofill profile & settings** (stored only in
+this browser). On Workday it fills the current step. It never navigates,
+never ticks consent boxes and never submits; work authorization, sponsorship
+and voluntary disclosures are used only if you chose an answer there.
 
 ## Decisions on the page
 
@@ -102,7 +135,15 @@ the extension paces its actions like a person, and it never solves CAPTCHAs.
 - `src/background.js` — service worker: pairing, polling, all network calls.
 - `src/content/*.js` — injected into the job tab: DOM helpers, review panel
   (closed shadow DOM), platform drivers, and the runner.
-- `test/fixtures/` — Greenhouse-, LinkedIn- and Naukri-like pages.
+- `src/content/workday.js` — the Workday steps; `src/content/autofill.js` —
+  the task-free "Autofill this page"; `options.html` — autofill profile and
+  the auto-apply switch.
+- `test/fixtures/` — Greenhouse-, LinkedIn- and Naukri-like pages, plus
+  `workday/full.html`, a multi-step Workday reconstruction (listboxes,
+  prompts, split dates, hidden resume input, parsing, validation,
+  disclosures).
+- `test/autofill_rules.test.mjs` — option matching, dates, local autofill
+  rules (`node --test test/autofill_rules.test.mjs`).
 - `test/e2e_apply.mjs` — the whole apply flow in a real Chromium against
   local fixture job sites (Greenhouse, Lever, Workday, SmartRecruiters, Workable, an in-page Apply button the extension must leave for the person, a company page with an embedded Greenhouse form) and a fake API that
   follows the backend's status rules. Run `node test/e2e_apply.mjs`.
