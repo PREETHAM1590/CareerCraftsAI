@@ -60,7 +60,7 @@
         const response = await send({ type: "CC_ANSWER", taskId: task.id, label, value, question_key: questionKey });
         return response.data || null;
       },
-      async markSubmitting(root, submit) {
+      async markSubmitting(root, submit, opts) {
         const dom = window.CareerCraftDOM;
         async function snapshot() {
           if (!submit?.isConnected || submit.disabled || !dom.isVisible(submit)) throw new Error("The submit control changed. Review the form again.");
@@ -82,9 +82,14 @@
           return { url: location.href, fields, submit_control: JSON.stringify([submit.tagName, submit.id, submit.name, submit.type, dom.textOf(submit), submit.getAttribute("aria-label"), submit.form?.action || ""]) };
         }
         const reviewed = await snapshot();
-        const response = await send({ type: "CC_REVIEW", taskId: task.id, snapshot: reviewed, url: location.href });
+        const auto = !!(opts && opts.auto);
+        const response = await send({ type: "CC_REVIEW", taskId: task.id, snapshot: reviewed, url: location.href, auto });
         if (response.error) throw new Error(response.error);
-        window.CareerCraftPanel.showStatus("Last step: click the CareerCraft icon in your browser toolbar and press Submit this application. Nothing is sent until you do.");
+        window.CareerCraftPanel.showStatus(
+          response.data && response.data.autoApproved
+            ? "Auto-apply: submitting this application…"
+            : "Last step: click the CareerCraft icon in your browser toolbar and press Submit this application. Nothing is sent until you do."
+        );
         const deadline = Date.now() + 5 * 60 * 1000;
         while (Date.now() < deadline) {
           await dom.delay(800, 1200);
@@ -118,13 +123,13 @@
     cancelled: "Application cancelled.",
   };
 
-  async function run(task, submitting) {
+  async function run(task, submitting, autoApply) {
     const dom = window.CareerCraftDOM;
     const panel = window.CareerCraftPanel;
     const drivers = window.CareerCraftDrivers;
     const state = { finished: false, outcome: null };
     const api = makeApi(task, state);
-    const ctx = { task, api, panel, delay: () => dom.delay(250, 800) };
+    const ctx = { task, api, panel, autoApply: !!autoApply, delay: () => dom.delay(250, 800) };
     const subtitle = [task.company, task.role].filter(Boolean).join(" · ");
 
     panel.showStatus("Preparing your application…", subtitle);
@@ -170,6 +175,17 @@
   }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message && message.type === "AUTOFILL_PAGE") {
+      // One-click fill from the popup: fills only, never navigates or submits.
+      if (runningTaskId) {
+        sendResponse({ ok: false, error: "A CareerCraft application is already running in this tab." });
+        return false;
+      }
+      window.CareerCraftAutofill.run(message)
+        .then(sendResponse)
+        .catch((e) => sendResponse({ ok: false, error: (e && e.message) || String(e) }));
+      return true;
+    }
     if (!message || message.type !== "RUN_TASK" || !message.task) return false;
     // One run per document: a duplicate "complete" event re-sends RUN_TASK.
     if (runningTaskId === message.task.id) {
@@ -178,7 +194,7 @@
     }
     runningTaskId = message.task.id;
     sendResponse({ ok: true });
-    run(message.task, !!message.submitting).finally(() => {
+    run(message.task, !!message.submitting, !!message.autoApply).finally(() => {
       runningTaskId = null;
     });
     return false;
