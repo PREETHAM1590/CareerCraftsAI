@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>CareerCraft AI — Autofill profile &amp; settings</title>
+    <link rel="stylesheet" href="src/popup.css" />
+    <link rel="stylesheet" href="src/options.css" />
+  </head>
+  <body>
+    <header>
+      <img src="icons/icon32.png" alt="" width="20" height="20" />
+      <h1>Autofill profile &amp; settings</h1>
+    </header>
+    <p class="lead">Used by <strong>Autofill this page</strong>. Stored only in this browser. Applications started from CareerCraft use your CareerCraft profile and saved answers instead.</p>
+
+    <form id="profile">
+      <fieldset>
+        <legend>Contact</legend>
+        <div class="grid">
+          <label>First name<input name="firstName" autocomplete="given-name" /></label>
+          <label>Last name<input name="lastName" autocomplete="family-name" /></label>
+          <label>Email<input name="email" type="email" autocomplete="email" required /></label>
+          <label>Phone<input name="phone" type="tel" autocomplete="tel" /></label>
+          <label>Address line 1<input name="addressLine1" autocomplete="address-line1" /></label>
+          <label>City<input name="city" autocomplete="address-level2" /></label>
+          <label>State / province<input name="state" autocomplete="address-level1" /></label>
+          <label>Postal code<input name="postalCode" autocomplete="postal-code" /></label>
+          <label>Country<input name="country" autocomplete="country-name" /></label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Work</legend>
+        <div class="grid">
+          <label>LinkedIn URL<input name="linkedin" type="url" /></label>
+          <label>GitHub URL<input name="github" type="url" /></label>
+          <label>Website / portfolio<input name="website" type="url" /></label>
+          <label>Current company<input name="currentCompany" /></label>
+          <label>Current job title<input name="currentTitle" /></label>
+          <label>Years of experience<input name="yearsExperience" inputmode="numeric" /></label>
+          <label>How did you hear about us (default)<input name="howDidYouHear" placeholder="e.g. LinkedIn" /></label>
+        </div>
+        <label>Resume (PDF or Word, up to 5 MB)<input id="resume" type="file" accept=".pdf,.doc,.docx" /></label>
+        <p class="hint" id="resume-name"></p>
+      </fieldset>
+
+      <fieldset>
+        <legend>Only filled when you choose an answer here</legend>
+        <p class="hint">Leave a question on “Leave blank” and the extension never answers it for you.</p>
+        <div class="grid">
+          <label>Legally authorized to work where you apply?
+            <select name="workAuthorized"><option value="">Leave blank</option><option>Yes</option><option>No</option></select></label>
+          <label>Require visa sponsorship?
+            <select name="requiresSponsorship"><option value="">Leave blank</option><option>Yes</option><option>No</option></select></label>
+          <label>Gender (voluntary)<input name="gender" placeholder="Leave empty to skip, or e.g. Decline to self-identify" /></label>
+          <label>Race / ethnicity (voluntary)<input name="ethnicity" placeholder="Leave empty to skip" /></label>
+          <label>Veteran status (voluntary)<input name="veteran" placeholder="Leave empty to skip" /></label>
+          <label>Disability (voluntary)<input name="disability" placeholder="Leave empty to skip" /></label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Auto-apply</legend>
+        <label class="toggle"><input id="auto-apply" type="checkbox" /> Submit applications from CareerCraft without the approval click when nothing needs my attention</label>
+        <p class="hint">Off by default. Even when on, the extension stops and hands the tab back to you for sign-in, account creation, verification codes, CAPTCHAs, required questions it could not answer, AI-drafted answers, validation errors and consent or legal checkboxes.</p>
+      </fieldset>
+
+      <div class="row">
+        <button class="primary" type="submit">Save</button>
+      </div>
+      <p id="saved" class="hint" role="status"></p>
+      <p id="error" class="error" role="alert" hidden></p>
+    </form>
+    <script type="module" src="src/options.js"></script>
+  </body>
+</html>

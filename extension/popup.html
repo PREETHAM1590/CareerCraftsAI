@@ -44,6 +44,20 @@
       <p class="hint">Review and edit the job page first, then approve <strong>Submit this application</strong> here.</p>
     </section>
 
+    <section id="tools">
+      <div class="card">
+        <p class="label">This page</p>
+        <button id="autofill" class="primary">Autofill this page</button>
+        <p id="autofill-result" class="hint" role="status"></p>
+        <p class="hint">Fills the application form on this tab (Workday, Greenhouse, Lever, Ashby, SmartRecruiters, Workable and most forms) from your autofill profile. It never submits.</p>
+      </div>
+      <div class="card">
+        <label class="toggle"><input id="auto-apply" type="checkbox" /> Auto-apply</label>
+        <p class="hint" id="auto-apply-hint">Off: you approve every application here before it is submitted.</p>
+      </div>
+      <button id="open-options" class="link">Autofill profile &amp; settings</button>
+    </section>
+
     <p id="error" class="error" role="alert" hidden></p>
     <script type="module" src="src/popup.js"></script>
   </body>

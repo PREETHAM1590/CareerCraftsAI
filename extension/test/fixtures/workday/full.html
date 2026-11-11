@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Senior Data Engineer — Acme (Workday multi-step fixture)</title>
+<style>
+  .popup { position: absolute; background: #fff; border: 1px solid #999; z-index: 10; }
+  [role=option] { padding: 2px 6px; cursor: pointer; }
+  input[type=file][data-automation-id="file-upload-input-ref"] { display: none; }
+</style>
+</head>
+<body>
+<!-- A reconstruction of Workday's candidate wizard using the markup its
+     pages expose: data-automation-id hooks, listbox buttons whose options
+     only exist while open, a search prompt that answers on Enter, split
+     month/day/year date inputs that handle keystrokes themselves, a hidden
+     resume input behind a drop zone, resume parsing into Work Experience,
+     per-field validation (inputAlert + errorBanner), voluntary disclosures
+     and a required consent checkbox. Steps: job → Apply → Apply Manually →
+     Create Account → My Information → My Experience → Application Questions
+     → Voluntary Disclosures → Review → Submit. -->
+<div id="root"></div>
+<script>
+  const root = document.getElementById("root");
+  const isApply = location.pathname.endsWith("/apply");
+  const STEPS = ["My Information", "My Experience", "Application Questions", "Voluntary Disclosures", "Review"];
+  const values = {};
+  let step = 0;
+
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+  const text = (id, label, extra = "") =>
+    `<div data-automation-id="formField-${id}"><label for="${id}">${label}</label><input type="text" id="${id}" data-automation-id="${id}" ${extra}><div class="alert"></div></div>`;
+  const listbox = (id, label, options, current = "") =>
+    `<div data-automation-id="formField-${id}"><label id="${id}-label">${label}</label>
+      <button type="button" id="${id}" aria-haspopup="listbox" data-automation-id="${id}" data-options="${esc(JSON.stringify(options))}" aria-label="${esc(label)} ${esc(current || "Select One")}">${esc(current || "Select One")}</button><div class="alert"></div></div>`;
+  const dateField = (id, label) =>
+    `<div data-automation-id="formField-${id}"><label>${label}</label><div data-automation-id="dateInputWrapper">
+      <input data-automation-id="dateSectionMonth-input" role="spinbutton" aria-label="Month" maxlength="2" size="2">/
+      <input data-automation-id="dateSectionDay-input" role="spinbutton" aria-label="Day" maxlength="2" size="2">/
+      <input data-automation-id="dateSectionYear-input" role="spinbutton" aria-label="Year" maxlength="4" size="4"></div><div class="alert"></div></div>`;
+
+  // ── Listbox popups: options exist only while open ──────────────────────
+  function closePopups() { document.querySelectorAll(".popup").forEach((p) => p.remove()); }
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closePopups(); }, true);
+  document.addEventListener("click", (e) => {
+    const button = e.target.closest("button[aria-haspopup=listbox]");
+    if (!button) return;
+    closePopups();
+    const popup = document.createElement("div");
+    popup.className = "popup";
+    popup.setAttribute("data-automation-id", "selectWidget-popup");
+    const options = JSON.parse(button.dataset.options);
+    popup.innerHTML = `<ul role="listbox" id="${button.id}-listbox">${["Select One", ...options].map((o) => `<li role="option"><div>${esc(o)}</div></li>`).join("")}</ul>`;
+    button.setAttribute("aria-controls", `${button.id}-listbox`);
+    button.setAttribute("aria-expanded", "true");
+    popup.addEventListener("click", (ev) => {
+      const li = ev.target.closest("[role=option]");
+      if (!li) return;
+      const chosen = li.textContent.trim();
+      button.textContent = chosen;
+      button.setAttribute("aria-label", `${button.id} ${chosen}`);
+      button.setAttribute("aria-expanded", "false");
+      closePopups();
+    });
+    document.body.appendChild(popup);
+  });
+
+  // ── "How did you hear about us": a prompt that searches on Enter ───────
+  function wirePrompt() {
+    const input = document.getElementById("source");
+    if (!input) return;
+    input.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      closePopups();
+      const q = input.value.toLowerCase();
+      const hits = ["LinkedIn", "Indeed", "Company Website", "Employee Referral"].filter((o) => o.toLowerCase().includes(q));
+      const popup = document.createElement("div");
+      popup.className = "popup";
+      popup.innerHTML = hits.map((h) => `<div data-automation-id="promptOption" data-automation-label="${h}" role="option">${h}</div>`).join("");
+      popup.addEventListener("click", (ev) => {
+        const opt = ev.target.closest("[data-automation-id=promptOption]");
+        if (!opt) return;
+        const pill = document.createElement("div");
+        pill.setAttribute("data-automation-id", "selectedItem");
+        pill.textContent = opt.dataset.automationLabel;
+        input.closest("[data-automation-id=multiSelectContainer]").prepend(pill);
+        input.value = "";
+        closePopups();
+      });
+      document.body.appendChild(popup);
+    });
+  }
+
+  // ── Date sections handle digits themselves, like Workday's spinbuttons ──
+  function wireDates() {
+    for (const el of document.querySelectorAll("[data-automation-id^=dateSection]")) {
+      el.addEventListener("keydown", (e) => {
+        if (!/^\d$/.test(e.key)) return;
+        e.preventDefault();
+        const max = Number(el.getAttribute("maxlength"));
+        el.value = (el.value + e.key).slice(-max);
+      });
+    }
+  }
+
+  // ── Resume upload behind a drop zone, then "parsing" ───────────────────
+  function wireUpload() {
+    const input = document.querySelector("[data-automation-id=file-upload-input-ref]");
+    if (!input) return;
+    input.addEventListener("change", () => {
+      if (!input.files.length) return;
+      values.resume = input.files[0].name;
+      document.getElementById("uploaded").innerHTML = `<div data-automation-id="file-upload-successful">${esc(values.resume)} <button type="button" data-automation-id="delete-file">Delete</button></div>`;
+      setTimeout(() => {
+        document.getElementById("experience").innerHTML = `<div data-automation-id="workExperience-1"><h4>Work Experience 1</h4>
+          ${text("jobTitle", "Job Title*", 'value="Engineer"')}${text("company", "Company*", 'value="Acme Labs"')}</div>`;
+      }, 400);
+    });
+  }
+
+  function progress() {
+    return `<ol data-automation-id="progressBar">${STEPS.map((s, i) => i === step
+      ? `<li data-automation-id="progressBarActiveStep">current step ${i + 1} of ${STEPS.length} ${s}</li>`
+      : `<li data-automation-id="progressBarInactiveStep">${s}</li>`).join("")}</ol>`;
+  }
+
+  function page(body, nextLabel = "Save and Continue") {
+    root.innerHTML = `<div data-automation-id="applyFlowPage">${progress()}<h2>${STEPS[step]}</h2>
+      <div data-automation-id="errorBanner" hidden>Errors Found</div>${body}
+      <div data-automation-id="pageFooter"><button type="button" data-automation-id="bottom-navigation-next-button" id="next">${nextLabel}</button></div></div>`;
+    wirePrompt();
+    wireDates();
+    wireUpload();
+    document.getElementById("next").onclick = next;
+  }
+
+  const val = (id) => (document.getElementById(id) || {}).value || "";
+  const btn = (id) => { const t = document.getElementById(id).textContent.trim(); return t === "Select One" ? "" : t; };
+  const date = (id) => Array.from(document.querySelectorAll(`[data-automation-id=formField-${id}] input`)).map((i) => i.value).join("/");
+
+  function check(rules) {
+    let bad = false;
+    for (const [id, ok, message] of rules) {
+      const box = document.querySelector(`[data-automation-id=formField-${id}]`);
+      const alert = box.querySelector(".alert");
+      const field = box.querySelector("input, button");
+      if (ok) {
+        alert.innerHTML = "";
+        field.removeAttribute("aria-invalid");
+      } else {
+        bad = true;
+        alert.innerHTML = `<div data-automation-id="inputAlert">${message}</div>`;
+        field.setAttribute("aria-invalid", "true");
+      }
+    }
+    document.querySelector("[data-automation-id=errorBanner]").hidden = !bad;
+    return !bad;
+  }
+
+  function next() {
+    if (step === 0) {
+      const phone = val("phone-number");
+      const source = Array.from(document.querySelectorAll("[data-automation-id=selectedItem]")).map((p) => p.textContent).join(",");
+      if (!check([
+        ["source", !!source, "Error: How Did You Hear About Us? is required"],
+        ["legalNameSection_firstName", !!val("legalNameSection_firstName"), "Error: First Name is required"],
+        ["legalNameSection_lastName", !!val("legalNameSection_lastName"), "Error: Last Name is required"],
+        ["phone-device-type", !!btn("phone-device-type"), "Error: Phone Device Type is required"],
+        ["phone-number", /^[0-9 ]{6,}$/.test(phone), "Error: Enter the phone number without the country code"],
+      ])) return;
+      Object.assign(values, { source, first_name: val("legalNameSection_firstName"), last_name: val("legalNameSection_lastName"),
+        address: val("addressSection_addressLine1"), city: val("addressSection_city"), postal: val("addressSection_postalCode"),
+        country: btn("addressSection_countryRegion"), device: btn("phone-device-type"), phone });
+    } else if (step === 1) {
+      if (!check([["resume", !!values.resume, "Error: Upload your resume"]])) return;
+      Object.assign(values, { job_title: val("jobTitle"), company: val("company"), linkedin: val("linkedinQuestion") });
+    } else if (step === 2) {
+      if (!check([
+        ["authorized", !!btn("authorized"), "Error: This question is required"],
+        ["sponsorship", !!btn("sponsorship"), "Error: This question is required"],
+        ["startDate", /^\d{2}\/\d{2}\/\d{4}$/.test(date("startDate")), "Error: Enter a valid date"],
+      ])) return;
+      Object.assign(values, { authorized: btn("authorized"), sponsorship: btn("sponsorship"), start: date("startDate") });
+    } else if (step === 3) {
+      if (!check([
+        ["veteranStatus", !!btn("veteranStatus"), "Error: Veteran Status is required"],
+        ["agreement", document.getElementById("terms").checked, "Error: You must accept the terms"],
+      ])) return;
+      Object.assign(values, { gender: btn("gender"), veteran: btn("veteranStatus"), terms: document.getElementById("terms").checked });
+    } else {
+      fetch("/__submitted", { method: "POST", body: JSON.stringify(values) });
+      root.innerHTML = `<h1>Application Submitted</h1><p>Thank you for applying to Acme.</p>`;
+      return;
+    }
+    // Workday saves each step over the network before moving on.
+    document.getElementById("next").disabled = true;
+    setTimeout(() => { step += 1; render(); }, 400);
+  }
+
+  function render() {
+    if (step === 0) {
+      page(`<div data-automation-id="formField-source"><label for="source">How Did You Hear About Us?*</label>
+          <div data-automation-id="multiSelectContainer"><input type="text" id="source" data-uxi-widget-type="selectinput" data-automation-id="searchBox" placeholder="Search"></div><div class="alert"></div></div>
+        ${listbox("addressSection_countryRegion", "Country*", ["India", "United States of America"], "India")}
+        ${text("legalNameSection_firstName", "First Name*")}
+        ${text("legalNameSection_lastName", "Last Name*")}
+        ${text("addressSection_addressLine1", "Address Line 1")}
+        ${text("addressSection_city", "City")}
+        ${text("addressSection_postalCode", "Postal Code")}
+        ${listbox("phone-device-type", "Phone Device Type*", ["Landline", "Mobile"])}
+        ${text("phone-number", "Phone Number*")}`);
+    } else if (step === 1) {
+      page(`<div data-automation-id="resumeSection"><h3>Resume/CV</h3>
+          <div data-automation-id="formField-resume"><div data-automation-id="file-upload-drop-zone"><label for="cv">Upload Resume*</label><button type="button" data-automation-id="select-files">Select files</button>
+          <input type="file" id="cv" data-automation-id="file-upload-input-ref"></div><div id="uploaded"></div><div class="alert"></div></div></div>
+        <div data-automation-id="workExperienceSection"><h3>Work Experience</h3><div id="experience"></div><button type="button" data-automation-id="Add">Add</button></div>
+        ${text("linkedinQuestion", "LinkedIn")}`);
+    } else if (step === 2) {
+      page(`${listbox("authorized", "Are you legally authorized to work in India?*", ["Yes", "No"])}
+        ${listbox("sponsorship", "Will you now or in the future require visa sponsorship?*", ["Yes", "No"])}
+        ${dateField("startDate", "When can you start?*")}`);
+    } else if (step === 3) {
+      page(`${listbox("gender", "Gender", ["Female", "Male", "I do not wish to answer"])}
+        ${listbox("veteranStatus", "Veteran Status*", ["I am a protected veteran", "I am not a protected veteran", "I do not wish to answer"])}
+        <div data-automation-id="formField-agreement"><input type="checkbox" id="terms" name="terms" data-automation-id="agreementCheckbox">
+          <label for="terms">I consent to the terms and conditions*</label><div class="alert"></div></div>`);
+    } else {
+      page(`<p>Review your application before you submit.</p><p>${esc(values.first_name)} ${esc(values.last_name)}</p>`, "Submit");
+    }
+  }
+
+  function renderJob() {
+    root.innerHTML = `<h1 data-automation-id="jobPostingHeader">Senior Data Engineer</h1><p>Acme · Pune</p>
+      <button type="button" data-automation-id="adventureButton" id="apply">Apply</button><div id="modal"></div>`;
+    document.getElementById("apply").onclick = () => {
+      document.getElementById("modal").innerHTML = `<div role="dialog"><h2>Start Your Application</h2>
+        <a data-automation-id="autofillWithResume" href="#">Autofill with Resume</a>
+        <a data-automation-id="applyManually" href="${location.pathname}/apply">Apply Manually</a></div>`;
+    };
+  }
+
+  function renderCreateAccount() {
+    root.innerHTML = `<div data-automation-id="createAccountPage"><h2>Create Account</h2>
+      <label>Email Address*<input type="text" data-automation-id="email"></label>
+      <label>Password*<input type="password" data-automation-id="password"></label>
+      <label>Verify New Password*<input type="password" data-automation-id="verifyPassword"></label>
+      <label><input type="checkbox" data-automation-id="createAccountCheckbox"> I agree</label>
+      <button type="button" data-automation-id="createAccountSubmitButton">Create Account</button></div>`;
+  }
+  window.__signIn = () => { sessionStorage.setItem("wd_full_signed_in", "1"); render(); };
+  window.__wdValues = values;
+
+  if (!isApply) renderJob();
+  else if (sessionStorage.getItem("wd_full_signed_in") === "1") render();
+  else renderCreateAccount();
+</script>
+</body>
+</html>
