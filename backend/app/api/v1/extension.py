@@ -70,9 +70,16 @@ async def pair(
     current_user: User = Depends(get_current_user),
 ):
     """Create a device token. It is returned once — paste it into the
-    extension (or let the web app hand it over) and it is never shown again."""
+    extension (or let the web app hand it over) and it is never shown again.
+    Pairing beyond the device limit revokes the least recently used browser."""
     device, token = await extension_service.pair_device(db, current_user.id, body.name)
-    return {"device_id": str(device.id), "name": device.name, "token": token}
+    return {
+        "device_id": str(device.id),
+        "name": device.name,
+        "token": token,
+        "expires_at": device.expires_at.isoformat() if device.expires_at else None,
+        "revoked_device_ids": [str(i) for i in getattr(device, "evicted_ids", [])],
+    }
 
 
 @router.get("/download")
@@ -122,9 +129,11 @@ async def list_devices(
                 "name": d.name,
                 "created_at": d.created_at.isoformat() if d.created_at else None,
                 "last_seen_at": d.last_seen_at.isoformat() if d.last_seen_at else None,
+                "expires_at": d.expires_at.isoformat() if d.expires_at else None,
             }
             for d in rows
-        ]
+        ],
+        "max_devices": extension_service.MAX_DEVICES_PER_USER,
     }
 
 
@@ -243,11 +252,29 @@ async def device_me(
     db: AsyncSession = Depends(get_db),
 ):
     user = await db.get(User, device.user_id)
+    expires_at = device.expires_at
     return {
         "device_id": str(device.id),
         "device_name": device.name,
         "user": {"email": user.email if user else None, "name": user.full_name if user else None},
+        "token_expires_at": expires_at.isoformat() if expires_at else None,
+        "rotate_token": expires_at is None
+        or expires_at - datetime.now(UTC) < extension_service.TOKEN_ROTATE_WITHIN,
+        # Read-only here: the member changes it in the web app's settings.
+        "auto_submit": await extension_service.auto_submit_status(db, device.user_id),
     }
+
+
+@router.post("/device/token/rotate")
+@limiter.limit("10/hour")
+async def rotate_device_token(
+    request: Request,
+    device: ExtensionDevice = Depends(get_device),
+    db: AsyncSession = Depends(get_db),
+):
+    """Swap this browser's token for a fresh one; the old token stops working."""
+    token = await extension_service.rotate_token(db, device)
+    return {"token": token, "expires_at": device.expires_at.isoformat()}
 
 
 @router.delete("/device/me")
@@ -272,7 +299,15 @@ async def claim_task(
     await _signal(task.workflow_id, {"stage": "claimed"})
     if not getattr(task, "redelivered", False):
         await _record_progress(db, task, "claimed", STAGE_MESSAGES["claimed"])
-    return extension_service.task_view(task)
+    view = extension_service.task_view(task)
+    # A hint for the extension; approve-submit re-checks everything.
+    status = await extension_service.auto_submit_status(db, task.user_id)
+    view["auto_submit"] = (
+        status["enabled"]
+        and not extension_service.auto_submit_host_blocked(task)
+        and status["used_last_24h"] < status["daily_cap"]
+    )
+    return view
 
 
 @router.get("/device/tasks/{task_id}")
@@ -334,6 +369,11 @@ class ReviewRequest(BaseModel):
 class SubmitApproval(BaseModel):
     review_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     user_confirmed: Literal[True]
+    # True when no person pressed Submit: the member's auto-submit setting
+    # stands in for the click, and the server decides whether it may. Required
+    # (None = an extension older than 0.6.0, which could auto-submit on a
+    # local switch the server never saw).
+    auto_approved: bool | None = None
 
 
 def _review_url(url: str) -> None:
@@ -407,6 +447,8 @@ async def review_task(
     task.review_hash = hashlib.sha256(json.dumps(binding, sort_keys=True).encode()).hexdigest()
     task.review_url = body.url
     task.review_expires_at = datetime.now(UTC) + timedelta(minutes=5)
+    # Kept for the approval audit: these exact answers are what gets submitted.
+    task.payload = {**(task.payload or {}), "review_fields": snapshot["fields"]}
     attempt.state = "awaiting_approval"
     await db.commit()
     return {"review_hash": task.review_hash, "expires_at": task.review_expires_at.isoformat()}
@@ -421,6 +463,11 @@ async def approve_submit(
     device: ExtensionDevice = Depends(get_device),
     db: AsyncSession = Depends(get_db),
 ):
+    if body.auto_approved is None:
+        raise HTTPException(
+            status_code=426,
+            detail="Update the CareerCraft extension (0.6.0 or newer) to submit applications.",
+        )
     task = await _device_task(db, device, task_id)
     now = datetime.now(UTC)
     if (
@@ -434,6 +481,13 @@ async def approve_submit(
     attempt = await _task_attempt(db, task)
     if attempt.state != "awaiting_approval":
         raise HTTPException(status_code=409, detail="Application cannot be submitted again")
+    if body.auto_approved:
+        status = await extension_service.auto_submit_status(db, task.user_id, lock=True)
+        refusal = extension_service.auto_submit_refusal(status, task)
+        if refusal:
+            # The extension falls back to asking the member in its popup.
+            raise HTTPException(status_code=403, detail=refusal)
+    extension_service.record_approval(db, task, device, auto=body.auto_approved)
     token = secrets.token_urlsafe(32)
     task.submission_token_hash = hashlib.sha256(token.encode()).hexdigest()
     task.submission_expires_at = now + timedelta(minutes=2)

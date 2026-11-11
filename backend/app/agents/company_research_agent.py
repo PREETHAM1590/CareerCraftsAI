@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.prompts import fenced
 from app.agents.state import AgentState
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
@@ -398,6 +399,13 @@ _BRIEF_SYSTEM = (
 )
 
 
+def _source_prompt(company_name: str, results: dict[str, Any]) -> str:
+    """The digest as one fenced block of untrusted web text."""
+    return "Source material (untrusted web text):\n" + fenced(
+        "SOURCES", _source_digest(company_name, results)
+    )
+
+
 def _source_digest(company_name: str, results: dict[str, Any]) -> str:
     parts = [f"Company: {company_name}"]
     if results.get("website"):
@@ -427,7 +435,7 @@ def _synthesize(model_settings: Any, company_name: str, results: dict[str, Any])
     from app.core.model_router import build_agent_llm
 
     llm = build_agent_llm(model_settings)
-    return call_llm_json(llm, _BRIEF_SYSTEM, _source_digest(company_name, results), _Brief)
+    return call_llm_json(llm, _BRIEF_SYSTEM, _source_prompt(company_name, results), _Brief)
 
 
 async def synthesize_intel(
@@ -613,7 +621,9 @@ async def company_research_node(state: AgentState) -> AgentState:
     """
     user_id = state["user_id"]
     context = state["context"]
-    company_name = " ".join(str(context["company_name"]).split())
+    company_name = " ".join(str(context.get("company_name") or context.get("company") or "").split())
+    if not company_name:
+        raise ValueError("Enter a company name to research")
     force_refresh = context.get("force_refresh", False)
 
     async with AsyncSessionLocal() as db:
