@@ -250,6 +250,8 @@ class ExtensionDevice(Base):
     # Set only by the agent command long-poll: "online" for browser mode.
     agent_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # The token stops working after this; the extension rotates it before then.
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class ExtensionTask(Base):
@@ -291,6 +293,40 @@ class ExtensionTask(Base):
     submission_token_hash: Mapped[str | None] = mapped_column(String(64))
     submission_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     submission_reported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ApplicationSubmitApproval(Base):
+    """Audit trail of every submit authorization: who approved (the member in
+    the extension popup, or their auto-submit setting), when, for which job,
+    and the reviewed answers that were submitted. Written by approve-submit;
+    only the screenshot captured with that review is attached later."""
+
+    __tablename__ = "application_submit_approvals"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    job_application_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("job_applications.id", ondelete="CASCADE"), index=True
+    )
+    extension_task_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("extension_tasks.id", ondelete="SET NULL")
+    )
+    device_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("extension_devices.id", ondelete="SET NULL")
+    )
+    auto_approved: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default="false"
+    )
+    # "member" (pressed Submit in the popup) or "auto_submit_setting".
+    approved_by: Mapped[str] = mapped_column(String(30), nullable=False)
+    review_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    review_url: Mapped[str | None] = mapped_column(Text)
+    # The reviewed form as submitted: [{label, type, value, source}].
+    answers: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    screenshot_path: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class ApplicationStatusEvent(Base):
@@ -771,6 +807,15 @@ class UserPreferences(Base):
     )
     auto_rule_action: Mapped[str] = mapped_column(
         String, default="apply", nullable=False, server_default="apply"
+    )
+    # Opt-in: the extension may submit a form that needs nothing from the
+    # member without the popup click. Enforced by approve-submit, at most
+    # auto_submit_daily_cap per rolling 24 hours.
+    auto_submit_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default="false"
+    )
+    auto_submit_daily_cap: Mapped[int] = mapped_column(
+        Integer, default=10, nullable=False, server_default="10"
     )
     # When auto_apply_enabled last went on; the rule only acts on jobs found after it.
     auto_rule_enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

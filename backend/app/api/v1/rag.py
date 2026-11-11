@@ -247,7 +247,7 @@ async def upload_document(
 
     document_id = uuid.uuid4()
     embedded_at = None
-    if model_settings:
+    if model_settings and raw_text.strip():
         try:
             await asyncio.to_thread(
                 ingest_document,
