@@ -118,6 +118,15 @@ let permit = null;
 
 function planFor(fields) {
   const byLabel = [
+    // Blocks the driver adds with "Add", filled from the member's resume facts.
+    [/^work experience 2: job title/i, "Analyst"],
+    [/^work experience 2: company/i, "Babbage & Co"],
+    [/^work experience 2: from/i, "03/2018"],
+    [/^work experience 2: to/i, "06/2020"],
+    [/^education 1: school/i, "University of London"],
+    [/^education 1: degree/i, "Bachelor's Degree"],
+    [/^education 1: from/i, "2012"],
+    [/^education 1: to/i, "2016"],
     [/first name/i, "Ada"],
     [/last name/i, "Lovelace"],
     [/full name/i, "Ada Lovelace"],
@@ -156,7 +165,10 @@ function planFor(fields) {
     if (f.type === "textarea") entry = { ...entry, value: "I build reliable backends.", source: "generated", confidence: 0.6, requires_review: true };
     plan.push(entry);
   }
-  return { fields: plan, unresolved_required: plan.filter((p) => p.required && (p.value == null || p.value === "")).map((p) => p.field_id) };
+  // Like the server: the facts hold two jobs and one school.
+  const blocks = (re) => new Set(fields.map((f) => re.exec(f.label || "")?.[1]).filter(Boolean)).size;
+  const add_blocks = { work_experience: Math.max(0, 2 - blocks(/^Work Experience (\d+):/)), education: Math.max(0, 1 - blocks(/^Education (\d+):/)) };
+  return { fields: plan, unresolved_required: plan.filter((p) => p.required && (p.value == null || p.value === "")).map((p) => p.field_id), add_blocks };
 }
 
 const api = http.createServer(async (req, res) => {

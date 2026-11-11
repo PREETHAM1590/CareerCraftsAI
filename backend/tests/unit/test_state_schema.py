@@ -86,6 +86,7 @@ def test_tokens_used_is_in_schema():
     New: tokens_used is defined and round-trips correctly.
     """
     from typing import get_type_hints
+
     assert get_type_hints(AgentState)["tokens_used"] is int
     state: AgentState = {
         "user_id": "usr_1",
@@ -115,6 +116,7 @@ def test_messages_accepts_langchain_message_objects():
         "messages": [],
     }
     from typing import Any, get_type_hints
+
     assert get_type_hints(AgentState)["messages"] == list[Any]
     msg = AIMessage(content="Resume tailored successfully.")
     state["messages"].append(msg)
@@ -191,29 +193,34 @@ def test_orchestrator_routes_failed_to_end():
 # ---------------------------------------------------------------------------
 
 
-def test_job_search_module_imports_without_duplicate_name_collision():
-    """Old: _search_greenhouse_board and _search_lever_company were defined
-    twice in job_search.py — the first definition was silently shadowed.
-    New: only one definition of each exists.
-    Import the module and verify the functions are callable.
-    """
-    import importlib
-    import inspect
-
+def test_job_search_module_has_no_legacy_ats_fetchers():
+    """ATS boards are read only through services/job_connectors; the old per-family
+    fetchers (and their hard-coded board lists) must not come back."""
     import app.agents.job_search as jm
 
-    # Reload to force a fresh import (avoids cached module from a previous run)
-    importlib.reload(jm)
+    for name in (
+        "_search_public_ats_jobs",
+        "_search_greenhouse_board",
+        "_search_lever_company",
+        "_search_ashby_jobs",
+        "_search_smartrecruiters_jobs",
+        "_search_workday_company",
+        "_search_bamboohr_company",
+        "GREENHOUSE_BOARDS",
+        "WORKDAY_TENANTS",
+    ):
+        assert not hasattr(jm, name), name
 
-    assert callable(jm._search_greenhouse_board)
-    assert callable(jm._search_lever_company)
 
-    # Confirm each function is defined exactly once in the source
-    src_path = inspect.getfile(jm)
-    with open(src_path, encoding="utf-8") as f:
-        source = f.read()
+def test_legacy_ats_platform_name_expands_to_catalog_families():
+    from app.agents.job_search import _normalize_platforms
 
-    gh_count = source.count("def _search_greenhouse_board(")
-    lv_count = source.count("def _search_lever_company(")
-    assert gh_count == 1, f"_search_greenhouse_board defined {gh_count} times (expected 1)"
-    assert lv_count == 1, f"_search_lever_company defined {lv_count} times (expected 1)"
+    assert _normalize_platforms(["ATS", "linkedin"]) == [
+        "greenhouse",
+        "lever",
+        "ashby",
+        "smartrecruiters",
+        "workday",
+        "bamboohr",
+        "jobspy",
+    ]

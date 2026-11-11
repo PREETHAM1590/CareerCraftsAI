@@ -133,6 +133,51 @@
     if (await waitFor(() => resumeUploaded(root), 15000, 400)) await dom.delay(1500, 2500);
   }
 
+  // The member's resume facts can list more jobs or schools than the resume
+  // parse put on the page; the plan says how many blocks are missing
+  // (add_blocks) and "Add" creates each one, empty, for the next plan to fill.
+  const SECTIONS = {
+    work_experience: { section: aid("workExperienceSection"), block: /^workExperience-\d+$/ },
+    education: { section: aid("educationSection"), block: /^education-\d+$/ },
+  };
+  const MAX_ADDED_BLOCKS = 5;
+
+  function blockCount(section, re) {
+    return Array.from(section.querySelectorAll("[data-automation-id]")).filter((el) => re.test(el.getAttribute("data-automation-id"))).length;
+  }
+
+  function addButton(section, re) {
+    const buttons = Array.from(section.querySelectorAll("button, [role='button']")).filter(
+      (b) =>
+        dom.isVisible(b) &&
+        !b.disabled &&
+        // The section's own button, not one inside a block (e.g. Delete).
+        !Array.from(section.querySelectorAll("[data-automation-id]")).some((blk) => re.test(blk.getAttribute("data-automation-id")) && blk.contains(b)) &&
+        (/^(add|add-button|addAnother)$/i.test(b.getAttribute("data-automation-id") || "") || /^add( another)?$/i.test(dom.textOf(b)))
+    );
+    return buttons[buttons.length - 1] || null;
+  }
+
+  async function expand(ctx, root, plan) {
+    let added = 0;
+    for (const [kind, { section: selector, block }] of Object.entries(SECTIONS)) {
+      const wanted = Math.min(Number((plan.add_blocks || {})[kind]) || 0, MAX_ADDED_BLOCKS);
+      const section = wanted && visibleOne(selector, root);
+      if (!section) continue;
+      for (let i = 0; i < wanted; i++) {
+        const before = blockCount(section, block);
+        const button = addButton(section, block);
+        if (!button) break;
+        await ctx.delay();
+        dom.clickLike(button);
+        if (!(await waitFor(() => blockCount(section, block) > before, 5000, 200))) break;
+        added += 1;
+      }
+    }
+    if (added) await dom.delay(400, 700);
+    return added > 0;
+  }
+
   function unresolve(plan, field, reason) {
     Object.assign(field, { value: null, source: "unresolved", confidence: 0, requires_review: true, missing_reason: reason });
     if (field.required && !plan.unresolved_required.includes(field.field_id)) plan.unresolved_required.push(field.field_id);
@@ -191,6 +236,7 @@
     blocked,
     snapshot,
     prepare,
+    expand,
     restrict,
     // Job page → Apply → "Apply Manually" (never the resume auto-parse
     // start, so answers come from CareerCraft's plan) → account → form.
