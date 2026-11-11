@@ -54,18 +54,18 @@ export const OPEN_TASK_STATUSES = new Set(["claimed", "filling", "needs_input", 
 
 export const LOCAL_KEYS = { PAIRING: "pairing", SETTINGS: "settings", AUTOFILL_PROFILE: "autofillProfile", AUTOFILL_RESUME: "autofillResume" };
 
-// Auto-apply is opt-in: without it every submit needs the popup approval.
-export const DEFAULT_SETTINGS = { autoApply: false };
+// Never auto-submitted, whatever the account setting: LinkedIn's terms forbid
+// automation and Naukri's were not reviewed. The server enforces this too.
+export const NO_AUTO_SUBMIT_HOSTS = ["linkedin.com", "naukri.com"];
 
-export async function getSettings() {
-  const { [LOCAL_KEYS.SETTINGS]: settings } = await chrome.storage.local.get(LOCAL_KEYS.SETTINGS);
-  return { ...DEFAULT_SETTINGS, ...(settings || {}) };
-}
-
-export async function setSettings(patch) {
-  const next = { ...(await getSettings()), ...patch };
-  await chrome.storage.local.set({ [LOCAL_KEYS.SETTINGS]: next });
-  return next;
+export function autoSubmitBlockedHost(urlString) {
+  let host = "";
+  try {
+    host = new URL(urlString).hostname.toLowerCase().replace(/\.$/, "");
+  } catch (e) {
+    return true;
+  }
+  return NO_AUTO_SUBMIT_HOSTS.some((h) => host === h || host.endsWith(`.${h}`));
 }
 export const SESSION_KEYS = { ACTIVE_TASK: "activeTask", HOST_PERMISSION_NEEDED: "hostPermissionNeeded" };
 

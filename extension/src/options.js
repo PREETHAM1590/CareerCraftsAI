@@ -1,6 +1,6 @@
-// CareerCraft AI — options page: the local autofill profile, the resume used
-// by "Autofill this page", and the auto-apply opt-in.
-import { LOCAL_KEYS, getSettings, setSettings } from "./common.js";
+// CareerCraft AI — options page: the local autofill profile and the resume
+// used by "Autofill this page".
+import { LOCAL_KEYS } from "./common.js";
 
 const $ = (id) => document.getElementById(id);
 const form = $("profile");
@@ -25,7 +25,6 @@ async function load() {
   }
   const resume = stored[LOCAL_KEYS.AUTOFILL_RESUME];
   $("resume-name").textContent = resume ? `Saved: ${resume.filename}` : "No resume saved.";
-  $("auto-apply").checked = (await getSettings()).autoApply;
 }
 
 form.addEventListener("submit", async (event) => {
@@ -47,7 +46,6 @@ form.addEventListener("submit", async (event) => {
     };
   }
   await chrome.storage.local.set(update);
-  await setSettings({ autoApply: $("auto-apply").checked });
   $("saved").textContent = "Saved.";
   load();
 });
