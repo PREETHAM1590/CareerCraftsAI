@@ -51,6 +51,8 @@ FAMILIES = {
     "gem",
     "reed",
     "usajobs",
+    "oracle",
+    "icims",
 }
 
 
@@ -93,7 +95,8 @@ def posted(value):
         if isinstance(value, (float, int)):
             stamp = value / 1000 if value > 10**11 else value
             return datetime.fromtimestamp(stamp, UTC)
-        date = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        # Recruitee sends "2026-11-10 07:31:31 UTC".
+        date = datetime.fromisoformat(re.sub(r"\s*UTC$", "", str(value)).replace("Z", "+00:00"))
         return date.replace(tzinfo=UTC) if date.tzinfo is None else date.astimezone(UTC)
     except (ValueError, OverflowError, OSError):
         return None
@@ -127,7 +130,9 @@ def normalize(raw: dict, source: Source) -> dict | None:
         "remote": (
             "remote"
             if raw.get("remote") or "remote" in location.lower()
-            else "hybrid" if "hybrid" in location.lower() else "unknown"
+            else "hybrid"
+            if "hybrid" in location.lower()
+            else "unknown"
         ),
         "salary_text": plain(raw.get("salary_text"))[:300],
         "url": url,
@@ -165,6 +170,9 @@ ATS_HOSTS = (
     "trakstar.com",
     "hibob.com",
     "gem.com",
+    "oraclecloud.com",
+    "taleo.net",
+    "applytojob.com",
 )
 _COMPANY_SUFFIX = re.compile(
     r"\b(inc|llc|ltd|limited|pvt|private|corp|corporation|co|gmbh|technologies|technology|"
@@ -606,6 +614,12 @@ async def _fetch_workday(source: Source, query: str, cursor: str | None) -> Page
     ):
         raise ValueError("Invalid Workday source")
     offset = int(cursor or "0")
+    # myworkdaysite.com boards are served under /recruiting/{tenant}/{site}.
+    base = (
+        f"https://{host}/en-US/recruiting/{tenant}/{site}"
+        if host.endswith("myworkdaysite.com")
+        else f"https://{host}/en-US/{site}"
+    )
     if offset < 0 or offset >= _WORKDAY_PAGE * _WORKDAY_MAX_PAGES:
         raise ValueError("Pagination limit exceeded")
     response = await public_get(
@@ -625,7 +639,7 @@ async def _fetch_workday(source: Source, query: str, cursor: str | None) -> Page
             "id": j.get("externalPath"),
             "title": j.get("title"),
             "company": tenant,
-            "url": f"https://{host}/en-US/{site}{j.get('externalPath')}",
+            "url": f"{base}{j.get('externalPath')}",
             "location": j.get("locationsText"),
             "posted_at": workday_posted(j.get("postedOn")),
         }
@@ -937,11 +951,166 @@ async def _fetch_ats_board(source: Source, tenant: str, page: int) -> Page:
     return Page([job for raw in rows[:1000] if (job := normalize(raw, source))], next_cursor)
 
 
+_ORACLE_HOST = re.compile(r"[a-z0-9-]+\.fa(?:\.[a-z0-9-]+){0,2}\.oraclecloud\.com")
+_ORACLE_PAGE = 25
+_ORACLE_MAX_PAGES = 10
+
+
+async def _fetch_oracle(source: Source, query: str, cursor: str | None) -> Page:
+    """One page of an Oracle Recruiting Cloud (Taleo's successor) career site.
+    Tenant is `host|site`, e.g. `jpmc.fa.oraclecloud.com|CX_1001`; cursor is the offset."""
+    try:
+        host, site = source.tenant.split("|")
+    except ValueError:
+        raise ValueError("Oracle tenant must be host|site") from None
+    if not (_ORACLE_HOST.fullmatch(host) and re.fullmatch(r"[A-Za-z0-9_-]{1,100}", site)):
+        raise ValueError("Invalid Oracle source")
+    offset = int(cursor or "0")
+    if offset < 0 or offset >= _ORACLE_PAGE * _ORACLE_MAX_PAGES:
+        raise ValueError("Pagination limit exceeded")
+    # The finder is a comma/semicolon-delimited string, so those cannot appear in a keyword.
+    keyword = re.sub(r"[^\w +#.-]", " ", query or "").strip()
+    finder = (
+        f"findReqs;siteNumber={site},limit={_ORACLE_PAGE},offset={offset},"
+        f"sortBy=POSTING_DATES_DESC" + (f",keyword={keyword}" if keyword else "")
+    )
+    response = await public_get(
+        f"https://{host}/hcmRestApi/resources/latest/recruitingCEJobRequisitions?"
+        + urlencode(
+            {"onlyData": "true", "expand": "requisitionList.secondaryLocations", "finder": finder},
+            safe=";,=",
+        )
+    )
+    response.raise_for_status()
+    item = next(iter(response.json().get("items") or []), {})
+    reqs = item.get("requisitionList") or []
+    rows = [
+        {
+            "id": r.get("Id"),
+            "title": r.get("Title"),
+            "company": host.split(".")[0],
+            "url": f"https://{host}/hcmUI/CandidateExperience/en/sites/{site}/job/{r.get('Id')}",
+            "location": r.get("PrimaryLocation"),
+            "remote": "remote" in str(r.get("WorkplaceType") or "").lower(),
+            "description": r.get("ShortDescriptionStr"),
+            "posted_at": r.get("PostedDate"),
+        }
+        for r in reqs
+        if r.get("Id")
+    ]
+    nxt = offset + _ORACLE_PAGE
+    total = int(item.get("TotalJobsCount") or 0)
+    more = len(reqs) == _ORACLE_PAGE and nxt < total and nxt < _ORACLE_PAGE * _ORACLE_MAX_PAGES
+    return Page(
+        [job for raw in rows if (job := normalize(raw, source))], str(nxt) if more else None
+    )
+
+
+async def _fetch_workable_public(source: Source, query: str, cursor: str | None) -> Page:
+    """Workable's keyless career-page API (what apply.workable.com itself calls).
+    The listing carries no description; the cursor is Workable's opaque `nextPage` token."""
+    tenant = source.tenant
+    if cursor and not re.fullmatch(r"[A-Za-z0-9_=+/.-]{1,2000}", cursor):
+        raise ValueError("Invalid pagination cursor")
+    body = {"query": query or "", "location": [], "department": [], "worktype": [], "remote": []}
+    if cursor:
+        body["token"] = cursor
+    response = await public_get(
+        f"https://apply.workable.com/api/v3/accounts/{tenant}/jobs", json_body=body
+    )
+    response.raise_for_status()
+    data = response.json()
+    rows = [
+        {
+            "id": j.get("shortcode"),
+            "title": j.get("title"),
+            "company": tenant,
+            "url": f"https://apply.workable.com/{tenant}/j/{j.get('shortcode')}/",
+            "location": _join(
+                (j.get("location") or {}).get("city"),
+                (j.get("location") or {}).get("region"),
+                (j.get("location") or {}).get("country"),
+            ),
+            "remote": bool(j.get("remote")) or j.get("workplace") == "remote",
+            "posted_at": j.get("published"),
+        }
+        for j in data.get("results") or []
+        if j.get("shortcode")
+    ]
+    return Page(
+        [job for raw in rows if (job := normalize(raw, source))], data.get("nextPage") or None
+    )
+
+
+_ICIMS_CARD = re.compile(r'<li class="iCIMS_JobCardItem">(.*?)</li>', re.S)
+_ICIMS_PAGES = re.compile(r"Page (\d+) of (\d+)")
+
+
+def parse_icims(page_html: str, tenant: str) -> list[dict]:
+    """Rows from an iCIMS `/jobs/search?ss=1&in_iframe=1` page (HTML only; no JSON API)."""
+    rows = []
+    for card in _ICIMS_CARD.findall(page_html):
+        link = re.search(r'href="(https://[^"]*?/jobs/(\d+)/[^"?]*)', card)
+        title = re.search(r"<h3[^>]*>(.*?)</h3>", card, re.S)
+        if not link or not title:
+            continue
+        place = re.search(
+            r"Job Location</span>.*?<dd[^>]*>\s*<span[^>]*>\s*(.*?)\s*</span>", card, re.S
+        )
+        when = re.search(r'<span title="(\d\d/\d\d/\d{4} \d\d?:\d\d [AP]M)"', card)
+        desc = re.search(
+            r'<div class="col-xs-12 description">(.*?)<div class="col-xs-12 additional', card, re.S
+        )
+        salary = re.search(
+            r"Salary Range</dt>.*?<dd[^>]*>\s*<span[^>]*>\s*(.*?)\s*</span>", card, re.S
+        )
+        try:
+            when_iso = (
+                datetime.strptime(when.group(1), "%m/%d/%Y %I:%M %p")
+                .replace(tzinfo=UTC)
+                .isoformat()
+                if when
+                else None
+            )
+        except ValueError:
+            when_iso = None
+        rows.append(
+            {
+                "id": link.group(2),
+                "title": title.group(1).strip(),
+                "company": tenant,
+                "url": link.group(1),
+                "location": place.group(1) if place else "",
+                "description": desc.group(1) if desc else "",
+                "salary_text": salary.group(1) if salary else "",
+                "posted_at": when_iso,
+            }
+        )
+    return rows
+
+
+async def _fetch_icims(source: Source, tenant: str, query: str, page: int) -> Page:
+    response = await public_get(
+        f"https://{tenant}.icims.com/jobs/search?"
+        + urlencode({"ss": 1, "searchKeyword": query or "", "pr": page - 1, "in_iframe": 1}),
+        max_bytes=2_000_000,
+    )
+    response.raise_for_status()
+    rows = parse_icims(response.text, tenant)
+    counter = _ICIMS_PAGES.search(response.text)
+    more = bool(rows) and bool(counter) and int(counter.group(1)) < int(counter.group(2))
+    return Page(
+        [job for raw in rows if (job := normalize(raw, source))], str(page + 1) if more else None
+    )
+
+
 async def fetch_page(source: Source, query: str = "", cursor: str | None = None) -> Page:
     if source.family not in FAMILIES or not source.permitted:
         raise ValueError("Source is not permitted")
     if source.family == "workday":
         return await _fetch_workday(source, query, cursor)
+    if source.family == "oracle":
+        return await _fetch_oracle(source, query, cursor)
     tenant = source.tenant
     lever_host = "api.lever.co"
     if source.family == "lever" and tenant.startswith("eu:"):
@@ -950,6 +1119,8 @@ async def fetch_page(source: Source, query: str = "", cursor: str | None = None)
     if tenant and not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", tenant):
         raise ValueError("Invalid source tenant")
     family = source.family
+    if family == "workable" and tenant and not settings.WORKABLE_API_TOKENS.get(tenant):
+        return await _fetch_workable_public(source, query, cursor)
     page = int(cursor or "1")
     if page < 1 or page > 10:
         raise ValueError("Pagination limit exceeded")
@@ -958,6 +1129,10 @@ async def fetch_page(source: Source, query: str = "", cursor: str | None = None)
         if not tenant:
             raise ValueError("Source needs a tenant")
         return await _fetch_ats_board(source, tenant, page)
+    if family == "icims":
+        if not tenant:
+            raise ValueError("Source needs a tenant")
+        return await _fetch_icims(source, tenant, query, page)
     if family == "hn_hiring":
         rows, next_cursor = await _fetch_hn_hiring(page)
         return Page([job for raw in rows if (job := normalize(raw, source))], next_cursor)
@@ -969,19 +1144,19 @@ async def fetch_page(source: Source, query: str = "", cursor: str | None = None)
         return Page([job for raw in rows if (job := normalize(raw, source))], next_cursor)
     urls = {
         "greenhouse": f"https://boards-api.greenhouse.io/v1/boards/{tenant}/jobs?content=true",
-        "lever": f"https://{lever_host}/v0/postings/{tenant}?mode=json&limit=100&skip={(page-1)*100}",
+        "lever": f"https://{lever_host}/v0/postings/{tenant}?mode=json&limit=100&skip={(page - 1) * 100}",
         "ashby": f"https://api.ashbyhq.com/posting-api/job-board/{tenant}?includeCompensation=true",
         "workable": f"https://{tenant}.workable.com/spi/v3/jobs?state=published",
-        "smartrecruiters": f"https://api.smartrecruiters.com/v1/companies/{tenant}/postings?limit=100&offset={(page-1)*100}",
+        "smartrecruiters": f"https://api.smartrecruiters.com/v1/companies/{tenant}/postings?limit=100&offset={(page - 1) * 100}",
         "recruitee": f"https://{tenant}.recruitee.com/api/offers/",
         "remotive": "https://remotive.com/api/remote-jobs",
         "jobicy": "https://jobicy.com/api/v2/remote-jobs?"
         + urlencode({"count": 50, **({"tag": query} if query else {})}),
         "remoteok": "https://remoteok.com/api",
         "arbeitnow": f"https://www.arbeitnow.com/api/job-board-api?page={page}",
-        "himalayas": f"https://himalayas.app/jobs/api?limit=100&offset={(page-1)*100}",
+        "himalayas": f"https://himalayas.app/jobs/api?limit=100&offset={(page - 1) * 100}",
         "workingnomads": "https://www.workingnomads.com/api/exposed_jobs/",
-        "themuse": f"https://www.themuse.com/api/public/jobs?page={page-1}",
+        "themuse": f"https://www.themuse.com/api/public/jobs?page={page - 1}",
     }
     if family == "workable":
         token = settings.WORKABLE_API_TOKENS.get(tenant)
@@ -1141,7 +1316,11 @@ async def fetch_page(source: Source, query: str = "", cursor: str | None = None)
                 "title": j.get("name"),
                 "company": tenant,
                 "url": f"https://jobs.smartrecruiters.com/{tenant}/{j.get('id')}",
-                "location": (j.get("location") or {}).get("city"),
+                "location": _join(
+                    (j.get("location") or {}).get("city"),
+                    str((j.get("location") or {}).get("country") or "").upper(),
+                ),
+                "remote": bool((j.get("location") or {}).get("remote")),
                 "posted_at": j.get("releasedDate"),
                 "description": j.get("jobAd", {}).get("sections", {}),
             }
@@ -1156,13 +1335,16 @@ async def fetch_page(source: Source, query: str = "", cursor: str | None = None)
                 "title": j.get("title"),
                 "company": tenant,
                 "url": j.get("url") or j.get("careers_url"),
-                "location": (
+                # Recruitee reports "Remote job" in `location`; the real place is city/country.
+                "location": _join(j.get("city"), j.get("country"))
+                or (
                     j.get("location")
                     if isinstance(j.get("location"), str)
                     else str(j.get("location") or "")
                 ),
+                "remote": bool(j.get("remote")),
                 "description": j.get("description"),
-                "posted_at": j.get("created_at") or j.get("published_at"),
+                "posted_at": j.get("published_at") or j.get("created_at"),
             }
             for j in items
         ]
@@ -1367,3 +1549,118 @@ async def fetch_page(source: Source, query: str = "", cursor: str | None = None)
     elif family == "jsonld":
         rows = jsonld_jobs(response.text, url)
     return Page([job for raw in rows[:1000] if (job := normalize(raw, source))], next_cursor)
+
+
+# --- Resolve a pasted careers URL into a connector + board identifier -------
+
+_SLUG = r"[A-Za-z0-9][A-Za-z0-9_-]{0,99}"
+_LOCALE = re.compile(r"[a-z]{2}(?:-[A-Za-z]{2})?")
+_NOT_A_BOARD = {"www", "api", "app", "careers", "jobs", "embed", "static", "cdn", "assets", "help"}
+# (family, host regex, path regex); the tenant is group 1 of the path regex, else of the host.
+_PORTALS = (
+    ("greenhouse", r"(?:job-)?boards(?:\.eu)?\.greenhouse\.io", rf"/({_SLUG})"),
+    ("greenhouse", r"boards-api\.greenhouse\.io", rf"/v1/boards/({_SLUG})"),
+    ("ashby", r"jobs\.ashbyhq\.com", rf"/({_SLUG})"),
+    ("lever", r"jobs\.lever\.co", rf"/({_SLUG})"),
+    ("smartrecruiters", r"(?:jobs|careers)\.smartrecruiters\.com", rf"/({_SLUG})"),
+    ("smartrecruiters", r"api\.smartrecruiters\.com", rf"/v1/companies/({_SLUG})"),
+    ("workable", r"apply\.workable\.com", rf"/(?!api/)({_SLUG})"),
+    ("workable", rf"({_SLUG})\.workable\.com", r""),
+    ("recruitee", rf"({_SLUG})\.recruitee\.com", r""),
+    ("personio", rf"({_SLUG})\.jobs\.personio\.(?:com|de)", r""),
+    ("bamboohr", rf"({_SLUG})\.bamboohr\.com", r""),
+    ("teamtailor", rf"({_SLUG})\.teamtailor\.com", r""),
+    ("breezy", rf"({_SLUG})\.breezy\.hr", r""),
+    ("pinpoint", rf"({_SLUG})\.pinpointhq\.com", r""),
+    ("hibob", rf"({_SLUG})\.careers\.hibob\.com", r""),
+    ("trakstar", rf"({_SLUG})\.hire\.trakstar\.com", r""),
+    ("jobscore", r"careers\.jobscore\.com", rf"/(?:careers|jobs)/({_SLUG})"),
+    ("gem", r"jobs\.gem\.com", rf"/({_SLUG})"),
+    ("rippling", r"ats\.rippling\.com", rf"/({_SLUG})"),
+    ("icims", rf"({_SLUG})\.icims\.com", r""),
+)
+
+
+def resolve_careers_url(url: str) -> Source | None:
+    """Map a company careers/job URL on a known ATS to the connector that reads it.
+
+    Returns a Source (id `family:tenant`) or None when the host is not a supported
+    portal or the URL lacks the board identifier (e.g. a bare Workday host)."""
+    try:
+        parts = urlsplit(url if "//" in url else "//" + url.strip(), scheme="https")
+    except ValueError:
+        return None
+    host = (parts.hostname or "").lower()
+    segments = [s for s in parts.path.split("/") if s]
+    if not host or parts.scheme not in ("http", "https"):
+        return None
+    if host == "jobs.eu.lever.co" and segments:
+        return Source(
+            id=f"lever:eu-{segments[0]}".lower(), family="lever", tenant=f"eu:{segments[0]}"
+        )
+    if _WORKDAY_HOST.fullmatch(host):
+        if segments and _LOCALE.fullmatch(segments[0]):
+            segments = segments[1:]
+        if host.endswith("myworkdaysite.com"):
+            if len(segments) < 3 or segments[0] != "recruiting":
+                return None
+            tenant, site = segments[1], segments[2]
+        else:
+            if not segments or segments[0] in {"wday", "job"}:
+                return None
+            tenant, site = host.split(".")[0], segments[0]
+        return Source(
+            id=f"workday:{tenant}-{site}".lower(),
+            family="workday",
+            tenant=f"{host}|{tenant}|{site}",
+        )
+    if _ORACLE_HOST.fullmatch(host):
+        if "sites" not in segments or segments.index("sites") + 1 >= len(segments):
+            return None
+        site = segments[segments.index("sites") + 1]
+        return Source(
+            id=f"oracle:{host.split('.')[0]}-{site}".lower(),
+            family="oracle",
+            tenant=f"{host}|{site}",
+        )
+    for family, host_re, path_re in _PORTALS:
+        match = re.fullmatch(host_re, host)
+        if not match:
+            continue
+        if path_re:
+            found = re.match(path_re, "/" + "/".join(segments))
+            tenant = found.group(1) if found else None
+            if tenant == "embed":
+                tenant = dict(parse_qsl(parts.query)).get("for")
+        else:
+            tenant = match.group(1)
+        if not tenant or tenant.lower() in _NOT_A_BOARD or not re.fullmatch(_SLUG, tenant):
+            continue
+        return Source(id=f"{family}:{tenant}".lower(), family=family, tenant=tenant)
+    return None
+
+
+_SEARCH_SERVER_SIDE = {"workday", "oracle", "icims", "workable"}
+_QUERY_STOP = {"and", "the", "for", "with", "job", "jobs", "role"}
+
+
+async def search_board(source: Source, query: str = "", max_pages: int = 5) -> list[dict]:
+    """Live-read one company portal. Workday, Oracle, iCIMS and Workable filter by
+    keyword on the server; other boards return everything, so every query term must
+    appear in the title, location or description. Errors propagate to the caller."""
+    server_side = source.family in _SEARCH_SERVER_SIDE
+    jobs, cursor = [], None
+    for _ in range(max_pages):
+        page = await fetch_page(source, query if server_side else "", cursor)
+        jobs.extend(page.jobs)
+        cursor = page.next_cursor
+        if not cursor:
+            break
+    terms = [t for t in re.findall(r"[a-z0-9+#.]+", query.lower()) if t not in _QUERY_STOP]
+    if terms and not server_side:
+        jobs = [
+            j
+            for j in jobs
+            if all(t in f"{j['title']} {j['location']} {j['description']}".lower() for t in terms)
+        ]
+    return dedupe(jobs, 3650)
