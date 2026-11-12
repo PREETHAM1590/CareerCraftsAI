@@ -100,6 +100,10 @@ def pytest_collection_modifyitems(config, items):
                 # without live credentials or a running backend/browser.
                 if "test_harness_contract" in str(item.fspath):
                     continue
+                # test_hermetic_* run the real routes against stubs and a local
+                # throwaway PostgreSQL: no credentials, no running stack.
+                if "test_hermetic_" in str(item.fspath):
+                    continue
                 if "e2e" in str(item.fspath) or any(
                     marker.name in ("e2e", "browser", "integration")
                     for marker in item.own_markers

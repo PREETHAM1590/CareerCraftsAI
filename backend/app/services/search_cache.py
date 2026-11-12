@@ -102,8 +102,16 @@ async def _count(kind: str, outcome: str) -> None:
     if r is None:
         return
     key = f"{PREFIX}:stats:{datetime.now(UTC):%Y%m%d}:{kind}:{outcome}"
-    await _op(r.incr(key))
-    await _op(r.expire(key, _STATS_TTL))
+
+    async def bump() -> None:
+        # One round trip, so a slow Redis costs a hit one timeout instead of two, and
+        # a counter can never exist without its expiry.
+        pipe = r.pipeline(transaction=True)
+        pipe.incr(key)
+        pipe.expire(key, _STATS_TTL)
+        await pipe.execute()
+
+    await _op(bump())
 
 
 async def get_or_compute(
