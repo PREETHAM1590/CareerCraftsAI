@@ -175,7 +175,7 @@ and 112 browser e2e checks. Frontend: typecheck clean, 36 tests.
   (`backend/tests/evals`, docs/RAG_EVALS.md) wired into CI. Stub-embedding
   scores validate plumbing only; real-embedding scores are unmeasured.
 
-### Still open
+### Still open at the first checkpoint (superseded by section 6)
 - Nothing here has touched a real Workday, Greenhouse, Lever or Ashby form;
   test by hand on three Workday tenants before trusting auto-submit.
 - Apply both migrations (`20261111120000_auto_submit_audit_and_token_expiry`,
@@ -199,3 +199,74 @@ UPDATE public.users SET linkedin_password_enc = NULL, linkedin_email_enc = NULL
 -- after removing both columns from backend/app/models/db.py and deploying:
 ALTER TABLE public.users DROP COLUMN linkedin_password_enc, DROP COLUMN linkedin_email_enc;
 ```
+
+## 6. Continuation: privacy, India eligibility and release verification
+
+This section supersedes the earlier "Still open" implementation list where
+code has since landed. Do not interpret historical test counts as current
+release evidence; use the pull request's Verification section for the final run.
+
+### Implemented since the first checkpoint
+
+- Request-local PII placeholders at the model gateway, local rehydration,
+  privacy preferences, deterministic identity-field answers, contact-stripped
+  embeddings and process-wide log scrubbing. This is pseudonymisation, not a
+  guarantee of anonymity: unknown free-text PII, member names in embeddings,
+  old vectors and explicit privacy opt-outs remain important limitations.
+- India-first job classification, city aliases, eligible-remote filtering,
+  more live-verified Indian employer boards and public connectors. Persisted
+  preference and application-candidate eligibility checks are part of the
+  final integration pass. India eligibility is not proof of Indian ownership
+  or headquarters, and remote eligibility must still be checked on the posting.
+- Additional verified ATS families: Jobvite, JazzHR, Dover, Paylocity,
+  SuccessFactors (verified hosts only), Taleo, Keka, Kula, Freshteam and Zoho
+  Recruit. No promise of "every provider": login-only or anti-bot-protected
+  services are explicitly unavailable rather than bypassed.
+- Resume fact checks, full-source handling, PDF/DOCX parse-back, A4 defaults,
+  stronger repair/fallback handling, and a hermetic FastAPI route journey.
+- Real Postgres migration/concurrency/deletion tests, explicit pairing-change
+  confirmation, job-host permission gates and production packaging without
+  localhost injection.
+- Model-cache key/privacy fixes and cache corruption handling. Production
+  dependency audits retain a documented upstream Zod 3 exception.
+
+### Release limitations
+
+- Managed frontend Preview was attempted and returned HTTP 500: no Clerk
+  publishable key is configured. The server was stopped through lifecycle
+  controls; signed-in settings, jobs and application-drawer visual checks
+  remain pending. No authentication bypass was introduced.
+- No live employer application was submitted. Local browser fixtures are
+  not proof of compatibility with every Workday tenant or job portal.
+- Real LLM placeholder fidelity and semantic retrieval quality are unmeasured
+  without configured providers; deterministic evals validate plumbing only.
+- Complex-script PDF rendering remains limited; parse-back warnings must be
+  shown rather than silently claiming all characters survived.
+- Production RLS/runtime-role isolation, sandbox Docker-socket privileges,
+  backups/restore, and deployment rollback require a separate operational
+  rehearsal. They are not resolved by passing application unit tests.
+
+See `docs/reports/2026-11-12-architecture-security-review.md` for the architecture
+assessment, `docs/PRIVACY_PII.md` for research and residual exposure, and
+`docs/TESTING.md` for the scope of each test suite.
+
+
+### Final local verification (2026-11-12)
+
+- Backend unit, security, offline eval and E2E collection/run: 2,355 passed,
+  126 environment-gated tests skipped; no failures. The explicit hermetic
+  application journey and harness run passed all 4 tests without skips.
+- Selected real-Postgres integration suites: 80 passed without skips,
+  covering ownership, workflow concurrency, erasure, document lifecycle,
+  auto-submit controls and migration replay.
+- All migrations, including `20261112100000_india_focus_preference`, applied
+  to a disposable database. The second migration run applied zero changes;
+  the India preference column was verified as `NOT NULL DEFAULT true`.
+  Production migration application is still required before deployment.
+- Changed Python files pass Ruff and Black; Bandit reports no medium/high
+  findings and the backend dependency audit reports no known vulnerabilities.
+- Frontend lint, typecheck, 37 tests and production build pass. Its dependency
+  gate passes with the explicitly accepted nested Zod 3 advisory.
+- Supervisor tests: 7 passed. Production-validation failure checks pass.
+- These checks do not resolve the signed-in UI, real-model, real-employer,
+  or operational release limitations above.

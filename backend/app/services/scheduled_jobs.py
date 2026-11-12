@@ -548,9 +548,10 @@ async def daily_search(payload: StatusCheckTrigger):
                 from app.services.job_search_service import search_all_platforms
 
                 query = {"titles": [search_term], "locations": locations, "max_results": 25}
-                # Honoured once user_preferences gains an india_focus column.
-                if isinstance(getattr(prefs_row, "india_focus", None), bool):
-                    query["india_focus"] = prefs_row.india_focus
+                # As in interactive search: off when the member turned it off,
+                # otherwise India-first unless every saved place is outside India.
+                if getattr(prefs_row, "india_focus", None) is False:
+                    query["india_focus"] = False
                 found, notes = await search_all_platforms(query)
                 for note in notes:
                     logger.info("Daily search for %s: %s", user_id, note)

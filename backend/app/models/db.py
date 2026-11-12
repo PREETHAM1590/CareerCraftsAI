@@ -825,6 +825,10 @@ class UserPreferences(Base):
     llm_hide_name: Mapped[bool] = mapped_column(
         Boolean, default=True, nullable=False, server_default="true"
     )
+    # India-first search and auto-apply (services/india_focus.py). On by default.
+    india_focus: Mapped[bool] = mapped_column(
+        Boolean, default=True, nullable=False, server_default="true"
+    )
     # When auto_apply_enabled last went on; the rule only acts on jobs found after it.
     auto_rule_enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Resume preferences, asked once on first auto-apply (resume_prefs_set_at

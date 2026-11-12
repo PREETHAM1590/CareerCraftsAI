@@ -376,9 +376,27 @@ def ingest_document(
 
 
 class RetrievalResult(list):
-    """Chunk list whose `unavailable` flag separates a failed search from no matches."""
+    """Chunk list whose `unavailable` flag separates a failed search from no matches.
+
+    Slicing, `.copy()`, `+` and copy/deepcopy keep the flag; `list(result)`
+    does not, so callers check `retrieval_unavailable` on what retrieve returned."""
 
     unavailable: bool = False
+
+    def _like(self, items) -> "RetrievalResult":
+        out = RetrievalResult(items)
+        out.unavailable = self.unavailable
+        return out
+
+    def __getitem__(self, index):
+        value = super().__getitem__(index)
+        return self._like(value) if isinstance(index, slice) else value
+
+    def copy(self) -> "RetrievalResult":
+        return self._like(self)
+
+    def __add__(self, other) -> "RetrievalResult":
+        return self._like([*self, *other])
 
 
 def retrieval_unavailable(chunks) -> bool:

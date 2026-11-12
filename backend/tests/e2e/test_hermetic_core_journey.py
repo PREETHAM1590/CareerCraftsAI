@@ -467,6 +467,6 @@ async def test_invented_facts_reach_the_user_as_warnings_not_silently(world):
     w.llm.fabricate = True
     tailored = await _tailor(w)
     joined = " ".join(tailored["warnings"])
-    assert "Not found in your documents" in joined
+    assert "Removed because your documents do not support it" in joined
     for invented in ("Terraform", "Google"):
         assert invented in joined
