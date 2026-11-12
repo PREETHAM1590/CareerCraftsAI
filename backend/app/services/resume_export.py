@@ -44,7 +44,12 @@ class ResumeExport:
 
 
 def fit_resume(
-    markdown: str, full_name: str = "", template: str = "modern", page_target: int = 2
+    markdown: str,
+    full_name: str = "",
+    template: str = "modern",
+    page_target: int = 2,
+    *,
+    strict: bool = True,
 ) -> ResumeExport:
     if page_target not in (1, 2):
         raise ValueError("page_target must be 1 or 2")
@@ -61,7 +66,8 @@ def fit_resume(
     candidates.extend(replace(candidates[-1], body_size=size) for size in (10.8, 10.6))
     count = 0
     for theme in candidates:
-        pdf = generate_resume_pdf(text, full_name, template, theme_override=theme, strict=True)
+        # strict=False only measures the page count: the DOCX keeps every character.
+        pdf = generate_resume_pdf(text, full_name, template, theme_override=theme, strict=strict)
         with fitz.open(stream=pdf, filetype="pdf") as parsed:
             count = len(parsed)
         if count <= page_target:
