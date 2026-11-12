@@ -41,6 +41,9 @@ PATTERNS = [
     ("breezy", rf"{S}\.breezy\.hr"),
     ("smartrecruiters", rf"jobs\.smartrecruiters\.com/{S}"),
     ("icims", rf"{S}\.icims\.com"),
+    ("jobvite", rf"jobs\.jobvite\.com/{S}"),
+    ("jazzhr", rf"{S}\.applytojob\.com"),
+    ("dover", rf"app\.dover\.com/(?:jobs|apply)/{S}"),
 ]
 LEVER_EU = re.compile(rf"jobs\.eu\.lever\.co/{S}", re.I)
 WORKDAY = re.compile(
