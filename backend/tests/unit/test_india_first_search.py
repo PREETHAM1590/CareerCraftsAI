@@ -44,6 +44,12 @@ def _job(i, location, **extra):
         ("Remote", ["Remote"], None, True),
         ("Hyderabad", ["India"], None, True),
         ("London, UK", ["India"], None, False),
+        # LinkedIn's state-only form: "TS, IN" is Telangana, not Indiana.
+        ("TS, IN", ["Hyderabad"], None, True),
+        ("KA, IN", ["Bangalore"], None, True),
+        ("MH, IN", ["Pune"], None, True),
+        ("KA, IN", ["Hyderabad"], None, False),
+        ("Karnataka, India", ["Bengaluru"], None, True),
     ],
 )
 def test_matches_query_india_rules(location, query_places, india_focus, expected):
@@ -51,6 +57,23 @@ def test_matches_query_india_rules(location, query_places, india_focus, expected
     if india_focus is not None:
         query["india_focus"] = india_focus
     assert catalog.matches_query(_job(1, location), query) is expected
+
+
+@pytest.mark.parametrize(
+    "role,title",
+    [
+        ("frontend developer", "Front-End Developer"),
+        ("frontend developer", "Front End Developer (React)"),
+        ("front end developer", "Senior Frontend Developer"),
+        ("back-end engineer", "Backend Engineer"),
+        ("full stack developer", "Full-Stack Developer"),
+        ("frontend developer", "Frontend Engineer"),
+        ("software engineer", "Software Developer II"),
+    ],
+)
+def test_compound_title_words_match_every_spelling(role, title):
+    job = {**_job(1, "Pune"), "title": title}
+    assert catalog.matches_query(job, {"titles": [role], "locations": ["Pune"]})
 
 
 def test_matches_query_india_flag_off_checks_everything_else():

@@ -79,6 +79,46 @@ _STATES = (
     "uttarakhand",
     "himachal pradesh",
 )
+# LinkedIn often gives only "<state code>, IN" (e.g. "TS, IN"); code -> main hiring cities.
+STATE_CODES: dict[str, tuple[str, ...]] = {
+    "KA": ("bengaluru", "mysuru", "mangaluru"),
+    "TS": ("hyderabad",),
+    "TG": ("hyderabad",),
+    "TN": ("chennai", "coimbatore", "madurai", "tiruchirappalli"),
+    "MH": ("mumbai", "pune", "nagpur", "nashik"),
+    "DL": ("delhi",),
+    "HR": ("gurugram", "faridabad"),
+    "UP": ("noida", "ghaziabad", "lucknow", "kanpur"),
+    "WB": ("kolkata",),
+    "GJ": ("ahmedabad", "gandhinagar", "vadodara", "surat"),
+    "RJ": ("jaipur",),
+    "KL": ("kochi", "thiruvananthapuram"),
+    "AP": ("visakhapatnam", "vijayawada"),
+    "MP": ("indore", "bhopal"),
+    "OR": ("bhubaneswar",),
+    "OD": ("bhubaneswar",),
+    "PB": ("mohali", "ludhiana", "amritsar"),
+    "CH": ("chandigarh",),
+    "GA": ("goa",),
+}
+_STATE_CODE_IN = re.compile(r"\b(" + "|".join(STATE_CODES) + r")\s*,\s*IN(?:DIA)?\b")
+_STATE_NAME_CODES = {
+    "karnataka": "KA",
+    "telangana": "TS",
+    "tamil nadu": "TN",
+    "tamilnadu": "TN",
+    "maharashtra": "MH",
+    "haryana": "HR",
+    "uttar pradesh": "UP",
+    "west bengal": "WB",
+    "gujarat": "GJ",
+    "rajasthan": "RJ",
+    "kerala": "KL",
+    "andhra pradesh": "AP",
+    "madhya pradesh": "MP",
+    "odisha": "OD",
+    "orissa": "OD",
+}
 # Indian place names that also exist in Pakistan: India only without a foreign country.
 _AMBIGUOUS = {"hyderabad", "punjab"}
 _INDIA_WORDS = ("india", "bharat", "pan india", "pan-india")
@@ -257,6 +297,15 @@ def cities_in(text: str) -> list[str]:
     return [city for _, city in sorted(found)]
 
 
+def state_cities(text: str) -> set[str]:
+    """Cities of the Indian states named in a location ("TS, IN", "Karnataka, India"),
+    for postings that name a state but no city."""
+    codes = {m.group(1) for m in _STATE_CODE_IN.finditer(str(text or ""))}
+    hay = _norm(text)
+    codes |= {code for name, code in _STATE_NAME_CODES.items() if f" {name} " in hay}
+    return {city for code in codes for city in STATE_CODES[code]}
+
+
 def canonical_city(text: str) -> str | None:
     found = cities_in(text)
     return found[0] if found else None
@@ -272,7 +321,12 @@ def search_cities(place: str) -> set[str]:
 
 def is_indian_place(text: str) -> bool:
     hay = _norm(text)
-    return bool(cities_in(text) or _has(hay, _INDIA_WORDS) or _has(hay, _STATES))
+    return bool(
+        cities_in(text)
+        or _has(hay, _INDIA_WORDS)
+        or _has(hay, _STATES)
+        or _STATE_CODE_IN.search(str(text or ""))
+    )
 
 
 def _is_remote(job: dict, hay: str) -> bool:
@@ -306,6 +360,9 @@ def classify(job: dict) -> tuple[str, str]:
     states = _has(hay, _STATES)
     if re.fullmatch(r"\s*(?:remote\W*)?\(?in\)?\s*", location, re.IGNORECASE):
         india_named = True
+    if _STATE_CODE_IN.search(location):
+        india_named = True
+        us_state = bool(_US_STATE.search(_STATE_CODE_IN.sub("", location)))
     if " in " in hay and (cities or states) and us_state:
         # "Bengaluru, IN" uses the ISO code, not the Indiana abbreviation.
         us_state = bool(_US_STATE.search(re.sub(r",\s*IN\b", "", location)))

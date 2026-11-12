@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { normalizeCareersUrl, pickSearchLocations, splitPlaces } from "./job-boards.ts";
+import { normalizeCareersUrl, pickSearchLocations, searchSources, splitPlaces } from "./job-boards.ts";
 
 test("a pasted careers link is accepted with or without a scheme", () => {
   assert.equal(normalizeCareersUrl("https://boards.greenhouse.io/acme").url, "https://boards.greenhouse.io/acme");
@@ -36,4 +36,15 @@ test("a typed place wins, remote names no city, and the list is capped", () => {
   assert.deepEqual(pickSearchLocations({ typed: "", selected: ["Pune"], profile: [], remote: true }), []);
   const many = ["A", "B", "C", "D", "E", "F", "G"];
   assert.equal(pickSearchLocations({ typed: "", selected: many, profile: [], remote: false }).length, 5);
+});
+
+test("the source filter lists every portal family once, then the aggregators", () => {
+  const sources = searchSources();
+  const ids = sources.map(([id]) => id);
+  assert.equal(new Set(ids).size, ids.length);
+  for (const family of ["workday", "oracle", "taleo", "successfactors", "zohorecruit", "keka", "kula", "icims", "dover"]) {
+    assert.ok(ids.includes(family), family);
+  }
+  assert.equal(ids.at(-1), "jsonld");
+  assert.equal(sources.find(([id]) => id === "jsonld")[1], "Company sites");
 });
