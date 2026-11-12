@@ -22,6 +22,7 @@ import secrets
 import uuid
 import zipfile
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -248,8 +249,25 @@ async def auto_submit_status(db: AsyncSession, user_id: uuid.UUID, *, lock: bool
     }
 
 
+def _plain(value):
+    """JSON-safe form of a planned answer (profile numbers come back as Decimal)."""
+    if value is None or isinstance(value, (str, bool)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_plain(v) for v in value]
+    return str(value)
+
+
 def _norm(value):
-    return " ".join(value.split()).casefold() if isinstance(value, str) else value
+    """Compare answers loosely: whitespace, case, and 5 / "5" / "5.0" alike."""
+    if isinstance(value, list):
+        return [_norm(v) for v in value]
+    if value is None or isinstance(value, bool):
+        return value
+    text = " ".join(str(value).split()).casefold()
+    if re.fullmatch(r"-?\d+(\.\d+)?", text):
+        return format(Decimal(text).normalize(), "f")
+    return text
 
 
 def auto_submit_refusal(status: dict, task: ExtensionTask) -> str | None:
@@ -714,7 +732,7 @@ def _remember_answer_sources(task: ExtensionTask, plan: list[dict]) -> None:
             sources[label] = entry["source"]
         if entry["source"] in AUTO_SUBMIT_SOURCES:
             if len(values) < _MAX_RECORDED_SOURCES:
-                values[label] = entry["value"]
+                values[label] = _plain(entry["value"])
         elif label not in blockers:
             blockers.append(label)
     payload["answer_sources"] = sources

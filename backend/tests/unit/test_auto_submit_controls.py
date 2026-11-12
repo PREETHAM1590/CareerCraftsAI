@@ -378,6 +378,20 @@ def test_only_answers_saved_by_the_member_are_recorded_as_planned_values():
     assert task.payload["auto_blockers"] == ["Why Acme?"]
 
 
+def test_numeric_profile_answers_are_stored_as_json_and_match_the_review():
+    import json
+    from decimal import Decimal
+
+    task = SimpleNamespace(payload={})
+    plan = [{"label": "Years", "field_id": "y", "value": Decimal("5.0"), "source": "profile"}]
+    extension_service._remember_answer_sources(task, plan)
+    json.dumps(task.payload)  # the payload column is JSONB
+    planned = task.payload["answer_values"]["Years"]
+    for reviewed in ("5", 5, " 5.00 "):
+        assert extension_service._norm(reviewed) == extension_service._norm(planned)
+    assert extension_service._norm("6") != extension_service._norm(planned)
+
+
 @pytest.mark.asyncio
 async def test_page_text_in_the_drafting_prompt_stays_inside_its_fence(monkeypatch):
     from contextlib import asynccontextmanager

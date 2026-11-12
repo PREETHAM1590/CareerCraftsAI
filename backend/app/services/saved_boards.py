@@ -19,13 +19,13 @@ from app.services.job_connectors import (
     SERVER_SIDE_SEARCH,
     Source,
     merge_duplicates,
+    other_posting_same_board,
     posted,
     resolve_careers_url,
     role_key,
+    safe_url,
     search_board,
     supported_portal_names,
-    safe_url,
-    same_site,
     url_key,
 )
 
@@ -142,7 +142,7 @@ async def save_jobs(db, user_id: uuid.UUID, jobs: list[dict]) -> tuple[list[uuid
             continue
         key = role_key(job) if job.get("company") and job.get("title") else None
         twin = by_role.get(key) if key else None
-        if twin is not None and same_site(twin.job_url, job["url"]):
+        if twin is not None and other_posting_same_board(twin.job_url, job["url"]):
             twin = None  # another requisition on the same board, not a cross-post
         existing = by_url.get(url_key(job["url"])) or twin
         if existing is not None:

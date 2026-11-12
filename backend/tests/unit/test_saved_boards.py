@@ -150,6 +150,14 @@ def test_save_jobs_keeps_distinct_openings_on_one_board():
     assert created == 2 and len(ids) == 2
 
 
+def test_save_jobs_merges_tracking_variants_of_one_posting():
+    db = FakeDb()
+    first = _job("Same", slug="a")
+    variant = {**first, "url": first["url"] + "?gh_src=abc123"}
+    ids, created = asyncio.run(sb.save_jobs(db, uuid.uuid4(), [first, variant]))
+    assert created == 1 and len(ids) == 1
+
+
 def test_save_jobs_never_persists_non_https_urls():
     db = FakeDb()
     bad = [{**_job("X", slug="x"), "url": u} for u in ("javascript:alert(1)", "data:text/html,x")]

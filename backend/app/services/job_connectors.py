@@ -314,9 +314,15 @@ def safe_url(url: str) -> str:
         return ""
 
 
-def same_site(a: str, b: str) -> bool:
-    host = urlsplit(a or "").hostname
-    return bool(host) and host == urlsplit(b or "").hostname
+def other_posting_same_board(a: str, b: str) -> bool:
+    """Two requisitions on one board: same host, different path. Tracking
+    variants of one posting (?refId=, ?gh_src=) share the path and stay one."""
+    pa, pb = urlsplit(a or ""), urlsplit(b or "")
+    return (
+        bool(pa.hostname)
+        and pa.hostname == pb.hostname
+        and pa.path.rstrip("/") != pb.path.rstrip("/")
+    )
 
 
 def url_key(url: str) -> str:
@@ -346,7 +352,7 @@ def merge_duplicates(jobs: list[dict]) -> list[dict]:
         key = role_key(job) if job.get("company") and job.get("title") else f"#{i}"
         group = by_role.setdefault(key, [])
         # Two URLs on one site are two requisitions, not one role cross-posted.
-        twin = next((j for j in group if not same_site(j["url"], job["url"])), None)
+        twin = next((j for j in group if not other_posting_same_board(j["url"], job["url"])), None)
         if twin is None:
             group.append(job)
         else:
