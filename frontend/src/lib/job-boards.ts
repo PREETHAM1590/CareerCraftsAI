@@ -61,3 +61,55 @@ export function pickSearchLocations(opts: {
   if (opts.remote) return [];
   return dedupePlaces([...opts.selected, ...opts.profile]).slice(0, opts.max ?? MAX_SEARCH_LOCATIONS);
 }
+
+/**
+ * Careers-portal families the server can read (backend job_connectors
+ * CAREERS_URL_FAMILIES; a backend test keeps the two in step), then the
+ * public aggregators. Used by the search "Source" filter.
+ */
+export const PORTAL_SOURCES: Record<string, string> = {
+  workday: "Workday",
+  oracle: "Oracle Recruiting",
+  taleo: "Taleo",
+  successfactors: "SAP SuccessFactors",
+  zohorecruit: "Zoho Recruit",
+  greenhouse: "Greenhouse",
+  ashby: "Ashby",
+  lever: "Lever",
+  smartrecruiters: "SmartRecruiters",
+  workable: "Workable",
+  recruitee: "Recruitee",
+  personio: "Personio",
+  bamboohr: "BambooHR",
+  teamtailor: "Teamtailor",
+  breezy: "Breezy",
+  pinpoint: "Pinpoint",
+  hibob: "HiBob",
+  trakstar: "Trakstar",
+  jobscore: "JobScore",
+  gem: "Gem",
+  rippling: "Rippling",
+  icims: "iCIMS",
+  jobvite: "Jobvite",
+  jazzhr: "JazzHR",
+  dover: "Dover",
+  paylocity: "Paylocity",
+  keka: "Keka",
+  freshteam: "Freshteam",
+  kula: "Kula",
+};
+
+export const AGGREGATOR_SOURCES: Record<string, string> = {
+  adzuna: "Adzuna",
+  himalayas: "Himalayas",
+  remotive: "Remotive",
+  remoteok: "RemoteOK",
+  arbeitnow: "Arbeitnow",
+  jsonld: "Company sites",
+};
+
+/** [family, label] for the Source filter: portals A–Z, then aggregators. */
+export function searchSources(): [string, string][] {
+  const portals = Object.entries(PORTAL_SOURCES).sort((a, b) => a[1].localeCompare(b[1]));
+  return [...portals, ...Object.entries(AGGREGATOR_SOURCES)];
+}
