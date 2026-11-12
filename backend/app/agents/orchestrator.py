@@ -66,7 +66,6 @@ async def _auto_apply_wrapper(state: AgentState) -> AgentState:
         location=ctx.get("location", "Remote"),
         max_applications=ctx.get("max_applications", 5),
         platforms=ctx.get("platforms"),
-        linkedin_credentials=ctx.get("linkedin_credentials"),
         model_settings=state.get("model_settings"),
         live_browser=ctx.get("live_browser", False),
         run_id=state["run_id"],

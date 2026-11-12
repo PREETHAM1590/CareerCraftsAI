@@ -1,6 +1,7 @@
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from langchain_core.messages import HumanMessage
 
 from app.agents.state import AgentState
@@ -44,6 +45,7 @@ def test_linkedin_outreach_agent_finds_contacts_and_pauses_for_approval():
     )
 
     with (
+        patch("app.agents.linkedin_outreach_agent.lookup_configured", return_value=True),
         patch("app.agents.linkedin_outreach_agent.ProxycurlService", return_value=proxycurl),
         patch(
             "app.agents.linkedin_outreach_agent.fetch_user_profile_text",
@@ -69,7 +71,10 @@ def test_linkedin_outreach_agent_gracefully_handles_no_contacts():
     proxycurl = MagicMock()
     proxycurl.find_contacts = AsyncMock(return_value=[])
 
-    with patch("app.agents.linkedin_outreach_agent.ProxycurlService", return_value=proxycurl):
+    with (
+        patch("app.agents.linkedin_outreach_agent.lookup_configured", return_value=True),
+        patch("app.agents.linkedin_outreach_agent.ProxycurlService", return_value=proxycurl),
+    ):
         result = linkedin_outreach_agent_node(make_state())
 
     assert result["status"] == "completed"
@@ -83,3 +88,47 @@ def test_draft_handles_member_typed_contacts_without_a_title():
     msg = draft_outreach_message("  Priya\n Rao ", "", "Python services")
     assert msg.startswith("Hi Priya Rao, I came across your profile.")
     assert "role as ." not in msg and len(msg) <= 300
+
+
+def test_outreach_without_lookup_asks_for_contacts_and_skips_proxycurl():
+    from app.agents.linkedin_outreach_agent import linkedin_outreach_agent_node
+    from app.services.linkedin_outreach_service import NO_LOOKUP_NOTICE
+
+    proxycurl = MagicMock()
+    proxycurl.find_contacts = AsyncMock(return_value=[])
+
+    with (
+        patch("app.agents.linkedin_outreach_agent.lookup_configured", return_value=False),
+        patch("app.agents.linkedin_outreach_agent.ProxycurlService", return_value=proxycurl),
+    ):
+        result = linkedin_outreach_agent_node(make_state())
+
+    assert result["result"]["notice"] == NO_LOOKUP_NOTICE
+    proxycurl.find_contacts.assert_not_awaited()
+
+
+def test_identify_request_validates_supplied_contacts():
+    from pydantic import ValidationError
+
+    from app.api.v1.linkedin import OutreachIdentifyRequest
+
+    good = {
+        "name": "Sarah Chen",
+        "title": "Recruiter",
+        "linkedin_url": "https://www.linkedin.com/in/sc",
+    }
+    body = OutreachIdentifyRequest(company_name="Acme", contacts=[good])
+    assert body.contacts[0].name == "Sarah Chen"
+    assert OutreachIdentifyRequest(company_name="Acme").contacts == []
+
+    for bad in (
+        {**good, "linkedin_url": "http://www.linkedin.com/in/sc"},
+        {**good, "linkedin_url": "https://evil.example/linkedin.com"},
+        {**good, "linkedin_url": "https://notlinkedin.com/in/sc"},
+        {**good, "name": ""},
+        {**good, "title": "x" * 151},
+    ):
+        with pytest.raises(ValidationError):
+            OutreachIdentifyRequest(company_name="Acme", contacts=[bad])
+    with pytest.raises(ValidationError):
+        OutreachIdentifyRequest(company_name="Acme", contacts=[good] * 6)
