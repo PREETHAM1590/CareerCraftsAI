@@ -36,9 +36,18 @@ STOP = set(
         "nce years year skills skill role job work ability strong excellen"
         "t candidate team company responsibilities qualifications looking "
         "including using knowledge understanding demonstrate proven plus b"
-        "onus minimum title position"
+        "onus minimum title position need needs within across about us "
+        "also etc able join help good great well based new"
     ).split()
 )
+# Where the role sits is not a skill the candidate can add to a resume.
+LOCATIONS = set(
+    (
+        "remote hybrid onsite india indian bengaluru bangalore hyderabad pune mumbai "
+        "delhi ncr gurgaon gurugram noida chennai kolkata ahmedabad"
+    ).split()
+)
+SKILLS_ONLY_CREDIT = 0.6  # a term listed in Skills but never used in a bullet or summary
 SENIORITY = {
     "intern": 0,
     "junior": 1,
@@ -55,7 +64,27 @@ def _terms(text: str) -> set[str]:
     for alias, canonical in sorted(ALIASES.items(), key=lambda item: -len(item[0])):
         text = re.sub(r"(?<!\w)" + re.escape(alias) + r"(?!\w)", canonical, text)
     words = re.findall(r"(?<!\w)(?:\.net|c\+\+|c#|[\w]+(?:[.+][\w]+)*)(?!\w)", text)
-    return {word for word in words if word not in STOP and not word.isdigit()}
+    return {word for word in words if word not in STOP | LOCATIONS and not word.isdigit()}
+
+
+def _split_skills(lines: list[str]) -> tuple[list[str], list[str]]:
+    """(skills-section lines, every other line)."""
+    skills: list[str] = []
+    rest: list[str] = []
+    in_skills = False
+    for line in lines:
+        if line.startswith("#") and not line.startswith("###"):
+            title = line.lstrip("# ").strip().rstrip(":").casefold()
+            in_skills = title in {"skills", "technical skills", "technologies", "core competencies"}
+            continue
+        (skills if in_skills else rest).append(line)
+    return skills, rest
+
+
+def _stuffed(skill_lines: list[str]) -> list[str]:
+    """Terms repeated inside the skills section, the classic keyword-stuffing shape."""
+    counts = Counter(word for line in skill_lines for word in re.findall(r"[\w.+#]+", line.casefold()))
+    return sorted(word for word, n in counts.items() if n >= 3 and word not in STOP and len(word) > 2)
 
 
 def estimate_resume(text: str, jd_text: str = "") -> dict:
@@ -125,8 +154,17 @@ def estimate_resume(text: str, jd_text: str = "") -> dict:
             term_weights[term] = max(term_weights[term], importance)
     matched = sorted(set(term_weights) & resume_terms)
     missing = sorted(set(term_weights) - resume_terms, key=lambda word: (-term_weights[word], word))
+    skill_lines, body_lines = _split_skills(lines)
+    stuffed = _stuffed(skill_lines)
+    body_terms = _terms("\n".join(body_lines))
+
+    def credit(word: str) -> float:
+        if word in stuffed:
+            return 0.0
+        return 1.0 if word in body_terms else SKILLS_ONLY_CREDIT
+
     match = (
-        round(100 * sum(term_weights[word] for word in matched) / sum(term_weights.values()))
+        round(100 * sum(term_weights[w] * credit(w) for w in matched) / sum(term_weights.values()))
         if term_weights
         else None
     )
@@ -147,8 +185,9 @@ def estimate_resume(text: str, jd_text: str = "") -> dict:
         if re.search(
             (
                 "\\b\\d+(?:\\.\\d+)?\\s*(?:%|percent|users|customers|requests|projects|"
-                "hours|days|members|engineers|million|thousand|ms|seconds)\\b|\\d+(?"
-                ":\\.\\d+)?%|[$€£]\\s*\\d"
+                "hours|days|members|engineers|million|thousand|ms|seconds|lakh|lakhs|crore|"
+                "crores|lpa|transactions|microservices|services|apis)\\b|\\d+(?"
+                ":\\.\\d+)?%|[$€£₹]\\s*\\d|\\brs\\.?\\s*\\d"
             ),
             line,
             re.I,
@@ -200,6 +239,7 @@ def estimate_resume(text: str, jd_text: str = "") -> dict:
         "tables": bool(re.search(r"^\s*\|?\s*:?-{3,}:?\s*\|.*$|<table\b", text, re.M | re.I)),
         "images": bool(re.search(r"!\[[^\]]*\]\(|<img\b", text, re.I)),
         "text_boxes": bool(re.search(r"<textbox\b|<w:txbxContent", text, re.I)),
+        "keyword_stuffing": bool(stuffed),
     }
     formatting = max(0, 100 - 35 * sum(risks.values()))
     for risk, found in risks.items():
@@ -207,7 +247,13 @@ def estimate_resume(text: str, jd_text: str = "") -> dict:
             issue(
                 "format_" + risk,
                 "document",
-                f"Replace {risk.replace('_', ' ')} with ordinary single-column text.",
+                (
+                    "Skills repeat the same words ("
+                    + ", ".join(stuffed[:5])
+                    + "); list each skill once."
+                    if risk == "keyword_stuffing"
+                    else f"Replace {risk.replace('_', ' ')} with ordinary single-column text."
+                ),
                 "error",
             )
 

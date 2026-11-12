@@ -31,10 +31,12 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from slowapi.util import get_remote_address
 
 from app.core.config import settings
+from app.core.pii_vault import PiiLogFilter, PiiVault
 from app.core.rate_limit import limiter
 from app.core.security import decrypt_api_key
 
 logger = logging.getLogger(__name__)
+logger.addFilter(PiiLogFilter())
 
 router = APIRouter(prefix="/llm-gateway", tags=["llm-gateway"])
 
