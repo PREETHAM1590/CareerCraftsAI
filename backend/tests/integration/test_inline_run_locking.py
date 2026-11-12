@@ -87,7 +87,7 @@ async def test_dedicated_routes_share_admission_slots(database, monkeypatch, rou
         monkeypatch.setattr(
             jobs,
             "_resolve_search_context",
-            AsyncMock(return_value=("Engineer", "Remote", "remote", "request")),
+            AsyncMock(return_value=("Engineer", "Remote", "remote", {"locations": ["Remote"]})),
         )
         monkeypatch.setattr(jobs, "_resolve_live_browser", AsyncMock(return_value=False))
         monkeypatch.setattr(
