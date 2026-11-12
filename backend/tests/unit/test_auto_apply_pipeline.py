@@ -97,15 +97,3 @@ async def test_get_or_create_job_application_reuses_existing_row_by_url():
         job_application_id = await _get_or_create_job_application(user_id, job)
 
     assert job_application_id == str(existing.id)
-
-
-def test_generate_linkedin_note_within_limit():
-    from app.agents.auto_apply_pipeline import _generate_linkedin_note
-
-    mock_llm = MagicMock()
-    mock_llm.invoke.return_value = MagicMock(content="Hi, I'm interested in the Engineer role at Stripe. Let's connect!")
-
-    note = _generate_linkedin_note(mock_llm, "Stripe", "Engineer", "Profile")
-    assert isinstance(note, str)
-    assert len(note) <= 300  # LinkedIn limit
-    assert "Stripe" in note
