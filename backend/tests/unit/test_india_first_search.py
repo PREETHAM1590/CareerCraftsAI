@@ -53,6 +53,21 @@ def test_matches_query_india_rules(location, query_places, india_focus, expected
     assert catalog.matches_query(_job(1, location), query) is expected
 
 
+@pytest.mark.parametrize(
+    "role,title",
+    [
+        ("frontend developer", "Front-End Developer"),
+        ("frontend developer", "Front End Developer (React)"),
+        ("front end developer", "Senior Frontend Developer"),
+        ("back-end engineer", "Backend Engineer"),
+        ("full stack developer", "Full-Stack Developer"),
+    ],
+)
+def test_compound_title_words_match_every_spelling(role, title):
+    job = {**_job(1, "Pune"), "title": title}
+    assert catalog.matches_query(job, {"titles": [role], "locations": ["Pune"]})
+
+
 def test_matches_query_india_flag_off_checks_everything_else():
     query = {"titles": ["backend engineer"], "locations": ["Remote"]}
     job = _job(1, "Remote, US only")
