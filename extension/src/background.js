@@ -21,6 +21,11 @@ import {
   taskSenderAllowed,
   snapshotKey,
   autoSubmitBlockedHost,
+  validBridgePair,
+  pairingNeedsConfirmation,
+  PENDING_PAIR_TTL_MS,
+  hostApproved,
+  approveHost,
 } from "./common.js";
 import {
   configureAgent,
@@ -123,9 +128,12 @@ async function fetchResume(pairing, taskId) {
   }
 }
 
+// Browser permission alone is not enough: the host must be a known job/ATS
+// host or one the member approved in the popup.
 async function hasHostPermission(urlString) {
   try {
     const u = new URL(urlString);
+    if (!(await hostApproved(urlString))) return false;
     return await chrome.permissions.contains({ origins: [u.origin + "/*"] });
   } catch (e) {
     return false;
@@ -392,9 +400,27 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
 // The popup's permission prompt usually closes the popup before its own
 // promise settles, so continue from here as soon as Chrome records the grant.
-chrome.permissions.onAdded.addListener(() => {
-  onPermissionAdded();
-  pollOnce();
+// Only the popup can request a permission (it needs a user gesture), so a
+// grant for the host we are waiting on is the member's approval of it.
+async function approvePendingHost(added) {
+  const { [SESSION_KEYS.HOST_PERMISSION_NEEDED]: host } = await chrome.storage.session.get(SESSION_KEYS.HOST_PERMISSION_NEEDED);
+  if (!host) return;
+  for (const origin of added?.origins || []) {
+    try {
+      if (new URL(origin.replace("://*.", "://")).hostname === host) await approveHost(host);
+    } catch (e) {
+      /* ignore malformed pattern */
+    }
+  }
+}
+
+chrome.permissions.onAdded.addListener((added) => {
+  approvePendingHost(added)
+    .catch(() => {})
+    .finally(() => {
+      onPermissionAdded();
+      pollOnce();
+    });
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -417,13 +443,21 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 // ── Messages ─────────────────────────────────────────────────────────────
 
+async function applyPairing(current, pairing) {
+  if (current && current.token !== pairing.token) await revokeCurrentPairing();
+  await setPairing(pairing);
+  await syncBridgeRegistration(pairing.appOrigin);
+  pollOnce();
+  startCommandLoop();
+}
+
 async function handleMessage(msg, sender) {
   const popup = sender.id === chrome.runtime.id && !sender.tab && sender.url === chrome.runtime.getURL("popup.html");
   const contentMessages = new Set(["CC_PLAN", "CC_EVENT", "CC_REVIEW", "CC_SUBMIT_STATUS", "CC_ANSWER", "CC_DECIDE", "CC_RESUME", "CC_NAVIGATE"]);
   if (contentMessages.has(msg?.type) && !taskSenderAllowed(sender, await getActiveTask(), msg, chrome.runtime.id)) {
     return { error: "This page does not own the active application." };
   }
-  if (["CC_GET_STATUS", "CC_VALIDATE_AND_PAIR", "CC_DISCONNECT", "CC_CHECK_NOW", "CC_APPROVE_SUBMIT"].includes(msg?.type) && !popup) return { error: "Open the CareerCraft extension popup to perform this action." };
+  if (["CC_GET_STATUS", "CC_VALIDATE_AND_PAIR", "CC_DISCONNECT", "CC_CHECK_NOW", "CC_APPROVE_SUBMIT", "CC_APPROVE_HOST", "CC_CONFIRM_PAIR", "CC_REJECT_PAIR"].includes(msg?.type) && !popup) return { error: "Open the CareerCraft extension popup to perform this action." };
   switch (msg && msg.type) {
     case "WAKE":
     case "CC_CHECK_NOW": {
@@ -612,8 +646,11 @@ async function handleMessage(msg, sender) {
         await syncBridgeRegistration(null);
         return { paired: false, hostPermissionNeeded: hostPermissionNeeded || null };
       }
+      const { [SESSION_KEYS.PENDING_PAIR]: pending } = await chrome.storage.session.get(SESSION_KEYS.PENDING_PAIR);
+      const pendingPair = pending && Date.now() - pending.since <= PENDING_PAIR_TTL_MS ? { appOrigin: pending.pairing.appOrigin, email: pending.email, deviceName: pending.deviceName } : null;
       return {
         paired: true,
+        pendingPair,
         appOrigin: pairing.appOrigin,
         device: me.ok ? me.data : null,
         activeTask: active,
@@ -638,15 +675,12 @@ async function handleMessage(msg, sender) {
     }
 
     case "CC_PAIR_FROM_BRIDGE": {
+      if (!sender.tab || !validBridgePair(msg, new URL(sender.url || "https://invalid.invalid").origin)) return { error: "Invalid app origin" };
       const origin = appOrigin(msg.appOrigin);
-      // A page can only (re)pair the extension to its own origin, and never
-      // take over a pairing to a different CareerCraft deployment — that
-      // needs the popup.
       const current = await getPairing();
-      const appUrl = new URL(origin);
-      const knownApp = ["careercraftsai.me", "www.careercraftsai.me", "app.careercraftsai.me"].includes(appUrl.hostname);
-      if (sender.id !== chrome.runtime.id || sender.frameId !== 0 || new URL(sender.url).origin !== origin || (!knownApp && current?.appOrigin !== origin)) return { error: "Invalid app origin" };
-      if (current && current.appOrigin !== origin) return { ok: false, reason: "paired_elsewhere" };
+      const knownApp = ["careercraftsai.me", "www.careercraftsai.me", "app.careercraftsai.me"].includes(new URL(origin).hostname);
+      if (sender.id !== chrome.runtime.id || sender.frameId !== 0 || (!knownApp && current?.appOrigin !== origin)) return { error: "Invalid app origin" };
+      if (current && current.appOrigin === origin && current.token === msg.token) return { ok: true };
       if (!isStaticOrigin(origin)) {
         const granted = await chrome.permissions.contains({ origins: [origin + "/*"] });
         if (!granted) return { ok: false, reason: "permission_required" };
@@ -654,17 +688,54 @@ async function handleMessage(msg, sender) {
       const pairing = { appOrigin: origin, token: msg.token };
       const me = await apiFetch(pairing, "/extension/device/me");
       if (!me.ok || !me.data) return { ok: false, reason: "invalid_token" };
-      if (current && current.token !== msg.token) await revokeCurrentPairing();
-      await setPairing(pairing);
-      await syncBridgeRegistration(origin);
-      pollOnce();
-      startCommandLoop();
+      if (current) {
+        // Re-pairing the same account on the same deployment is harmless. A
+        // different account or deployment needs the member's confirmation in
+        // the popup, which a page cannot click. A dead (401) pairing has
+        // nothing left to take over.
+        const currentMe = await apiFetch(current, "/extension/device/me");
+        const sameAccount = current.appOrigin === origin && currentMe.ok && !pairingNeedsConfirmation(current, currentMe.data?.user?.email, me.data.user?.email);
+        if (!sameAccount && currentMe.status !== 401) {
+          await chrome.storage.session.set({
+            [SESSION_KEYS.PENDING_PAIR]: { pairing, email: me.data.user?.email || null, deviceName: me.data.device_name || null, since: Date.now() },
+          });
+          await setBadge("?", "#d97706");
+          await openPopupIfPossible();
+          return { ok: false, reason: "confirmation_required" };
+        }
+      }
+      await applyPairing(current, pairing);
+      return { ok: true };
+    }
+
+    case "CC_CONFIRM_PAIR": {
+      const { [SESSION_KEYS.PENDING_PAIR]: pending } = await chrome.storage.session.get(SESSION_KEYS.PENDING_PAIR);
+      await chrome.storage.session.remove(SESSION_KEYS.PENDING_PAIR);
+      await setBadge("");
+      if (!pending || Date.now() - pending.since > PENDING_PAIR_TTL_MS) return { ok: false, error: "The connection request expired. Try again from CareerCraft." };
+      const me = await apiFetch(pending.pairing, "/extension/device/me");
+      if (!me.ok) return { ok: false, error: "That connection code is no longer valid." };
+      await applyPairing(await getPairing(), pending.pairing);
+      return { ok: true };
+    }
+
+    case "CC_REJECT_PAIR": {
+      await chrome.storage.session.remove(SESSION_KEYS.PENDING_PAIR);
+      await setBadge("");
+      return { ok: true };
+    }
+
+    case "CC_APPROVE_HOST": {
+      const { [SESSION_KEYS.HOST_PERMISSION_NEEDED]: host } = await chrome.storage.session.get(SESSION_KEYS.HOST_PERMISSION_NEEDED);
+      if (!host || msg.host !== host) return { ok: false };
+      await approveHost(host);
       return { ok: true };
     }
 
     case "CC_DISCONNECT": {
       await revokeCurrentPairing();
       await clearPairing();
+      await chrome.storage.session.remove(SESSION_KEYS.PENDING_PAIR);
       await resetActiveTask();
       await stopAgentTab();
       await syncBridgeRegistration(null);

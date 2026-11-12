@@ -2,9 +2,17 @@ import json
 import uuid
 from unittest.mock import MagicMock, patch
 
+import pytest
 from langchain_core.messages import HumanMessage
 
 from app.agents.state import AgentState
+
+
+@pytest.fixture(autouse=True)
+def _stub_parse_back():
+    # These tests render with a fake PDF; test_resume_parseback covers real files.
+    with patch("app.agents.resume_agent._parse_back", return_value=None):
+        yield
 
 
 def make_state(jd_text: str = "Python engineer at Stripe") -> AgentState:

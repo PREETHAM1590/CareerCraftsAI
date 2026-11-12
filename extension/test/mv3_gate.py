@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import subprocess
 import tempfile
 import threading
 from datetime import UTC, datetime, timedelta
@@ -48,7 +49,13 @@ class API(BaseHTTPRequestHandler):
 async def main():
     server = ThreadingHTTPServer(("127.0.0.1", 0), API)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    extension = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[1]
+    extension = Path(tempfile.mkdtemp(prefix="cc-ext-")) / "extension"
+    # manifest.json is the production manifest; the gate pairs with localhost.
+    subprocess.run(
+        ["node", str(root / "scripts" / "build.mjs"), "--out", str(extension), "--dev"],
+        check=True,
+    )
     chrome = (
         Path(os.environ["LOCALAPPDATA"])
         / "ms-playwright/chromium-1243/chrome-win64/chrome.exe"
