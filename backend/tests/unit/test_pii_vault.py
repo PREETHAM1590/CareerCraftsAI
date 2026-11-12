@@ -232,6 +232,16 @@ def test_json_reply_stays_parseable_with_escaped_values():
     }
 
 
+def test_prose_opening_with_a_placeholder_is_not_treated_as_json():
+    vault = _vault_with_tokens()
+    restored = vault.rehydrate("[[ADDRESS_1]] is where the offer letter goes.")
+    assert restored == 'Flat 4 "Rose Villa"\nIndiranagar, Bengaluru is where the offer letter goes.'
+    # A JSON array still gets escaped values.
+    assert json.loads(vault.rehydrate('["[[ADDRESS_1]]"]')) == [
+        'Flat 4 "Rose Villa"\nIndiranagar, Bengaluru'
+    ]
+
+
 def test_tool_arguments_are_rehydrated_as_raw_values():
     vault = _vault_with_tokens()
     args = {"fields": [{"value": "[[EMAIL_1]]"}, {"value": "[[ADDRESS_1]]"}], "n": 2}

@@ -324,7 +324,9 @@ def _known_patterns(kind: str, value: str) -> list[re.Pattern[str]]:
 
 def _looks_json(text: str) -> bool:
     stripped = re.sub(r"^```(?:json)?\s*", "", text.lstrip(), flags=re.IGNORECASE)
-    return stripped[:1] in {"{", "["}
+    # "[[NAME_1]] thanks you..." is prose that opens with a placeholder; no
+    # JSON document starts with one.
+    return stripped[:1] in {"{", "["} and not _TOLERANT.match(stripped)
 
 
 class PiiVault:
