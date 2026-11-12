@@ -22,21 +22,23 @@ FACTS_KEY = "resume.facts"
 # Saved-answer question keys (canonical or "custom.<label words>") whose
 # value is an identity detail. First match wins, so "email address" is an
 # email, not an address.
-_KEY_TYPES: tuple[tuple[re.Pattern[str], str], ...] = tuple(
+_KEY_TYPES: tuple[tuple[re.Pattern[str], str | None], ...] = tuple(
     (re.compile(pattern), kind)
     for pattern, kind in (
         (r"^personal\.first_name$", "FIRST_NAME"),
         (r"^personal\.last_name$", "LAST_NAME"),
         (r"^personal\.full_name$", "NAME"),
+        (r"^personal\.(middle|preferred|guardian)_name$", "NAME"),
         (r"\be-?mail\b|personal\.email", "EMAIL"),
+        (r"^personal\.phone_(country_code|type|extension)$", None),
         (r"\b(phone|mobile|whatsapp|contact number)\b|personal\.phone", "PHONE"),
-        (r"\b(date of birth|dob|birth ?date)\b", "DOB"),
+        (r"\b(date of birth|dob|birth ?date)\b|^personal\.date_of_birth$", "DOB"),
         (r"\baadha?a?r\b", "AADHAAR"),
         (r"\bpan\b", "PAN"),
         (r"\bpassport\b", "PASSPORT"),
         (r"\bupi\b", "UPI"),
-        (r"\b(pin ?code|postal|zip)\b", "POSTAL_CODE"),
-        (r"\b(address|street)\b", "ADDRESS"),
+        (r"\b(pin ?code|postal|zip)\b|^location\.postal_code$", "POSTAL_CODE"),
+        (r"\b(address|street)\b|^address\.", "ADDRESS"),
         (r"^links\.|\b(linkedin|github|portfolio|website)\b", "URL"),
     )
 )
@@ -141,7 +143,7 @@ def policy_for(prefs) -> PrivacyPolicy:
     names = settings.PII_REDACT_NAMES
     member_enabled = getattr(prefs, "llm_hide_personal_info", None)
     member_names = getattr(prefs, "llm_hide_name", None)
-    if isinstance(member_enabled, bool):
+    if isinstance(member_enabled, bool) and not settings.PII_REDACTION_FORCED:
         enabled = enabled and member_enabled
     if isinstance(member_names, bool):
         names = member_names

@@ -6,8 +6,13 @@ work, so they are hidden from the provider and put back locally.
 
 ## How it works
 
-Every chat/completion call from an agent, the copilot and the computer agent
-goes through the internal LLM gateway (`backend/app/core/llm_gateway.py`).
+Every chat/completion call from an agent, the copilot, the computer agent and
+the extension planner's answer drafts (`model_router.get_llm`) goes through
+the internal LLM gateway (`backend/app/core/llm_gateway.py`).
+`backend/tests/security/test_llm_bypass_guard.py` fails if app code builds a
+provider chat client, imports a provider SDK or names a provider endpoint
+anywhere else; the only direct call left is the Settings "test this key"
+button, which sends a fixed prompt.
 Before a request leaves, the gateway:
 
 1. Loads the member's privacy setting and the personal values they stored
@@ -28,8 +33,10 @@ Before a request leaves, the gateway:
    so agents, drafts and form plans receive the real values.
 
 The mapping exists only in memory for one request. It is never logged,
-cached or stored. Gateway logs carry placeholder counts only, and a log
-filter scrubs emails, phones and IDs from gateway log records.
+cached or stored. Gateway logs carry placeholder counts only. The API, the
+Temporal worker and the notification worker scrub emails, phones and IDs
+from every log record they create, tracebacks included
+(`pii_vault.install_pii_log_scrubbing`).
 
 ### Pattern detection
 
@@ -72,31 +79,56 @@ Server (`backend/app/core/config.py`, all default `True`):
   false it logs and sends the request unredacted.
 - `PII_REDACT_NAMES` – default for name redaction.
 - `PII_PATTERN_DETECTION` – detect identifiers that are not in the profile.
+- `PII_REDACTION_FORCED` (default `False`) – ignore a member's opt-out of
+  hiding personal details; their name switch still applies.
 
-Per member: `UserPreferences.llm_hide_personal_info` and
-`UserPreferences.llm_hide_name` (both default on). They are read with
-`getattr`, so redaction is on for everyone until those columns exist.
+Per member, in Settings → Models → Privacy: `UserPreferences.llm_hide_personal_info`
+and `UserPreferences.llm_hide_name` (both default on; migration
+`20261112090000_llm_privacy_preferences.sql`). Turning the first off also
+stops name hiding.
 
 ## Form filling
 
 Identity fields on application forms are filled from stored values without a
 model: the extension's one-click autofill uses rules in
-`extension/src/content/autofill.js`, and the backend planner resolves
-`personal.*`, `links.*` and `location.city` from saved answers and the
-application profile before any model is considered
-(`backend/app/applications/answer_resolver.py`). Only unrecognised free-text
-questions reach the model, and the gateway hides contact details in those
-prompts too.
+`extension/src/content/autofill.js`, and the backend planner
+(`backend/app/applications/`) recognises name parts, email, phone and
+country code, street address, city, state, PIN/ZIP, country, current
+location, date of birth, Aadhaar/PAN/passport and other IDs, nationality,
+gender and other voluntary disclosures, LinkedIn/GitHub/portfolio links,
+current/expected CTC and notice period — as human labels or as ATS field
+names (`legalNameSection_firstName`, `job_application[email]`,
+`_systemfield_phone`, `addressSection_postalCode`). These are answered from
+saved answers or the application profile, or left for the member; they are
+never drafted. A label that asks for a personal detail without matching a
+rule ("Do you have a valid passport?") is refused by the drafting path too.
+Settings → Applying → Saved answers offers middle name, phone country code,
+date of birth, street address and nationality; government ID numbers are
+deliberately not stored and are left for the member to type.
+
+When a genuine free-text question is drafted, contact lines and IDs are
+removed from the resume text before the prompt is built, and the gateway
+hides anything left (the name, values in unusual formats).
+
+## Embeddings and stored chunks
+
+`rag_service.get_embedding_model` wraps every embedding model so emails,
+phone numbers, profile links and IDs are removed before text is sent to the
+embedding provider (resume chunks, retrieval queries, job-match text,
+company research). Resume and document chunks are also stored without them;
+the resume header is built from the profile's verified contact
+(`resume_facts.verified_contact`), never from chunks.
 
 ## What this does not cover
 
-- **Embeddings.** Resume chunks and job-match text are embedded by the
-  member's provider (OpenAI or Gemini) unless an Ollama embedding model is
-  configured. Those calls do not pass through the gateway; contact details
-  in resume chunks reach the embedding provider today.
-- **Direct provider calls outside the gateway.** `model_router.get_llm`
-  calls the provider directly; free-text answers drafted for the extension
-  planner currently use it.
+- **Names in embeddings.** Embedding text is stripped by pattern only, so
+  the member's name still reaches the embedding provider. Chunks and vectors
+  stored before this change keep their contact lines until the document is
+  uploaded again.
+- **Decision engine.** When `TYPESAFE_API_KEY` or `LAYA_URL` is set, matching
+  a stored answer to a dropdown's options sends the question and the stored
+  value (for example a country or gender) to that service, outside the
+  gateway.
 - **Third-party names** in job descriptions and inbound email are not
   detected, and neither are spelled-out or paraphrased values ("nine eight
   seven …"), values in images or attachments, or non-ASCII text that was

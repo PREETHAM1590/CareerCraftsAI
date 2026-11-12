@@ -86,6 +86,9 @@ class UserPreferencesSchema(BaseModel):
     # LinkedIn or Naukri); capped per rolling 24 hours.
     auto_submit_enabled: bool | None = None
     auto_submit_daily_cap: int | None = Field(default=None, ge=1, le=50)
+    # Hide contact details/IDs and, separately, the member's name from the model.
+    llm_hide_personal_info: bool | None = None
+    llm_hide_name: bool | None = None
     # Resume preferences (asked once on first auto-apply; resume_prefs_set_at
     # stays null until then). The client sets resume_prefs_set_at when saving.
     resume_template: str | None = Field(None, max_length=50)

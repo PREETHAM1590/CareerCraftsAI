@@ -128,16 +128,22 @@ async def source_health(db=Depends(get_db), user=Depends(get_current_user)):
         .all()
     )
     health = {row["source_id"]: dict(row) for row in records}
+    from app.services.indian_platforms_service import platform_status
+
     return {
         "sources": [
             {
                 "id": s.id,
                 "family": s.family,
-                "attribution": s.tenant or s.family,
+                "attribution": s.company or s.tenant or s.family,
+                "country": s.country or None,
+                "company_country": s.company_country or None,
                 **health.get(s.id, {"status": "not_refreshed"}),
             }
             for s in sources()
-        ]
+        ],
+        # Boards that are deliberately not read, with the reason.
+        "unavailable": platform_status(),
     }
 
 
@@ -153,6 +159,10 @@ async def catalog(
     persona_id: uuid.UUID | None = None,
     cursor: str | None = Query(default=None, max_length=2048),
     limit: int = Query(default=25, ge=1, le=100),
+    india_focus: bool | None = Query(
+        default=None,
+        description="India-first results (default: on unless the location is outside India)",
+    ),
     db=Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -160,6 +170,7 @@ async def catalog(
     import hashlib
     import json
 
+    from app.services.india_focus import wants_india
     from app.services.job_catalog import search_catalog
     from app.services.job_matching import rank_jobs
 
@@ -172,6 +183,8 @@ async def catalog(
         "persona_id": str(persona.id) if persona else None,
         "max_results": 300,
     }
+    if india_focus is not None:
+        context["india_focus"] = india_focus
     fingerprint = hashlib.sha256(
         json.dumps([str(user.id), context, source], sort_keys=True).encode()
     ).hexdigest()
@@ -188,7 +201,10 @@ async def catalog(
             offset = value["offset"]
         except (ValueError, KeyError, TypeError) as exc:
             raise HTTPException(422, "Invalid search cursor") from exc
-    jobs, warnings = await search_catalog(context, [source] if source else None)
+    stats: dict = {}
+    jobs, warnings = await search_catalog(context, [source] if source else None, stats=stats)
+    if hidden := len(stats.get("india_hidden_ids", [])):
+        warnings = [*warnings, f"Hid {hidden} matching roles open only outside India"]
     ranked, ranking_warnings = await rank_jobs(str(user.id), context, jobs)
     next_cursor = (
         base64.urlsafe_b64encode(
@@ -201,6 +217,7 @@ async def catalog(
         "jobs": ranked[offset : offset + limit],
         "next_cursor": next_cursor,
         "warnings": warnings + ranking_warnings,
+        "india_focus": wants_india(context),
         "ranking_mode": (
             "semantic+rules" if any(j["ranking_mode"] != "rules" for j in ranked) else "rules"
         ),

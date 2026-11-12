@@ -28,7 +28,7 @@ interface AutoSubmitPrefs {
 interface SavedAnswer {
   question_key: string;
   question: string;
-  group: "screening" | "voluntary" | "other";
+  group: "screening" | "personal" | "voluntary" | "other";
   optional: boolean;
   value: string | boolean | string[] | null;
   updated_at: string | null;
@@ -42,6 +42,10 @@ const PLACEHOLDERS: Record<string, string> = {
   "compensation.expected_salary": "e.g. 18 LPA or 95,000 USD",
   "location.willing_to_relocate": "e.g. Yes",
   "availability.start_date": "e.g. 2026-12-01 or Immediately",
+  "personal.phone_country_code": "e.g. +91",
+  "personal.date_of_birth": "e.g. 1998-04-21",
+  "address.street": "e.g. 12 MG Road, Indiranagar",
+  "personal.nationality": "e.g. Indian",
   "disclosure.gender": "e.g. I do not wish to answer",
   "disclosure.race_ethnicity": "e.g. I do not wish to answer",
   "disclosure.veteran_status": "e.g. I am not a protected veteran",
@@ -161,7 +165,7 @@ function AnswerRow({ answer }: { answer: SavedAnswer }) {
   const busy = save.isPending || clear.isPending;
   return (
     <li className="py-4 first:pt-0 last:pb-0">
-      <Field label={answer.question} hint={answer.optional && answer.group === "voluntary" ? "Optional. Leave empty and the extension never answers it." : undefined}>
+      <Field label={answer.question} hint={answer.optional && (answer.group === "voluntary" || answer.group === "personal") ? "Optional. Leave empty and the extension never answers it." : undefined}>
         {(id) => (
           <div className="flex flex-wrap items-center gap-2">
             <Input
@@ -194,6 +198,7 @@ function SavedAnswersCard() {
   });
   const groups: Array<[SavedAnswer["group"], string, string]> = [
     ["screening", "Screening questions", "Asked by most applications. Only these answers and your profile can be submitted without your review."],
+    ["personal", "Personal details", "Typed into forms exactly as saved; never sent to the AI model. Leave empty to fill them in yourself."],
     ["voluntary", "Voluntary disclosures", "Used only if you answer them here; otherwise the extension leaves them for you."],
     ["other", "Other answers you saved", "Questions you answered in the extension with “Remember my answers” on."],
   ];

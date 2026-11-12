@@ -510,10 +510,7 @@ class StreamingRehydrator:
 # ── logs ─────────────────────────────────────────────────────────────────────
 
 
-def scrub(text: str) -> str:
-    """One-way redaction for log lines: pattern-detected PII becomes [TYPE]."""
-    if not text:
-        return text
+def _replace_spans(text: str, label) -> str:
     out, last = [], 0
     chosen: list[_Span] = []
     for span in sorted(_pattern_spans(text), key=lambda s: (-(s.end - s.start), s.start)):
@@ -521,10 +518,71 @@ def scrub(text: str) -> str:
             chosen.append(span)
     for span in sorted(chosen, key=lambda s: s.start):
         out.append(text[last : span.start])
-        out.append(f"[{span.kind}]")
+        out.append(label(span))
         last = span.end
     out.append(text[last:])
     return "".join(out)
+
+
+def scrub(text: str) -> str:
+    """One-way redaction for log lines: pattern-detected PII becomes [TYPE]."""
+    if not text:
+        return text
+    return _replace_spans(text, lambda span: f"[{span.kind}]")
+
+
+_MARK = "\x00"
+_FIELD_SEPARATOR = re.compile(r"[|•·;]")
+_INNER_SEPARATOR_RUN = re.compile(r"\s*(?:[,/]\s*){2,}")
+_EDGE_SEPARATORS = re.compile(r"^[\s,/:()-]+|[\s,/:()-]+$")
+_LABEL_ONLY = re.compile(
+    r"^(e-?mail|phone|mobile|tel|cell|contact|linkedin|github|aadha?a?r|pan|passport|dob"
+    r"|date\s+of\s+birth|upi)?(\s*(no|number|id)\.?)?$",
+    re.IGNORECASE,
+)
+
+
+def strip_contact_details(text: str) -> str:
+    """Remove pattern-detected contact details and IDs outright (no
+    placeholder), for text that is embedded, stored or used in a prompt with
+    no vault to restore it. On an affected line, "|"/"•"-separated parts left
+    empty or holding only a label ("Email:") are dropped; other lines are
+    untouched."""
+    if not text:
+        return text
+    marked = _replace_spans(text, lambda span: _MARK)
+    if marked == text:
+        return text
+    lines = []
+    for line in marked.split("\n"):
+        if _MARK not in line:
+            lines.append(line)
+            continue
+        kept = []
+        for part in _FIELD_SEPARATOR.split(line):
+            if _MARK in part:
+                part = _INNER_SEPARATOR_RUN.sub(", ", part.replace(_MARK, ","))
+                part = _EDGE_SEPARATORS.sub("", part)
+                if _LABEL_ONLY.match(part):
+                    continue
+            if part.strip():
+                kept.append(part.strip())
+        if kept:
+            lines.append(" | ".join(kept))
+    return "\n".join(lines)
+
+
+def _scrub_record(record: logging.LogRecord) -> None:
+    try:
+        message = record.getMessage()
+    except Exception:  # noqa: BLE001 — a malformed record must still be logged
+        return
+    cleaned = scrub(message)
+    if cleaned != message:
+        record.msg, record.args = cleaned, None
+    if record.exc_info and not record.exc_text:
+        # Formatters reuse exc_text, so the traceback text is scrubbed too.
+        record.exc_text = scrub(logging.Formatter().formatException(record.exc_info))
 
 
 class PiiLogFilter(logging.Filter):
@@ -533,13 +591,7 @@ class PiiLogFilter(logging.Filter):
     Attach to a handler to cover every logger that propagates to it."""
 
     def filter(self, record: logging.LogRecord) -> bool:
-        try:
-            message = record.getMessage()
-        except Exception:  # noqa: BLE001 — a malformed record must still be logged
-            return True
-        cleaned = scrub(message)
-        if cleaned != message:
-            record.msg, record.args = cleaned, None
+        _scrub_record(record)
         return True
 
 
@@ -549,3 +601,21 @@ def install_pii_log_filter(logger: logging.Logger | None = None) -> None:
     for handler in target.handlers:
         if not any(isinstance(f, PiiLogFilter) for f in handler.filters):
             handler.addFilter(PiiLogFilter())
+
+
+def install_pii_log_scrubbing() -> None:
+    """Scrub every log record this process creates, whichever handler (or
+    none, or one configured later by uvicorn) ends up emitting it. Idempotent;
+    call once at each process entry point."""
+    previous = logging.getLogRecordFactory()
+    if getattr(previous, "pii_scrubbing", False):
+        return
+
+    def factory(*args, **kwargs) -> logging.LogRecord:
+        record = previous(*args, **kwargs)
+        _scrub_record(record)
+        return record
+
+    factory.pii_scrubbing = True  # type: ignore[attr-defined]
+    logging.setLogRecordFactory(factory)
+    install_pii_log_filter()

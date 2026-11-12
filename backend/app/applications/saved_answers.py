@@ -35,6 +35,14 @@ CATALOGUE: tuple[tuple[str, str, str, bool], ...] = (
     ("compensation.expected_salary", "What are your salary expectations?", "screening", False),
     ("location.willing_to_relocate", "Are you willing to relocate?", "screening", False),
     ("availability.start_date", "When can you start?", "screening", False),
+    # Personal details the application profile has no field for. Government
+    # IDs (Aadhaar, PAN, passport) are deliberately not offered: they are
+    # left for the member to type on the form itself.
+    ("personal.middle_name", "Middle name", "personal", True),
+    ("personal.phone_country_code", "Phone country code", "personal", True),
+    ("personal.date_of_birth", "Date of birth", "personal", True),
+    ("address.street", "Street address", "personal", True),
+    ("personal.nationality", "Nationality", "personal", True),
     ("disclosure.gender", "Gender", "voluntary", True),
     ("disclosure.race_ethnicity", "Race / ethnicity", "voluntary", True),
     ("disclosure.veteran_status", "Veteran status", "voluntary", True),

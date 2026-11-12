@@ -32,6 +32,7 @@ from app.applications.answer_resolver import resolve_fields
 from app.applications.models import ApplicationField
 from app.applications.question_normalizer import normalize_question
 from app.applications.schema_extractor import extract_fields
+from app.core.pii_vault import strip_contact_details
 from app.models.db import (
     AgentRun,
     ApplicationSubmitApproval,
@@ -419,7 +420,9 @@ def _narrative_generator(user_id: uuid.UUID, task: ExtensionTask, budget: list[i
                 ).scalar_one_or_none()
                 if document is None:
                     return None
-                resume = (document.raw_text or "")[:6000]
+                # Contact lines are never needed to draft an answer; the
+                # gateway hides any personal value that is left.
+                resume = strip_contact_details(document.raw_text or "")[:6000]
             messages = [
                 SystemMessage(
                     content=(

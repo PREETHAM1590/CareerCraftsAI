@@ -36,6 +36,8 @@ class JobSearchTrigger(BaseModel):
     resume_id: str | None = None
     persona_id: str | None = None
     posted_within_days: int = Field(default=30, ge=1, le=90)
+    # None: India-first unless every searched place is outside India.
+    india_focus: bool | None = None
 
 
 async def run_job_search(
@@ -67,6 +69,7 @@ async def run_job_search(
             "work_mode": payload.work_mode,
             "platforms": payload.platforms,
             "remote": payload.remote,
+            "india_focus": payload.india_focus,
         },
         status="running",
         pending_action=None,
@@ -459,8 +462,9 @@ async def list_daily_search_users() -> list[str]:
 async def daily_search(payload: StatusCheckTrigger):
     """Daily automated job search based on user preferences.
 
-    Fetches user preferences from memory, searches all platforms + Google Jobs,
-    scores matches, and saves top results as applications.
+    Fetches user preferences from memory, runs the catalog-first job search
+    (India-first unless the saved places are all abroad), scores matches, and
+    saves top results as applications.
 
     Honors per-user opt-in: only members who turned on the daily search in
     Settings, have an active LLM model and saved target roles, and are not
@@ -475,8 +479,6 @@ async def daily_search(payload: StatusCheckTrigger):
     from app.core.model_router import get_llm
     from app.models.db import User as UserModel
     from app.models.db import UserPreferences
-    from app.services.indian_platforms_service import search_google_jobs
-    from app.services.job_platforms_service import scrape_all_platforms
 
     jobs_found = 0
     applications_queued = 0
@@ -538,73 +540,25 @@ async def daily_search(payload: StatusCheckTrigger):
 
                 users_searched += 1
 
-                # Every saved location is searched; one failing place must not
-                # drop the others.
-                all_jobs, seen_urls = [], set()
-                for location in locations:
-                    try:
-                        batch = await scrape_all_platforms(
-                            search_term=search_term,
-                            location=location,
-                            results_wanted=15,
-                            include_indian=True,
-                            llm=llm,
-                            user_id=user_id,
-                        )
-                        # Also search Google Jobs for company-only postings
-                        batch = list(batch) + list(
-                            await search_google_jobs(
-                                llm=llm,
-                                user_id=user_id,
-                                search_term=search_term,
-                                location=location,
-                                results_wanted=10,
-                            )
-                        )
-                    except Exception as exc:
-                        logger.warning(
-                            "Daily search for %s failed in %s: %s", user_id, location, exc
-                        )
-                        continue
-                    for job in batch:
-                        key = job.job_url or id(job)
-                        if key not in seen_urls:
-                            seen_urls.add(key)
-                            all_jobs.append(job)
-                jobs_found += len(all_jobs)
-
-                # Normalize once: shared with other users' searches via the
-                # catalog (never fails the run) and scored for this member.
+                # The same catalog-first, India-first search an interactive run
+                # uses (public boards + LinkedIn/Indeed India, written through
+                # to the shared catalog). Every saved location is searched.
                 from app.agents.job_search import _persist_saved_jobs
-                from app.services.job_catalog import write_through
                 from app.services.job_matching import rank_jobs
-                from app.services.job_search_service import _normalize
+                from app.services.job_search_service import search_all_platforms
 
-                found = [
-                    _normalize(
-                        {
-                            "url": j.job_url,
-                            "title": j.title,
-                            "company": j.company,
-                            "location": j.location,
-                            "description": j.description,
-                            "posted_at": j.date_posted,
-                            "salary_text": j.salary or "",
-                        },
-                        "scheduled",
-                    )
-                    for j in all_jobs
-                    if j.job_url
-                ]
-                await write_through(found, "scheduled")
+                query = {"titles": [search_term], "locations": locations, "max_results": 25}
+                # Honoured once user_preferences gains an india_focus column.
+                if isinstance(getattr(prefs_row, "india_focus", None), bool):
+                    query["india_focus"] = prefs_row.india_focus
+                found, notes = await search_all_platforms(query)
+                for note in notes:
+                    logger.info("Daily search for %s: %s", user_id, note)
+                jobs_found += len(found)
 
                 # Same scoring and save rule as an interactive search: every
                 # match >= SAVE_MIN_SCORE becomes a saved application.
-                matches, _ = await rank_jobs(
-                    user_id,
-                    {"titles": [search_term], "location": locations[0], "locations": locations},
-                    found,
-                )
+                matches, _ = await rank_jobs(user_id, {**query, "location": locations[0]}, found)
                 applications_queued += await asyncio.to_thread(
                     _persist_saved_jobs, user_id, matches
                 )

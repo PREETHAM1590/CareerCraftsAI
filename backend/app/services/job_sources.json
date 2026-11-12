@@ -304,14 +304,6 @@
     "policy": "official public board API; stop on denial; no browser fallback"
   },
   {
-    "id": "greenhouse:circleci",
-    "family": "greenhouse",
-    "tenant": "circleci",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
     "id": "greenhouse:buildkite",
     "family": "greenhouse",
     "tenant": "buildkite",
@@ -437,7 +429,9 @@
     "tenant": "groww",
     "permitted": true,
     "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
+    "policy": "official public board API; stop on denial; no browser fallback",
+    "company_country": "IN",
+    "company": "Groww"
   },
   {
     "id": "greenhouse:tcs",
@@ -491,22 +485,6 @@
     "id": "ashby:drata",
     "family": "ashby",
     "tenant": "drata",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "ashby:mercury",
-    "family": "ashby",
-    "tenant": "mercury",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "ashby:deel",
-    "family": "ashby",
-    "tenant": "deel",
     "permitted": true,
     "provenance": "existing repository employer catalog; validated health required",
     "policy": "official public board API; stop on denial; no browser fallback"
@@ -600,33 +578,9 @@
     "policy": "official public board API; stop on denial; no browser fallback"
   },
   {
-    "id": "ashby:frontapp",
-    "family": "ashby",
-    "tenant": "frontapp",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
     "id": "ashby:helpscout",
     "family": "ashby",
     "tenant": "helpscout",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "smartrecruiters:visa",
-    "family": "smartrecruiters",
-    "tenant": "visa",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "smartrecruiters:mastercard",
-    "family": "smartrecruiters",
-    "tenant": "mastercard",
     "permitted": true,
     "provenance": "existing repository employer catalog; validated health required",
     "policy": "official public board API; stop on denial; no browser fallback"
@@ -640,137 +594,9 @@
     "policy": "official public board API; stop on denial; no browser fallback"
   },
   {
-    "id": "smartrecruiters:siemens",
-    "family": "smartrecruiters",
-    "tenant": "siemens",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "smartrecruiters:sap",
-    "family": "smartrecruiters",
-    "tenant": "sap",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "smartrecruiters:spotify",
-    "family": "smartrecruiters",
-    "tenant": "spotify",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "smartrecruiters:redhat",
-    "family": "smartrecruiters",
-    "tenant": "redhat",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "smartrecruiters:vmware",
-    "family": "smartrecruiters",
-    "tenant": "vmware",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "smartrecruiters:citrix",
-    "family": "smartrecruiters",
-    "tenant": "citrix",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "smartrecruiters:nutanix",
-    "family": "smartrecruiters",
-    "tenant": "nutanix",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "smartrecruiters:deloitte",
-    "family": "smartrecruiters",
-    "tenant": "deloitte",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "smartrecruiters:pwc",
-    "family": "smartrecruiters",
-    "tenant": "pwc",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "smartrecruiters:ey",
-    "family": "smartrecruiters",
-    "tenant": "ey",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "smartrecruiters:accenture",
-    "family": "smartrecruiters",
-    "tenant": "accenture",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "smartrecruiters:pg",
-    "family": "smartrecruiters",
-    "tenant": "pg",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "smartrecruiters:nestle",
-    "family": "smartrecruiters",
-    "tenant": "nestle",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "smartrecruiters:pepsi",
-    "family": "smartrecruiters",
-    "tenant": "pepsi",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
     "id": "smartrecruiters:abbvie",
     "family": "smartrecruiters",
     "tenant": "abbvie",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "smartrecruiters:gilead",
-    "family": "smartrecruiters",
-    "tenant": "gilead",
-    "permitted": true,
-    "provenance": "existing repository employer catalog; validated health required",
-    "policy": "official public board API; stop on denial; no browser fallback"
-  },
-  {
-    "id": "smartrecruiters:vertex",
-    "family": "smartrecruiters",
-    "tenant": "vertex",
     "permitted": true,
     "provenance": "existing repository employer catalog; validated health required",
     "policy": "official public board API; stop on denial; no browser fallback"
@@ -1183,7 +1009,9 @@
     "permitted": true,
     "refresh_hours": 12,
     "provenance": "verified live 2026-11-11 via board_harvest probe (returned jobs)",
-    "policy": "official public board API; stop on denial; no browser fallback"
+    "policy": "official public board API; stop on denial; no browser fallback",
+    "company_country": "IN",
+    "company": "CRED"
   },
   {
     "id": "lever:matchgroup",
@@ -1201,7 +1029,9 @@
     "permitted": true,
     "refresh_hours": 12,
     "provenance": "verified live 2026-11-11 via board_harvest probe (returned jobs)",
-    "policy": "official public board API; stop on denial; no browser fallback"
+    "policy": "official public board API; stop on denial; no browser fallback",
+    "company_country": "IN",
+    "company": "Meesho"
   },
   {
     "id": "lever:palantir",
@@ -1607,5 +1437,911 @@
     "refresh_hours": 12,
     "provenance": "verified live 2026-11-12 via careersection searchjobs REST (712 jobs)",
     "policy": "public keyless career section; stop on denial; no browser fallback"
+  },
+  {
+    "id": "greenhouse:razorpaysoftwareprivatelimited",
+    "family": "greenhouse",
+    "tenant": "razorpaysoftwareprivatelimited",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "Razorpay",
+    "provenance": "verified live 2026-11-12 via boards-api (26 jobs, 23 in India or open to India)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "greenhouse:inmobi",
+    "family": "greenhouse",
+    "tenant": "inmobi",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "InMobi",
+    "provenance": "verified live 2026-11-12 via boards-api (77 jobs, 51 in India or open to India)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "greenhouse:glance",
+    "family": "greenhouse",
+    "tenant": "glance",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "Glance",
+    "provenance": "verified live 2026-11-12 via boards-api (35 jobs, 22 in India or open to India)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "greenhouse:highradius",
+    "family": "greenhouse",
+    "tenant": "highradius",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company": "HighRadius",
+    "provenance": "verified live 2026-11-12 via boards-api (72 jobs, 47 in India or open to India)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "greenhouse:druva",
+    "family": "greenhouse",
+    "tenant": "druva",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company": "Druva",
+    "provenance": "verified live 2026-11-12 via boards-api (27 jobs, 10 in India or open to India)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "greenhouse:cloudsek",
+    "family": "greenhouse",
+    "tenant": "cloudsek",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "CloudSEK",
+    "provenance": "verified live 2026-11-12 via boards-api (18 jobs, 13 in India or open to India)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "lever:paytm",
+    "family": "lever",
+    "tenant": "paytm",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "Paytm",
+    "provenance": "verified live 2026-11-12 via postings API (100 jobs, 94 in India or open to India)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "lever:zeta",
+    "family": "lever",
+    "tenant": "zeta",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "Zeta",
+    "provenance": "verified live 2026-11-12 via postings API (29 jobs, 24 in India or open to India)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "lever:mindtickle",
+    "family": "lever",
+    "tenant": "mindtickle",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "Mindtickle",
+    "provenance": "verified live 2026-11-12 via postings API (20 jobs, 18 in India or open to India)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "lever:hevodata",
+    "family": "lever",
+    "tenant": "hevodata",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "Hevo Data",
+    "provenance": "verified live 2026-11-12 via postings API (41 jobs, 40 in India or open to India)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "lever:fampay",
+    "family": "lever",
+    "tenant": "fampay",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "FamPay",
+    "provenance": "verified live 2026-11-12 via postings API (18 jobs, 18 in India or open to India)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "ashby:sarvam",
+    "family": "ashby",
+    "tenant": "sarvam",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "Sarvam AI",
+    "provenance": "verified live 2026-11-12 via posting-api (48 jobs, 48 in India or open to India)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "ashby:atlan",
+    "family": "ashby",
+    "tenant": "atlan",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "Atlan",
+    "provenance": "verified live 2026-11-12 via posting-api (7 jobs, 4 in India or open to India)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "ashby:headout",
+    "family": "ashby",
+    "tenant": "headout",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "Headout",
+    "provenance": "verified live 2026-11-12 via posting-api (27 jobs, 13 in India or open to India)",
+    "policy": "official public board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "smartrecruiters:freshworks-india",
+    "family": "smartrecruiters",
+    "tenant": "freshworks",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company_country": "IN",
+    "company": "Freshworks",
+    "provenance": "verified live 2026-11-12 via postings API with country=in (32 jobs, 32 in India or open to India)",
+    "policy": "official public posting API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "smartrecruiters:swiggy-india",
+    "family": "smartrecruiters",
+    "tenant": "swiggy",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company_country": "IN",
+    "company": "Swiggy",
+    "provenance": "verified live 2026-11-12 via postings API with country=in (100 jobs, 100 in India or open to India)",
+    "policy": "official public posting API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "smartrecruiters:unacademy-india",
+    "family": "smartrecruiters",
+    "tenant": "unacademy",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company_country": "IN",
+    "company": "Unacademy",
+    "provenance": "verified live 2026-11-12 via postings API with country=in (3 jobs, 3 in India or open to India)",
+    "policy": "official public posting API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "smartrecruiters:cars24-india",
+    "family": "smartrecruiters",
+    "tenant": "cars24",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company_country": "IN",
+    "company": "CARS24",
+    "provenance": "verified live 2026-11-12 via postings API with country=in (1 jobs, 1 in India or open to India)",
+    "policy": "official public posting API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "smartrecruiters:ixigo-india",
+    "family": "smartrecruiters",
+    "tenant": "ixigo",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company_country": "IN",
+    "company": "ixigo",
+    "provenance": "verified live 2026-11-12 via postings API with country=in (7 jobs, 7 in India or open to India)",
+    "policy": "official public posting API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "smartrecruiters:upstox-india",
+    "family": "smartrecruiters",
+    "tenant": "upstox",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company_country": "IN",
+    "company": "Upstox",
+    "provenance": "verified live 2026-11-12 via postings API with country=in (1 jobs, 1 in India or open to India)",
+    "policy": "official public posting API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "smartrecruiters:whatfix-india",
+    "family": "smartrecruiters",
+    "tenant": "whatfix",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company_country": "IN",
+    "company": "Whatfix",
+    "provenance": "verified live 2026-11-12 via postings API with country=in (1 jobs, 1 in India or open to India)",
+    "policy": "official public posting API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "smartrecruiters:lendingkart-india",
+    "family": "smartrecruiters",
+    "tenant": "lendingkart",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company_country": "IN",
+    "company": "Lendingkart",
+    "provenance": "verified live 2026-11-12 via postings API with country=in (1 jobs, 1 in India or open to India)",
+    "policy": "official public posting API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "smartrecruiters:interviewbit-india",
+    "family": "smartrecruiters",
+    "tenant": "interviewbit",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company_country": "IN",
+    "company": "Scaler (InterviewBit)",
+    "provenance": "verified live 2026-11-12 via postings API with country=in (1 jobs, 1 in India or open to India)",
+    "policy": "official public posting API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "smartrecruiters:boschgroup-india",
+    "family": "smartrecruiters",
+    "tenant": "boschgroup",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company": "Bosch",
+    "provenance": "verified live 2026-11-12 via postings API with country=in (100 jobs, 100 in India or open to India)",
+    "policy": "official public posting API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "smartrecruiters:experian-india",
+    "family": "smartrecruiters",
+    "tenant": "experian",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company": "Experian",
+    "provenance": "verified live 2026-11-12 via postings API with country=in (36 jobs, 36 in India or open to India)",
+    "policy": "official public posting API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "smartrecruiters:grab-india",
+    "family": "smartrecruiters",
+    "tenant": "grab",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company": "Grab",
+    "provenance": "verified live 2026-11-12 via postings API with country=in (10 jobs, 10 in India or open to India)",
+    "policy": "official public posting API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "smartrecruiters:servicenow-india",
+    "family": "smartrecruiters",
+    "tenant": "servicenow",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company": "ServiceNow",
+    "provenance": "verified live 2026-11-12 via postings API with country=in (79 jobs, 79 in India or open to India)",
+    "policy": "official public posting API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:nvidia-nvidiaexternalcareersite-india",
+    "family": "workday",
+    "tenant": "nvidia.wd5.myworkdayjobs.com|nvidia|NVIDIAExternalCareerSite",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company": "NVIDIA",
+    "provenance": "verified live 2026-11-12 via CXS jobs endpoint with the India location facet (20 jobs, 20 in India or open to India)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:adobe-external_experienced-india",
+    "family": "workday",
+    "tenant": "adobe.wd5.myworkdayjobs.com|adobe|external_experienced",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company": "Adobe",
+    "provenance": "verified live 2026-11-12 via CXS jobs endpoint with the India location facet (20 jobs, 20 in India or open to India)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:salesforce-external_career_site-india",
+    "family": "workday",
+    "tenant": "salesforce.wd12.myworkdayjobs.com|salesforce|External_Career_Site",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company": "Salesforce",
+    "provenance": "verified live 2026-11-12 via CXS jobs endpoint with the India location facet (20 jobs, 20 in India or open to India)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:target-targetcareers-india",
+    "family": "workday",
+    "tenant": "target.wd5.myworkdayjobs.com|target|targetcareers",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company": "Target",
+    "provenance": "verified live 2026-11-12 via CXS jobs endpoint with the India location facet (20 jobs, 20 in India or open to India)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:intel-external-india",
+    "family": "workday",
+    "tenant": "intel.wd1.myworkdayjobs.com|intel|External",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company": "Intel",
+    "provenance": "verified live 2026-11-12 via CXS jobs endpoint with the India location facet (20 jobs, 20 in India or open to India)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:mastercard-corporatecareers-india",
+    "family": "workday",
+    "tenant": "mastercard.wd1.myworkdayjobs.com|mastercard|CorporateCareers",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company": "Mastercard",
+    "provenance": "verified live 2026-11-12 via CXS jobs endpoint with the India location facet (20 jobs, 20 in India or open to India)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:cisco-cisco_careers-india",
+    "family": "workday",
+    "tenant": "cisco.wd5.myworkdayjobs.com|cisco|Cisco_Careers",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company": "Cisco",
+    "provenance": "verified live 2026-11-12 via CXS jobs endpoint with the India location facet (20 jobs, 20 in India or open to India)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:wf-wellsfargojobs-india",
+    "family": "workday",
+    "tenant": "wellsfargo.wd1.myworkdayjobs.com|wf|WellsFargoJobs",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company": "Wells Fargo",
+    "provenance": "verified live 2026-11-12 via CXS jobs endpoint with the India location facet (20 jobs, 20 in India or open to India)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:accenture-accenturecareers-india",
+    "family": "workday",
+    "tenant": "accenture.wd103.myworkdayjobs.com|accenture|AccentureCareers",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company": "Accenture",
+    "provenance": "verified live 2026-11-12 via CXS jobs endpoint with the India location facet (20 jobs, 20 in India or open to India)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:paypal-jobs-india",
+    "family": "workday",
+    "tenant": "paypal.wd1.myworkdayjobs.com|paypal|jobs",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company": "PayPal",
+    "provenance": "verified live 2026-11-12 via CXS jobs endpoint with the India location facet (19 jobs, 19 in India or open to India)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:workday-workday-india",
+    "family": "workday",
+    "tenant": "workday.wd5.myworkdayjobs.com|workday|Workday",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company": "Workday",
+    "provenance": "verified live 2026-11-12 via CXS jobs endpoint with the India location facet (20 jobs, 20 in India or open to India)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:autodesk-ext-india",
+    "family": "workday",
+    "tenant": "autodesk.wd1.myworkdayjobs.com|autodesk|Ext",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company": "Autodesk",
+    "provenance": "verified live 2026-11-12 via CXS jobs endpoint with the India location facet (1 jobs, 1 in India or open to India)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:broadcom-external_career-india",
+    "family": "workday",
+    "tenant": "broadcom.wd1.myworkdayjobs.com|broadcom|External_Career",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company": "Broadcom",
+    "provenance": "verified live 2026-11-12 via CXS jobs endpoint with the India location facet (1 jobs, 1 in India or open to India)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:hpe-jobsathpe-india",
+    "family": "workday",
+    "tenant": "hpe.wd5.myworkdayjobs.com|hpe|Jobsathpe",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company": "HPE",
+    "provenance": "verified live 2026-11-12 via CXS jobs endpoint with the India location facet (20 jobs, 20 in India or open to India)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:crowdstrike-crowdstrikecareers-india",
+    "family": "workday",
+    "tenant": "crowdstrike.wd5.myworkdayjobs.com|crowdstrike|crowdstrikecareers",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company": "CrowdStrike",
+    "provenance": "verified live 2026-11-12 via CXS jobs endpoint with the India location facet (20 jobs, 20 in India or open to India)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:blackrock-blackrock_professional-india",
+    "family": "workday",
+    "tenant": "blackrock.wd1.myworkdayjobs.com|blackrock|BlackRock_Professional",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company": "BlackRock",
+    "provenance": "verified live 2026-11-12 via CXS jobs endpoint with the India location facet (20 jobs, 20 in India or open to India)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:pg-1000-india",
+    "family": "workday",
+    "tenant": "pg.wd5.myworkdayjobs.com|pg|1000",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company": "Procter & Gamble",
+    "provenance": "verified live 2026-11-12 via CXS jobs endpoint with the India location facet (20 jobs, 20 in India or open to India)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:micron-external-india",
+    "family": "workday",
+    "tenant": "micron.wd1.myworkdayjobs.com|micron|External",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company": "Micron",
+    "provenance": "verified live 2026-11-12 via CXS jobs endpoint with the India location facet (20 jobs, 20 in India or open to India)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:analogdevices-external-india",
+    "family": "workday",
+    "tenant": "analogdevices.wd1.myworkdayjobs.com|analogdevices|External",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company": "Analog Devices",
+    "provenance": "verified live 2026-11-12 via CXS jobs endpoint with the India location facet (20 jobs, 20 in India or open to India)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:kla-search-india",
+    "family": "workday",
+    "tenant": "kla.wd1.myworkdayjobs.com|kla|Search",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company": "KLA",
+    "provenance": "verified live 2026-11-12 via CXS jobs endpoint with the India location facet (20 jobs, 20 in India or open to India)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:hp-externalcareersite-india",
+    "family": "workday",
+    "tenant": "hp.wd5.myworkdayjobs.com|hp|ExternalCareerSite",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company": "HP",
+    "provenance": "verified live 2026-11-12 via CXS jobs endpoint with the India location facet (20 jobs, 20 in India or open to India)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:ms-external-india",
+    "family": "workday",
+    "tenant": "ms.wd5.myworkdayjobs.com|ms|External",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company": "Morgan Stanley",
+    "provenance": "verified live 2026-11-12 via CXS jobs endpoint with the India location facet (20 jobs, 20 in India or open to India)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:db-dbwebsite-india",
+    "family": "workday",
+    "tenant": "db.wd3.myworkdayjobs.com|db|DBWebSite",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company": "Deutsche Bank",
+    "provenance": "verified live 2026-11-12 via CXS jobs endpoint with the India location facet (19 jobs, 19 in India or open to India)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:astrazeneca-careers-india",
+    "family": "workday",
+    "tenant": "astrazeneca.wd3.myworkdayjobs.com|astrazeneca|Careers",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company": "AstraZeneca",
+    "provenance": "verified live 2026-11-12 via CXS jobs endpoint with the India location facet (20 jobs, 20 in India or open to India)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "workday:unilever-unilever_experienced_professionals-india",
+    "family": "workday",
+    "tenant": "unilever.wd3.myworkdayjobs.com|unilever|Unilever_Experienced_Professionals",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "company": "Unilever",
+    "provenance": "verified live 2026-11-12 via CXS jobs endpoint with the India location facet (10 jobs, 10 in India or open to India)",
+    "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "keka:fynd",
+    "family": "keka",
+    "tenant": "fynd",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "Fynd",
+    "provenance": "verified live 2026-11-12 via careers/api/jobs/default/active (57 jobs, 54 in India or open to India)",
+    "policy": "public careers listing endpoint (robots.txt allows /careers); stop on denial; no browser fallback"
+  },
+  {
+    "id": "keka:marutitech",
+    "family": "keka",
+    "tenant": "marutitech",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "Maruti Techlabs",
+    "provenance": "verified live 2026-11-12 via careers/api/jobs/default/active (3 jobs, 3 in India or open to India)",
+    "policy": "public careers listing endpoint (robots.txt allows /careers); stop on denial; no browser fallback"
+  },
+  {
+    "id": "keka:ihl",
+    "family": "keka",
+    "tenant": "ihl",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "IHL",
+    "provenance": "verified live 2026-11-12 via careers/api/jobs/default/active (34 jobs, 34 in India or open to India)",
+    "policy": "public careers listing endpoint (robots.txt allows /careers); stop on denial; no browser fallback"
+  },
+  {
+    "id": "keka:rtscorp",
+    "family": "keka",
+    "tenant": "rtscorp",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "RTS",
+    "provenance": "verified live 2026-11-12 via careers/api/jobs/default/active (6 jobs, 6 in India or open to India)",
+    "policy": "public careers listing endpoint (robots.txt allows /careers); stop on denial; no browser fallback"
+  },
+  {
+    "id": "keka:moschip",
+    "family": "keka",
+    "tenant": "moschip",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "MosChip",
+    "provenance": "verified live 2026-11-12 via careers/api/jobs/default/active (32 jobs, 28 in India or open to India)",
+    "policy": "public careers listing endpoint (robots.txt allows /careers); stop on denial; no browser fallback"
+  },
+  {
+    "id": "keka:comprinno",
+    "family": "keka",
+    "tenant": "comprinno",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "Comprinno",
+    "provenance": "verified live 2026-11-12 via careers/api/jobs/default/active (29 jobs, 27 in India or open to India)",
+    "policy": "public careers listing endpoint (robots.txt allows /careers); stop on denial; no browser fallback"
+  },
+  {
+    "id": "keka:coditude",
+    "family": "keka",
+    "tenant": "coditude",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "Coditude",
+    "provenance": "verified live 2026-11-12 via careers/api/jobs/default/active (15 jobs, 15 in India or open to India)",
+    "policy": "public careers listing endpoint (robots.txt allows /careers); stop on denial; no browser fallback"
+  },
+  {
+    "id": "kula:cashfree",
+    "family": "kula",
+    "tenant": "cashfree",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "Cashfree Payments",
+    "provenance": "verified live 2026-11-12 via careers.kula.ai board page (30 jobs, 30 in India or open to India)",
+    "policy": "public keyless board page; stop on denial; no browser fallback"
+  },
+  {
+    "id": "kula:clevertap",
+    "family": "kula",
+    "tenant": "clevertap",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "CleverTap",
+    "provenance": "verified live 2026-11-12 via careers.kula.ai board page (17 jobs, 13 in India or open to India)",
+    "policy": "public keyless board page; stop on denial; no browser fallback"
+  },
+  {
+    "id": "kula:saas-labs",
+    "family": "kula",
+    "tenant": "saas-labs",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "SaaS Labs",
+    "provenance": "verified live 2026-11-12 via careers.kula.ai board page (18 jobs, 18 in India or open to India)",
+    "policy": "public keyless board page; stop on denial; no browser fallback"
+  },
+  {
+    "id": "kula:weworkindia",
+    "family": "kula",
+    "tenant": "weworkindia",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "WeWork India",
+    "provenance": "verified live 2026-11-12 via careers.kula.ai board page (55 jobs, 55 in India or open to India)",
+    "policy": "public keyless board page; stop on denial; no browser fallback"
+  },
+  {
+    "id": "kula:greylabs",
+    "family": "kula",
+    "tenant": "greylabs",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "GreyLabs AI",
+    "provenance": "verified live 2026-11-12 via careers.kula.ai board page (25 jobs, 25 in India or open to India)",
+    "policy": "public keyless board page; stop on denial; no browser fallback"
+  },
+  {
+    "id": "kula:neysa",
+    "family": "kula",
+    "tenant": "neysa",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "Neysa",
+    "provenance": "verified live 2026-11-12 via careers.kula.ai board page (32 jobs, 32 in India or open to India)",
+    "policy": "public keyless board page; stop on denial; no browser fallback"
+  },
+  {
+    "id": "kula:digantara",
+    "family": "kula",
+    "tenant": "digantara",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "Digantara",
+    "provenance": "verified live 2026-11-12 via careers.kula.ai board page (41 jobs, 37 in India or open to India)",
+    "policy": "public keyless board page; stop on denial; no browser fallback"
+  },
+  {
+    "id": "kula:useready",
+    "family": "kula",
+    "tenant": "useready",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "USEReady",
+    "provenance": "verified live 2026-11-12 via careers.kula.ai board page (13 jobs, 13 in India or open to India)",
+    "policy": "public keyless board page; stop on denial; no browser fallback"
+  },
+  {
+    "id": "kula:plumhq",
+    "family": "kula",
+    "tenant": "plumhq",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "Plum",
+    "provenance": "verified live 2026-11-12 via careers.kula.ai board page (23 jobs, 23 in India or open to India)",
+    "policy": "public keyless board page; stop on denial; no browser fallback"
+  },
+  {
+    "id": "kula:zamp-ai",
+    "family": "kula",
+    "tenant": "zamp-ai",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "Zamp",
+    "provenance": "verified live 2026-11-12 via careers.kula.ai board page (13 jobs, 11 in India or open to India)",
+    "policy": "public keyless board page; stop on denial; no browser fallback"
+  },
+  {
+    "id": "kula:slice",
+    "family": "kula",
+    "tenant": "slice",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "slice",
+    "provenance": "verified live 2026-11-12 via careers.kula.ai board page (34 jobs, 34 in India or open to India)",
+    "policy": "public keyless board page; stop on denial; no browser fallback"
+  },
+  {
+    "id": "kula:hire",
+    "family": "kula",
+    "tenant": "hire",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company": "Kula",
+    "provenance": "verified live 2026-11-12 via careers.kula.ai board page (4 jobs, 2 in India or open to India)",
+    "policy": "public keyless board page; stop on denial; no browser fallback"
+  },
+  {
+    "id": "zohorecruit:in-hirewala",
+    "family": "zohorecruit",
+    "tenant": "in:hirewala",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "Hirewala",
+    "provenance": "verified live 2026-11-12 via /jobs/Careers listing page (1 jobs, 1 in India or open to India)",
+    "policy": "public keyless board page (robots.txt allows /jobs); stop on denial; no browser fallback"
+  },
+  {
+    "id": "zohorecruit:in-content-whale-in",
+    "family": "zohorecruit",
+    "tenant": "in:content-whale-in",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "Content Whale",
+    "provenance": "verified live 2026-11-12 via /jobs/Careers listing page (1 jobs, 1 in India or open to India)",
+    "policy": "public keyless board page (robots.txt allows /jobs); stop on denial; no browser fallback"
+  },
+  {
+    "id": "zohorecruit:in-wynploy",
+    "family": "zohorecruit",
+    "tenant": "in:wynploy",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "Wynploy",
+    "provenance": "verified live 2026-11-12 via /jobs/Careers listing page (23 jobs, 22 in India or open to India)",
+    "policy": "public keyless board page (robots.txt allows /jobs); stop on denial; no browser fallback"
+  },
+  {
+    "id": "himalayas:india",
+    "family": "himalayas",
+    "permitted": true,
+    "refresh_hours": 12,
+    "country": "IN",
+    "provenance": "verified live 2026-11-12 via /jobs/api/search?country=India (20 jobs, 20 in India or open to India)",
+    "policy": "official public API, country search; credit Himalayas; stop on denial"
+  },
+  {
+    "id": "freshteam:creditsaisonin-talent",
+    "family": "freshteam",
+    "tenant": "creditsaisonin-talent",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "Credit Saison India",
+    "provenance": "verified live 2026-11-12 via /jobs listing page (59 jobs, 59 in India or open to India)",
+    "policy": "public keyless board page (robots.txt allows /jobs); stop on denial; no browser fallback"
+  },
+  {
+    "id": "freshteam:indusnet",
+    "family": "freshteam",
+    "tenant": "indusnet",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "Indus Net Technologies",
+    "provenance": "verified live 2026-11-12 via /jobs listing page (27 jobs, 26 in India or open to India)",
+    "policy": "public keyless board page (robots.txt allows /jobs); stop on denial; no browser fallback"
+  },
+  {
+    "id": "freshteam:thebetterindia",
+    "family": "freshteam",
+    "tenant": "thebetterindia",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "The Better India",
+    "provenance": "verified live 2026-11-12 via /jobs listing page (5 jobs, 5 in India or open to India)",
+    "policy": "public keyless board page (robots.txt allows /jobs); stop on denial; no browser fallback"
+  },
+  {
+    "id": "freshteam:zolve",
+    "family": "freshteam",
+    "tenant": "zolve",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "Zolve",
+    "provenance": "verified live 2026-11-12 via /jobs listing page (19 jobs, 19 in India or open to India)",
+    "policy": "public keyless board page (robots.txt allows /jobs); stop on denial; no browser fallback"
+  },
+  {
+    "id": "freshteam:cashflo-talent",
+    "family": "freshteam",
+    "tenant": "cashflo-talent",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "CashFlo",
+    "provenance": "verified live 2026-11-12 via /jobs listing page (33 jobs, 33 in India or open to India)",
+    "policy": "public keyless board page (robots.txt allows /jobs); stop on denial; no browser fallback"
+  },
+  {
+    "id": "freshteam:ninjacart",
+    "family": "freshteam",
+    "tenant": "ninjacart",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "Ninjacart",
+    "provenance": "verified live 2026-11-12 via /jobs listing page (23 jobs, 23 in India or open to India)",
+    "policy": "public keyless board page (robots.txt allows /jobs); stop on denial; no browser fallback"
+  },
+  {
+    "id": "freshteam:sarvm",
+    "family": "freshteam",
+    "tenant": "sarvm",
+    "permitted": true,
+    "refresh_hours": 12,
+    "company_country": "IN",
+    "company": "SarvM.AI",
+    "provenance": "verified live 2026-11-12 via /jobs listing page (5 jobs, 5 in India or open to India)",
+    "policy": "public keyless board page (robots.txt allows /jobs); stop on denial; no browser fallback"
   }
 ]

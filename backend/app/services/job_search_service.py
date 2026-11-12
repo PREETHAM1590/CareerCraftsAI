@@ -359,7 +359,9 @@ async def search_all_platforms(
     relevant = [job for job in jobs if matches_query(job, query, india=False)]
     kept, hidden = india_focus.split(relevant, query)
     # Catalog rows are already India-filtered; count what it hid too.
-    hidden_total = len({job.get("job_id") for job in hidden} | set(stats.get("india_hidden_ids", [])))
+    hidden_total = len(
+        {job.get("job_id") for job in hidden} | set(stats.get("india_hidden_ids", []))
+    )
     return kept, warnings + _explain(query, kept, hidden_total)
 
 

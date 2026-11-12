@@ -1,417 +1,132 @@
 """
-indian_platforms_service.py — Browser-use scrapers for Indian job platforms.
+indian_platforms_service.py — status of Indian job boards that cannot be read.
 
-Platforms: Naukri, Foundit, Instahyre, Cutshort, Hirect, Internshala,
-           Shine, iimjobs, Freshersworld.
-
-Uses browser-use (AI-driven Playwright) to scrape job listings from platforms
-that JobSpy doesn't support natively.
+Naukri, Foundit, Instahyre, Cutshort, Shine, Internshala and the rest offer no
+public listing API. Reading them means scraping behind bot protection or a
+login, which their terms forbid, and server-side browser automation is retired
+(see browser_control_service). Instead of returning a silent empty list, every
+entry point here reports the board as unavailable with the reason, and points
+to what does cover Indian employers: the public catalog (Greenhouse, Lever,
+Ashby, SmartRecruiters, Workday India boards, Keka, Freshteam, Kula, Zoho
+Recruit), Himalayas' India feed, and LinkedIn/Indeed India via JobSpy.
 """
 
-import asyncio
+from __future__ import annotations
+
 import logging
-import secrets
-from urllib.parse import quote_plus
 
-from langchain_core.language_models import BaseChatModel
-
-from app.core.event_bus import emit
-from app.services.browser_control_service import (
-    run_browser_task_with_captcha_retry as run_browser_task,
-)
 from app.services.job_platforms_service import JobListing
 
 logger = logging.getLogger(__name__)
-_RANDOM = secrets.SystemRandom()
 
-# Platform search URL templates — {query} and {location} are replaced at runtime
-INDIAN_PLATFORMS = {
-    "naukri": {
-        "name": "Naukri",
-        "search_url": "https://www.naukri.com/{query}-jobs-in-{location}",
-        "url": "https://www.naukri.com",
-    },
+# key -> (display name, home page, why it is not read)
+_NO_API = "no public listing API; terms forbid automated access"
+INDIAN_PLATFORMS: dict[str, dict[str, str]] = {
+    "naukri": {"name": "Naukri", "url": "https://www.naukri.com", "reason": _NO_API},
     "foundit": {
-        "name": "Foundit",
-        "search_url": "https://www.foundit.in/srp/results?query={query}&locations={location}",
+        "name": "Foundit (Monster India)",
         "url": "https://www.foundit.in",
+        "reason": _NO_API + "; bot protection (HTTP 403)",
     },
     "instahyre": {
         "name": "Instahyre",
-        "search_url": "https://www.instahyre.com/search-jobs/?search={query}&location={location}",
         "url": "https://www.instahyre.com",
+        "reason": "only an undocumented internal API; site behind a bot challenge",
     },
-    "cutshort": {
-        "name": "Cutshort",
-        "search_url": "https://cutshort.io/jobs?q={query}&city={location}",
-        "url": "https://cutshort.io",
-    },
-    "hirect": {
-        "name": "Hirect",
-        "search_url": "https://www.hirect.in/jobs?keyword={query}&location={location}",
-        "url": "https://www.hirect.in",
-    },
+    "cutshort": {"name": "Cutshort", "url": "https://cutshort.io", "reason": _NO_API},
+    "hirect": {"name": "Hirect", "url": "https://www.hirect.in", "reason": "app-only; " + _NO_API},
     "internshala": {
         "name": "Internshala",
-        "search_url": "https://internshala.com/jobs/{query}-jobs-in-{location}",
         "url": "https://internshala.com",
+        "reason": "robots.txt disallows search and /api/; " + _NO_API,
     },
-    "shine": {
-        "name": "Shine",
-        "search_url": "https://www.shine.com/job-search/{query}-jobs-in-{location}",
-        "url": "https://www.shine.com",
-    },
-    "iimjobs": {
-        "name": "iimjobs",
-        "search_url": "https://www.iimjobs.com/search?q={query}&l={location}",
-        "url": "https://www.iimjobs.com",
-    },
+    "shine": {"name": "Shine", "url": "https://www.shine.com", "reason": _NO_API},
+    "iimjobs": {"name": "iimjobs", "url": "https://www.iimjobs.com", "reason": _NO_API},
+    "hirist": {"name": "Hirist", "url": "https://www.hirist.tech", "reason": _NO_API},
     "timesjobs": {
         "name": "TimesJobs",
-        "search_url": "https://www.timesjobs.com/candidate/job-search.html?searchType=personalizedSearch&txtKeywords={query}&txtLocation={location}",
         "url": "https://www.timesjobs.com",
+        "reason": "unreachable from the server; " + _NO_API,
     },
-    "apna": {
-        "name": "Apna",
-        "search_url": "https://apna.co/jobs?search={query}&location={location}",
-        "url": "https://apna.co",
-    },
-    "techgig": {
-        "name": "TechGig",
-        "search_url": "https://www.techgig.com/job-search?txtKeyword={query}&txtLocation={location}",
-        "url": "https://www.techgig.com",
-    },
-    "unstop": {
-        "name": "Unstop",
-        "search_url": "https://unstop.com/jobs?searchTerm={query}",
-        "url": "https://unstop.com",
-    },
+    "apna": {"name": "Apna", "url": "https://apna.co", "reason": _NO_API},
+    "techgig": {"name": "TechGig", "url": "https://www.techgig.com", "reason": _NO_API},
+    "unstop": {"name": "Unstop", "url": "https://unstop.com", "reason": _NO_API},
     "ambitionbox": {
         "name": "AmbitionBox Jobs",
-        "search_url": "https://www.ambitionbox.com/jobs/{query}-jobs-in-{location}-prf",
         "url": "https://www.ambitionbox.com",
-    },
-    "hirist": {
-        "name": "Hirist",
-        "search_url": "https://www.hirist.tech/search/{query}",
-        "url": "https://www.hirist.tech",
+        "reason": _NO_API,
     },
     "freshersworld": {
         "name": "Freshersworld",
-        "search_url": "https://www.freshersworld.com/jobs?q={query}&city={location}",
         "url": "https://www.freshersworld.com",
+        "reason": _NO_API,
     },
 }
-
-# Extraction prompt template for the browser-use agent
-_EXTRACT_PROMPT = """Go to {url}.
-Wait for job listings to load. Extract up to {limit} job listings visible on the page.
-For each job, extract: title, company name, location, job URL, and a brief description (first 200 chars).
-Return the results as a structured list in this exact format (one per line):
-TITLE: <title> | COMPANY: <company> | LOCATION: <location> | URL: <url> | DESC: <description>
-
-If there are no results, return "NO_RESULTS".
-Do NOT click on individual jobs — only extract what's visible on the search results page."""
+COVERAGE = (
+    "Indian employers are searched through their public careers boards and "
+    "LinkedIn/Indeed India instead"
+)
 
 
-async def _human_delay():
-    """Random delay to mimic human browsing (2-5s)."""
-    await asyncio.sleep(_RANDOM.uniform(2.0, 5.0))
+class PlatformUnavailable(RuntimeError):
+    """The board cannot be read lawfully from the server."""
+
+
+def unavailable_notice(platforms: list[str] | None = None) -> str:
+    names = [
+        INDIAN_PLATFORMS[p]["name"] for p in platforms or INDIAN_PLATFORMS if p in INDIAN_PLATFORMS
+    ]
+    return f"{', '.join(names)} not searched (no public API). {COVERAGE}."
+
+
+def platform_status() -> list[dict[str, str | bool]]:
+    """Per-board availability, for status pages and the source health API."""
+    return [
+        {"key": key, "name": p["name"], "url": p["url"], "available": False, "reason": p["reason"]}
+        for key, p in INDIAN_PLATFORMS.items()
+    ]
 
 
 async def scrape_indian_platform(
-    llm: BaseChatModel,
-    user_id: str,
-    platform: str,
-    search_term: str,
-    location: str = "bangalore",
+    llm=None,
+    user_id: str | None = None,
+    platform: str = "naukri",
+    search_term: str = "",
+    location: str = "",
     results_wanted: int = 10,
 ) -> list[JobListing]:
-    """Scrape jobs from a single Indian platform using browser-use.
-
-    Args:
-        llm: LLM for browser agent decision-making
-        user_id: User ID for persistent browser session
-        platform: Platform key (e.g., "naukri", "foundit")
-        search_term: Job search keywords
-        location: City/location filter
-        results_wanted: Max results to extract
-
-    Returns:
-        List of JobListing objects
-    """
-    if platform not in INDIAN_PLATFORMS:
-        logger.warning("Unknown platform: %s", platform)
-        return []
-
-    config = INDIAN_PLATFORMS[platform]
-    query_slug = search_term.lower().replace(" ", "-")
-    location_slug = location.lower().replace(" ", "-")
-    search_url = config["search_url"].format(query=query_slug, location=location_slug)
-
-    task = _EXTRACT_PROMPT.format(url=search_url, limit=results_wanted)
-
-    try:
-        await _human_delay()
-        raw_text = await run_browser_task(llm, task, user_id, max_steps=10)
-        return _parse_extraction_result(raw_text, platform)
-    except Exception as exc:
-        logger.error("Failed to scrape %s: %s", platform, exc)
-        return []
-
-
-def _parse_extraction_result(raw_text: str, platform: str) -> list[JobListing]:
-    """Parse the structured text output from browser-use agent into JobListing objects."""
-    if not raw_text or "NO_RESULTS" in raw_text:
-        return []
-
-    jobs: list[JobListing] = []
-    for line in raw_text.strip().split("\n"):
-        line = line.strip()
-        if not line or "TITLE:" not in line:
-            continue
-        try:
-            parts = {}
-            for segment in line.split(" | "):
-                if ":" in segment:
-                    key, val = segment.split(":", 1)
-                    parts[key.strip().upper()] = val.strip()
-
-            if parts.get("TITLE"):
-                jobs.append(
-                    JobListing(
-                        title=parts.get("TITLE", ""),
-                        company=parts.get("COMPANY", "Unknown"),
-                        location=parts.get("LOCATION", ""),
-                        description=parts.get("DESC", "")[:2000],
-                        job_url=parts.get("URL", ""),
-                        platform=platform,
-                    )
-                )
-        except Exception as exc:
-            logger.debug("Skipping unparsable %s job line: %s", platform, exc)
-            continue
-
-    return jobs
-
-
-def _job_from_card_text(raw_text: str, fallback_url: str) -> JobListing | None:
-    lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
-    lines = [line for line in lines if line.lower() not in {"new", "via linkedin", "via indeed"}]
-    if len(lines) < 2:
-        return None
-
-    title = lines[0]
-    company = lines[1] if len(lines) > 1 else "Unknown"
-    location = lines[2] if len(lines) > 2 else ""
-    description = " ".join(lines[3:8])[:2000]
-    return JobListing(
-        title=title,
-        company=company,
-        location=location,
-        description=description,
-        job_url=fallback_url,
-        platform="google_jobs",
-    )
-
-
-async def _search_google_jobs_playwright(
-    user_id: str,
-    search_term: str,
-    location: str,
-    results_wanted: int,
-    live_browser: bool,
-    run_id: str | None,
-) -> list[JobListing]:
-    try:
-        from playwright.async_api import async_playwright
-    except ImportError as exc:
-        logger.error("Playwright is required for Google Jobs fallback: %s", exc)
-        return []
-
-    from app.services.browser_control_service import BROWSER_DATA_DIR
-
-    query = quote_plus(f"{search_term} jobs in {location}")
-    url = f"https://www.google.com/search?q={query}&ibp=htl;jobs"
-    user_dir = BROWSER_DATA_DIR / user_id / "google_jobs"
-    user_dir.mkdir(parents=True, exist_ok=True)
-
-    if run_id:
-        emit(
-            run_id,
-            "browser",
-            {
-                "phase": "navigate",
-                "mode": "visible" if live_browser else "headless",
-                "url": url,
-                "task": "Search Google Jobs with Playwright",
-            },
-        )
-
-    async with async_playwright() as p:
-        context = await p.chromium.launch_persistent_context(
-            user_data_dir=str(user_dir),
-            headless=not live_browser,
-            viewport={"width": 1366, "height": 900},
-        )
-        page = context.pages[0] if context.pages else await context.new_page()
-        try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            await page.wait_for_timeout(5000 if live_browser else 2500)
-            if run_id:
-                emit(run_id, "browser", {"phase": "extracting", "source": "google_jobs"})
-
-            jobs: list[JobListing] = []
-            cards = page.locator('div[role="treeitem"]')
-            count = await cards.count()
-            for index in range(min(count, results_wanted)):
-                try:
-                    raw = await cards.nth(index).inner_text(timeout=1500)
-                except Exception as exc:
-                    logger.debug("Skipping Google Jobs card %s: %s", index, exc)
-                    continue
-                job = _job_from_card_text(raw, url)
-                if job:
-                    jobs.append(job)
-
-            if run_id:
-                emit(
-                    run_id,
-                    "browser",
-                    {"phase": "extracted", "source": "google_jobs", "count": len(jobs)},
-                )
-            if live_browser:
-                await page.wait_for_timeout(5000)
-            return jobs
-        except Exception as exc:
-            logger.error("Google Jobs Playwright fallback failed: %s", exc)
-            if run_id:
-                emit(
-                    run_id,
-                    "browser",
-                    {
-                        "phase": "failed",
-                        "source": "google_jobs",
-                        "error": "Google Jobs search failed",
-                    },
-                )
-            return []
-        finally:
-            await context.close()
-            if run_id:
-                emit(run_id, "browser", {"phase": "closed", "source": "google_jobs"})
+    """Always raises PlatformUnavailable with the reason the board is not read."""
+    info = INDIAN_PLATFORMS.get(platform)
+    if info is None:
+        raise PlatformUnavailable(f"Unknown platform: {platform}")
+    raise PlatformUnavailable(f"{info['name']} is not searched: {info['reason']}")
 
 
 async def scrape_all_indian_platforms(
-    llm: BaseChatModel,
-    user_id: str,
-    search_term: str,
-    location: str = "bangalore",
+    llm=None,
+    user_id: str | None = None,
+    search_term: str = "",
+    location: str = "",
     results_wanted: int = 10,
     platforms: list[str] | None = None,
 ) -> list[JobListing]:
-    """Scrape jobs from multiple Indian platforms concurrently.
-
-    Args:
-        llm: LLM for browser agent
-        user_id: User ID
-        search_term: Job keywords
-        location: City filter
-        results_wanted: Max results per platform
-        platforms: Specific platforms to scrape (default: all)
-
-    Returns:
-        Combined list of JobListing from all platforms
-    """
-    target = platforms or list(INDIAN_PLATFORMS.keys())
-    tasks = [
-        scrape_indian_platform(llm, user_id, p, search_term, location, results_wanted)
-        for p in target
-    ]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-
-    all_jobs: list[JobListing] = []
-    for i, result in enumerate(results):
-        if isinstance(result, Exception):
-            logger.warning("Platform %s failed: %s", target[i], result)
-        elif isinstance(result, list):
-            all_jobs.extend(result)
-
-    logger.info("Indian platforms: found %d jobs across %d platforms", len(all_jobs), len(target))
-    return all_jobs
+    """Raises PlatformUnavailable naming every requested board (none can be read)."""
+    raise PlatformUnavailable(unavailable_notice(platforms))
 
 
 async def search_google_jobs(
-    llm: BaseChatModel,
-    user_id: str,
-    search_term: str,
+    llm=None,
+    user_id: str | None = None,
+    search_term: str = "",
     location: str = "India",
     results_wanted: int = 15,
     live_browser: bool = False,
     run_id: str | None = None,
 ) -> list[JobListing]:
-    """Search Google Jobs (google.com/jobs) via browser-use.
-
-    Google indexes jobs from company career pages that aren't on any job board.
-    This catches roles that only exist on company websites.
-
-    Args:
-        llm: LLM for browser agent
-        user_id: User ID for persistent session
-        search_term: Job keywords (e.g., "Senior Python Developer")
-        location: Location filter
-        results_wanted: Max results to extract
-
-    Returns:
-        List of JobListing from Google Jobs
-    """
-    query = f"{search_term} jobs in {location}".replace(" ", "+")
-    url = f"https://www.google.com/search?q={query}&ibp=htl;jobs"
-
-    task = (
-        f"Go to {url}. "
-        f"Wait for the Google Jobs panel to load on the left side. "
-        f"Extract up to {results_wanted} job listings from the panel. "
-        f"For each job, extract: title, company name, location, and the job URL (click to get it). "
-        f"Return results in this format (one per line): "
-        f"TITLE: <title> | COMPANY: <company> | LOCATION: <location> | URL: <url> | DESC: <brief description>"
-        f"\nIf no jobs panel appears, return NO_RESULTS."
+    """Google Jobs has no public API and Google's terms forbid automated queries,
+    so the former headless-browser scrape is gone. Raises PlatformUnavailable."""
+    raise PlatformUnavailable(
+        "Google Jobs is not searched (no public API; automated queries are not permitted). "
+        + COVERAGE
+        + "."
     )
-
-    if run_id:
-        emit(
-            run_id,
-            "browser",
-            {
-                "phase": "navigate",
-                "mode": "visible" if live_browser else "headless",
-                "url": url,
-                "task": "Search Google Jobs for real-time job listings",
-            },
-        )
-
-    try:
-        await _human_delay()
-        if run_id:
-            emit(run_id, "browser", {"phase": "extracting", "source": "google_jobs"})
-        raw_text = await run_browser_task(
-            llm, task, user_id, max_steps=12, live_browser=live_browser, run_id=run_id
-        )
-        jobs = _parse_extraction_result(raw_text, "google_jobs")
-        if run_id:
-            emit(
-                run_id,
-                "browser",
-                {"phase": "extracted", "source": "google_jobs", "count": len(jobs)},
-            )
-        return jobs
-    except Exception as exc:
-        logger.error("Google Jobs search failed: %s", exc)
-        return await _search_google_jobs_playwright(
-            user_id=user_id,
-            search_term=search_term,
-            location=location,
-            results_wanted=results_wanted,
-            live_browser=live_browser,
-            run_id=run_id,
-        )

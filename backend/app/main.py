@@ -38,6 +38,7 @@ from app.api.v1 import (
 from app.api.v1.copilot_chat import mount_copilot_chat
 from app.core.config import settings
 from app.core.llm_gateway import router as llm_gw
+from app.core.pii_vault import install_pii_log_scrubbing
 from app.core.rate_limit import StreamingSafeSlowAPIMiddleware, limiter
 from app.core.request_middleware import ApiRequestMiddleware
 
@@ -88,6 +89,7 @@ _allowed_origins = _build_cors_origins(_cors_raw, settings.APP_ENV)
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
+    install_pii_log_scrubbing()
     _check_env_vars()
     from app.integrations.factory import build_integration_gateway
 

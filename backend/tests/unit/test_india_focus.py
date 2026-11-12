@@ -140,6 +140,21 @@ def test_eligible_gate_for_auto_apply():
     assert not india.eligible("New York, NY")
 
 
+def test_eligible_listings_for_auto_apply_candidates():
+    from types import SimpleNamespace as Row
+
+    rows = [
+        Row(location="Pune", description=""),
+        Row(location="Remote", description="Must be based in the US"),
+        Row(location="Austin, TX", jd_text=""),
+        Row(location="Remote - India", description=None, jd_text="Python"),
+    ]
+    kept, hidden = india.eligible_listings(rows, "Remote")
+    assert [r.location for r in kept] == ["Pune", "Remote - India"] and hidden == 2
+    assert india.eligible_listings(rows, "Austin")[1] == 0
+    assert india.eligible_listings(rows, "Remote", india_focus=False)[1] == 0
+
+
 @pytest.mark.parametrize(
     "text,low,high",
     [

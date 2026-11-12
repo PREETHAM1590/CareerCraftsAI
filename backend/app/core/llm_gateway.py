@@ -437,7 +437,6 @@ async def get_gateway_llm(user_id: str, db):
     The returned LLM uses the gateway URL as base_url and a session token
     as the api_key. The real API key never enters the agent's memory.
     """
-    from langchain_openai import ChatOpenAI
     from sqlalchemy import select
 
     from app.models.db import UserModelSettings
@@ -458,6 +457,14 @@ async def get_gateway_llm(user_id: str, db):
 
     if await check_budget(user_id) <= 0:
         raise HTTPException(status_code=429, detail="Daily token budget exceeded.")
+    return await gateway_chat_model(user_id, model_settings)
+
+
+async def gateway_chat_model(user_id: str, model_settings):
+    """Key-free gateway client for a loaded model settings row (no budget
+    check; callers do their own)."""
+    from langchain_openai import ChatOpenAI
+
     session = await create_gateway_session(user_id, model_settings)
 
     # All providers get an OpenAI-compatible interface via the gateway

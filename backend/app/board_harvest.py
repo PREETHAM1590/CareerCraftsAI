@@ -215,7 +215,7 @@ async def health(rows, concurrency=4, delay=0.3, timeout=20, log=sys.stderr):
     sem, throttle, result = asyncio.Semaphore(concurrency), Throttle(delay), {}
 
     async def one(row):
-        keys = ("id", "family", "tenant", "permitted", "url", "refresh_hours")
+        keys = job_connectors.SOURCE_KEYS
         source = Source(**{k: row[k] for k in keys if k in row})
         async with sem:
             await throttle.wait(source.family)

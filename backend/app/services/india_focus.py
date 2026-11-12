@@ -311,9 +311,13 @@ def classify(job: dict) -> tuple[str, str]:
         us_state = bool(_US_STATE.search(re.sub(r",\s*IN\b", "", location)))
     if countries:
         if "IN" in countries:
-            return ("india_remote", "Remote, open to India") if remote and not cities else (
-                "india",
-                "Located in India",
+            return (
+                ("india_remote", "Remote, open to India")
+                if remote and not cities
+                else (
+                    "india",
+                    "Located in India",
+                )
             )
         if remote and (_worldwide(hay) or _has(hay, _APAC) or india_named):
             return ("india_remote" if india_named or _has(hay, _APAC) else "remote_global"), (
@@ -395,6 +399,23 @@ def eligible(location: str, description: str = "", remote=None) -> bool:
     return fit != "foreign"
 
 
+def eligible_listings(listings: list, location: str = "", india_focus=None) -> tuple[list, int]:
+    """(kept, hidden count) for objects with `.location`/`.description` (JobSpy
+    `JobListing`s, saved `JobApplication`s via `jd_text`): the auto-apply form
+    of `split`, so nothing is applied to that a member in India cannot take."""
+    if not wants_india({"locations": [location], "india_focus": india_focus}):
+        return list(listings), 0
+    kept = [
+        item
+        for item in listings
+        if eligible(
+            getattr(item, "location", "") or "",
+            getattr(item, "description", None) or getattr(item, "jd_text", "") or "",
+        )
+    ]
+    return kept, len(listings) - len(kept)
+
+
 _BONUS = {"india": 12, "india_remote": 9, "remote_global": 2, "unknown": 0, "foreign": -30}
 _REASONS = {
     "india": "Role is in India",
@@ -421,7 +442,9 @@ def rank_bonus(job: dict, focus: bool = True) -> tuple[int, list[str]]:
 # ── INR salary text ──────────────────────────────────────────────────────────
 
 _NUM = r"(\d+(?:[.,]\d+)*)"
-_RANGE = re.compile(_NUM + r"\s*(?:-|–|to)\s*" + _NUM + r"\s*(lpa|lakhs?|lacs?|l|cr|crores?|k)?\b", re.I)
+_RANGE = re.compile(
+    _NUM + r"\s*(?:-|–|to)\s*" + _NUM + r"\s*(lpa|lakhs?|lacs?|l|cr|crores?|k)?\b", re.I
+)
 _SINGLE = re.compile(_NUM + r"\s*(lpa|lakhs?|lacs?|l|cr|crores?|k)\b", re.I)
 _UNIT = {"lpa": 100_000, "lakh": 100_000, "lakhs": 100_000, "lac": 100_000, "lacs": 100_000}
 _UNIT |= {"l": 100_000, "cr": 10_000_000, "crore": 10_000_000, "crores": 10_000_000, "k": 1000}
@@ -437,8 +460,13 @@ def parse_inr_salary(text: str) -> dict | None:
     `CTC 25L`, `1.2 Cr`, `₹50k/month`. None when the text is not in rupees."""
     raw = str(text or "")
     lower = raw.lower()
-    if not ("₹" in raw or "inr" in lower or "rs" in lower.split() or "rs." in lower
-            or re.search(r"\b(lpa|lakhs?|lacs?|crores?|cr|ctc)\b", lower)):
+    if not (
+        "₹" in raw
+        or "inr" in lower
+        or "rs" in lower.split()
+        or "rs." in lower
+        or re.search(r"\b(lpa|lakhs?|lacs?|crores?|cr|ctc)\b", lower)
+    ):
         return None
     monthly = bool(re.search(r"/\s*(?:month|mo)\b|per\s+month|\bpm\b|monthly", lower))
     match = _RANGE.search(raw)

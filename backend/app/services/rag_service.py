@@ -2,12 +2,14 @@ import logging
 import re
 
 from langchain_core.documents import Document
+from langchain_core.embeddings import Embeddings
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_ollama import OllamaEmbeddings
 from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.core.config import settings as app_settings
+from app.core.pii_vault import strip_contact_details
 from app.core.security import decrypt_api_key
 
 logger = logging.getLogger(__name__)
@@ -148,7 +150,47 @@ def _relevant_chunks(chunks: list[str], query: str, k: int) -> list[str]:
     return [chunks[i] for i in sorted(best)]
 
 
+def _contact_free(text: str) -> str:
+    # Providers reject empty input; a chunk that was only contact lines
+    # still needs a vector.
+    return strip_contact_details(text).strip() or "-"
+
+
+class ContactFreeEmbeddings(Embeddings):
+    """Embeds text with emails, phone numbers, profile links and IDs removed.
+
+    Resume text is full of them and similarity search needs none, so they are
+    never sent to the embedding provider. Other attributes (``model``) come
+    from the wrapped provider model."""
+
+    def __init__(self, inner):
+        self.inner = inner
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return self.inner.embed_documents([_contact_free(t) for t in texts])
+
+    def embed_query(self, text: str) -> list[float]:
+        return self.inner.embed_query(_contact_free(text))
+
+    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
+        return await self.inner.aembed_documents([_contact_free(t) for t in texts])
+
+    async def aembed_query(self, text: str) -> list[float]:
+        return await self.inner.aembed_query(_contact_free(text))
+
+    def __getattr__(self, name):
+        if name == "inner":
+            raise AttributeError(name)
+        return getattr(self.inner, name)
+
+
 def get_embedding_model(model_settings):
+    """Provider embeddings (see _provider_embedding_model) that never receive
+    contact details or IDs."""
+    return ContactFreeEmbeddings(_provider_embedding_model(model_settings))
+
+
+def _provider_embedding_model(model_settings):
     """Embeddings for the user's active model, or the deployment fallback.
 
     Providers without an embeddings API (DeepSeek, Anthropic, OpenRouter,
@@ -313,7 +355,9 @@ def ingest_document(
     if not metadata.get("document_id"):
         raise ValueError("document_id is required for owned vector ingestion")
     metadata = {**metadata, "user_id": str(user_id), "doc_type": doc_type}
-    chunks = chunk_text(text)
+    # Stored chunks feed agent prompts; contact details come from the profile
+    # (resume_facts.verified_contact), never from retrieved chunks.
+    chunks = chunk_text(strip_contact_details(text))
     if not chunks:
         raise ValueError("Document has no indexable text")
     embeddings = get_embedding_model(model_settings)

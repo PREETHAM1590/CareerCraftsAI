@@ -817,6 +817,14 @@ class UserPreferences(Base):
     auto_submit_daily_cap: Mapped[int] = mapped_column(
         Integer, default=10, nullable=False, server_default="10"
     )
+    # What the LLM gateway hides from the member's model provider
+    # (services/pii_profile.py). Both on by default.
+    llm_hide_personal_info: Mapped[bool] = mapped_column(
+        Boolean, default=True, nullable=False, server_default="true"
+    )
+    llm_hide_name: Mapped[bool] = mapped_column(
+        Boolean, default=True, nullable=False, server_default="true"
+    )
     # When auto_apply_enabled last went on; the rule only acts on jobs found after it.
     auto_rule_enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Resume preferences, asked once on first auto-apply (resume_prefs_set_at

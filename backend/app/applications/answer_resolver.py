@@ -13,7 +13,11 @@ from collections.abc import Awaitable, Callable
 
 from app.applications import profile_service
 from app.applications.models import ApplicationField, ResolvedAnswer
-from app.applications.question_normalizer import normalize_question
+from app.applications.question_normalizer import (
+    asks_for_identity,
+    is_identity_key,
+    normalize_question,
+)
 
 SENSITIVE_KEY_PREFIXES = (
     "authorization.",
@@ -83,7 +87,14 @@ async def resolve_field(
                 requires_review=bounded < 0.90,
             )
 
-    if not sensitive and not question_key and narrative_generator is not None:
+    # Personal details come only from what the member stored. The label check
+    # also catches identity questions no rule gave a key.
+    if (
+        not sensitive
+        and not question_key
+        and narrative_generator is not None
+        and not asks_for_identity(field.label)
+    ):
         narrative = await narrative_generator(field)
         if narrative:
             return ResolvedAnswer(
@@ -104,7 +115,11 @@ async def resolve_field(
         missing_reason=(
             "This question requires a direct answer and cannot be inferred."
             if sensitive
-            else "No saved or structured answer available."
+            else (
+                "Personal details are filled only from your profile or saved answers."
+                if is_identity_key(question_key) or asks_for_identity(field.label)
+                else "No saved or structured answer available."
+            )
         ),
     )
 

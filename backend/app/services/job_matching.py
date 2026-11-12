@@ -11,6 +11,8 @@ import uuid
 from sqlalchemy import select, text
 
 from app.models.db import UserModelSettings
+from app.services import india_focus
+from app.services.india_focus import cities_in, search_cities
 from app.services.jobs_database import AsyncSessionLocal
 from app.services.search_basis import basis_text
 
@@ -33,11 +35,13 @@ def rule_score(
     reasons = [f"Role keyword match: {round(role * 100)}%"]
     places = [location] if isinstance(location, str) else list(location or [])
     job_place = str(job.get("location") or "").lower()
+    job_cities = set(cities_in(job_place))
     if any(
         place
         and place.lower() != "any"
         and (
             place.lower() in job_place
+            or bool(search_cities(place) & job_cities)
             or (place.lower() == "remote" and job.get("remote") == "remote")
         )
         for place in map(str, places)
@@ -159,6 +163,7 @@ async def rank_jobs(user_id: str, context: dict, jobs: list[dict]):
     from app.services.job_connectors import _squash
 
     funded = await funded_among([job.get("company", "") for job in jobs])
+    focus = india_focus.wants_india(context)
     matches = []
     for job in jobs:
         score, reasons = rule_score(
@@ -167,6 +172,13 @@ async def rank_jobs(user_id: str, context: dict, jobs: list[dict]):
         if _squash(job.get("company", "")) in funded:
             score = with_bonus(score)
             reasons.append("Company raised funding recently")
+        india_focus.annotate(job)
+        bonus, india_reasons = india_focus.rank_bonus(job, focus)
+        score = max(0, min(100, score + bonus))
+        reasons.extend(india_reasons)
+        salary = india_focus.parse_inr_salary(job.get("salary_text") or "")
+        if salary:
+            job["salary_inr"] = salary
         matches.append(
             {
                 **job,

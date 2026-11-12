@@ -3,12 +3,13 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiClient, getApiErrorMessage } from "@/lib/api";
 import { Field, IslandButton, Select } from "@/components/vanguard";
 
-const sources = ["greenhouse", "lever", "ashby", "workday", "workable", "smartrecruiters", "recruitee", "bamboohr", "personio", "teamtailor", "adzuna", "remotive", "remoteok", "arbeitnow", "jsonld"];
+const sources = ["greenhouse", "lever", "ashby", "workday", "workable", "smartrecruiters", "keka", "freshteam", "kula", "zohorecruit", "recruitee", "bamboohr", "personio", "teamtailor", "adzuna", "himalayas", "remotive", "remoteok", "arbeitnow", "jsonld"];
 const DAYS = [1, 7, 14, 30, 90];
 
 type Props = { value: string; onChange: (v: string) => void; source: string; onSource: (v: string) => void; days: number; onDays: (v: number) => void };
 
-const sourceLabel = (s: string) => (s === "jsonld" ? "Company sites" : s === "remoteok" ? "RemoteOK" : s[0].toUpperCase() + s.slice(1));
+const LABELS: Record<string, string> = { jsonld: "Company sites", remoteok: "RemoteOK", smartrecruiters: "SmartRecruiters", zohorecruit: "Zoho Recruit" };
+const sourceLabel = (s: string) => LABELS[s] ?? s[0].toUpperCase() + s.slice(1);
 
 /** Search basis (which resume / persona to match against), source and posting age. */
 export function JobSearchBasis(p: Props) {
@@ -72,6 +73,9 @@ export function JobSearchBasis(p: Props) {
           )}
         </Field>
       </div>
+      <p className="pl-1 text-xs text-muted-foreground">
+        India first: roles in India and remote roles open to India come first, and roles open only outside India are hidden. Search a city outside India to include them.
+      </p>
       {(bases.isError || save.isError) && (
         <p role="alert" className="pl-1 text-xs text-danger">
           {getApiErrorMessage(bases.error || save.error, "Search basis unavailable")}

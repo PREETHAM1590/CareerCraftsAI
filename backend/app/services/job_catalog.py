@@ -49,8 +49,8 @@ PREFERRED_INDIA_SOURCES = {
     "lever:cred",
     "greenhouse:razorpaysoftwareprivatelimited",
     "greenhouse:groww",
-    "smartrecruiters:freshworks",
-    "smartrecruiters:swiggy",
+    "smartrecruiters:freshworks-india",
+    "smartrecruiters:swiggy-india",
     "ashby:sarvam",
     "keka:fynd",
     "kula:cashfree",
@@ -62,9 +62,7 @@ def sources() -> list[Source]:
     from app.core.config import settings
 
     rows = json.loads(Path(__file__).with_name("job_sources.json").read_text())
-    mapped = {
-        row["id"]: Source(**{k: row[k] for k in SOURCE_KEYS if k in row}) for row in rows
-    }
+    mapped = {row["id"]: Source(**{k: row[k] for k in SOURCE_KEYS if k in row}) for row in rows}
     for row in settings.JOB_SOURCE_OVERRIDES[:100]:
         source = Source(**row)
         mapped[source.id] = source
@@ -574,9 +572,7 @@ async def _search_catalog_db(query: dict, public, live_ids, relevant_of):
         # Gap fill is bounded (<=12 sources, 6 at a time); refresh_source honours its own
         # lease/backoff so repeated shortfalls do not re-hit upstream. The Schedule refreshes
         # the complete employer catalog.
-        wanted = (
-            PREFERRED_INDIA_SOURCES if india_focus.wants_india(query) else PREFERRED_SOURCES
-        )
+        wanted = PREFERRED_INDIA_SOURCES if india_focus.wants_india(query) else PREFERRED_SOURCES
         preferred = [s for s in public if s.id in wanted]
 
         roles = [

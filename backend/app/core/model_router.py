@@ -253,8 +253,11 @@ async def get_llm(user_id: str, db, task_type: str = "") -> BaseChatModel:
             status_code=400, detail="No active model configured. Add a model in Settings."
         )
 
-    api_key = decrypt_api_key(model_settings.api_key_enc, settings.APP_SECRET_KEY)
-    llm = _make_llm(model_settings, api_key)
+    # Through the gateway like every agent: no provider key here, and the
+    # member's personal details are replaced before the request leaves.
+    from app.core.llm_gateway import gateway_chat_model
+
+    llm = await gateway_chat_model(str(user_id), model_settings)
     llm.callbacks = [get_redaction_callback(), TokenTrackingCallback(user_id)]
     return CachingLLM(llm, user_id, task_type)
 
@@ -293,6 +296,10 @@ def _check_budget_sync(user_id: str) -> None:
 
 def _build_llm(model_settings) -> BaseChatModel:
     """Build LLM directly from model_settings object (no DB lookup needed).
+
+    Calls the provider directly, bypassing the gateway's PII redaction: only
+    for the Settings key test, whose prompt is fixed text (see
+    tests/security/test_llm_bypass_guard.py).
 
     Enforces the daily token budget before building — raises HTTPException(429)
     when the budget is exhausted.  The check uses a sync Redis call so it is

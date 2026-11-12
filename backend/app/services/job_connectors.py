@@ -206,9 +206,7 @@ def normalize(raw: dict, source: Source) -> dict | None:
         "remote": (
             "remote"
             if raw.get("remote") or "remote" in location.lower()
-            else "hybrid"
-            if "hybrid" in location.lower()
-            else "unknown"
+            else "hybrid" if "hybrid" in location.lower() else "unknown"
         ),
         "salary_text": plain(raw.get("salary_text"))[:300],
         "url": url,
@@ -262,7 +260,7 @@ ATS_HOSTS = (
 )
 _COMPANY_SUFFIX = re.compile(
     r"\b(inc|llc|ltd|limited|pvt|private|corp|corporation|co|gmbh|technologies|technology|"
-    r"solutions|labs|india)\b",
+    r"solutions|labs|india|software)\b",
     re.IGNORECASE,
 )
 
@@ -1389,21 +1387,36 @@ _FRESHTEAM_ROW = re.compile(
 )
 
 
+# The newer careers theme puts the place in data attributes on a "heading" link.
+_FRESHTEAM_CARD = re.compile(
+    r'<a href="(/jobs/[A-Za-z0-9_-]{4,40}/[a-z0-9-]{0,200})" class="heading"([^>]*)>'
+    r'.*?<div class="job-title">(.*?)</div>',
+    re.S,
+)
+
+
 def parse_freshteam(page_html: str, tenant: str) -> list[dict]:
-    rows = []
+    found = []
     for path, title, place in _FRESHTEAM_ROW.findall(page_html):
         # "Bangalore, India <br/> Full Time": the place is before the line break.
-        location = _clean(re.split(r"<br\s*/?>", place)[0])
-        rows.append(
-            {
-                "id": path.split("/")[2],
-                "title": _clean(title),
-                "company": tenant,
-                "url": f"https://{tenant}.freshteam.com{path}",
-                "location": location,
-                "remote": "remote" in place.lower(),
-            }
+        found.append(
+            (path, title, _clean(re.split(r"<br\s*/?>", place)[0]), "remote" in place.lower())
         )
+    for path, attrs, title in _FRESHTEAM_CARD.findall(page_html):
+        place = re.search(r'data-portal-location="([^"]*)"', attrs)
+        remote = re.search(r"data-portal-remote-location=\"?(true)", attrs)
+        found.append((path, title, _clean(place.group(1)) if place else "", bool(remote)))
+    rows = [
+        {
+            "id": path.split("/")[2],
+            "title": _clean(title),
+            "company": tenant,
+            "url": f"https://{tenant}.freshteam.com{path}",
+            "location": location,
+            "remote": remote or "remote" in location.lower(),
+        }
+        for path, title, location, remote in found
+    ]
     return list({r["id"]: r for r in rows}.values())
 
 
@@ -1439,8 +1452,7 @@ def parse_kula(page_html: str, tenant: str) -> list[dict]:
                 "company": tenant,
                 "url": f"https://careers.kula.ai/{tenant}/{j['id']}",
                 "location": "; ".join(str(o.get("location") or "") for o in offices),
-                "remote": ats.get("workplace") == "remote"
-                or any(o.get("remote") for o in offices),
+                "remote": ats.get("workplace") == "remote" or any(o.get("remote") for o in offices),
                 "countries": [o.get("country_code") or o.get("country") for o in offices],
                 "posted_at": j.get("launch_at"),
                 "expires_at": j.get("end_at"),
@@ -1781,14 +1793,24 @@ async def fetch_page(source: Source, query: str = "", cursor: str | None = None)
         "lever": f"https://{lever_host}/v0/postings/{tenant}?mode=json&limit=100&skip={(page - 1) * 100}",
         "ashby": f"https://api.ashbyhq.com/posting-api/job-board/{tenant}?includeCompensation=true",
         "workable": f"https://{tenant}.workable.com/spi/v3/jobs?state=published",
-        "smartrecruiters": f"https://api.smartrecruiters.com/v1/companies/{tenant}/postings?limit=100&offset={(page - 1) * 100}"
-        + (f"&country={source.country.lower()}" if source.country else ""),
+        "smartrecruiters": f"https://api.smartrecruiters.com/v1/companies/{tenant}/postings?"
+        + urlencode(
+            {
+                "limit": 100,
+                "offset": (page - 1) * 100,
+                **({"country": source.country.lower()} if source.country else {}),
+            }
+        ),
         "recruitee": f"https://{tenant}.recruitee.com/api/offers/",
         "remotive": "https://remotive.com/api/remote-jobs",
         # Tenant is a Jobicy geo slug (e.g. "apac"); empty reads every region.
         "jobicy": "https://jobicy.com/api/v2/remote-jobs?"
         + urlencode(
-            {"count": 50, **({"tag": query} if query else {}), **({"geo": tenant} if tenant else {})}
+            {
+                "count": 50,
+                **({"tag": query} if query else {}),
+                **({"geo": tenant} if tenant else {}),
+            }
         ),
         "remoteok": "https://remoteok.com/api",
         "arbeitnow": f"https://www.arbeitnow.com/api/job-board-api?page={page}",

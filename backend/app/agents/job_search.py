@@ -414,10 +414,9 @@ def _search_via_search_presets(query: str, location: str, max_results: int) -> l
     """Build ready-to-fetch URLs from ``search_presets.SEARCH_PRESETS``.
 
     For each preset whose method is ``fetch`` (RemoteOK, WeWorkRemotely,
-    AI-Jobs.net, Turing, Hugging Face), we issue an HTTP GET. For
-    ``browser_use`` presets we just return the URL as a lead (the caller
-    can choose to scrape it with browser-use). For ``jobspy`` presets we
-    return the URL as a lead (JobSpy scrapes it natively).
+    AI-Jobs.net, Turing, Hugging Face), we issue an HTTP GET and return the
+    postings found. ``browser_use``/``jobspy`` presets are board search pages
+    and are skipped.
     """
     from app.services.search_presets import SEARCH_PRESETS, build_url
 
@@ -465,18 +464,8 @@ def _search_via_search_presets(query: str, location: str, max_results: int) -> l
                             break
             except Exception as exc:
                 logger.debug("Preset %s failed: %s", preset["name"], exc)
-        else:
-            # browser_use / jobspy: return the URL as a lead.
-            out.append(
-                {
-                    "title": preset["name"],
-                    "company": preset["name"].split(" — ")[0],
-                    "location": location or preset.get("region", ""),
-                    "description": preset.get("notes", ""),
-                    "job_url": url,
-                    "platform": preset.get("method", "preset"),
-                }
-            )
+        # browser_use / jobspy presets are search pages, not postings: a page URL
+        # titled with the board's name is not a job, so it is never returned as one.
     return out
 
 
@@ -843,7 +832,29 @@ LEGACY_PLATFORM_MAP = {
     "shine": "open_apis",
     "freshersworld": "open_apis",
     # The retired multi-ATS fan-out now reads the same catalog sources.
-    "ats": ("greenhouse", "lever", "ashby", "smartrecruiters", "workday", "bamboohr"),
+    "ats": (
+        "greenhouse",
+        "lever",
+        "ashby",
+        "smartrecruiters",
+        "workday",
+        "bamboohr",
+        "jobvite",
+        "jazzhr",
+        "dover",
+        "paylocity",
+        "successfactors",
+        "taleo",
+        "keka",
+        "freshteam",
+        "zohorecruit",
+        "kula",
+    ),
+    # Indian boards without a public API map onto the sources that do cover
+    # Indian employers; the search notes say the board itself was not read.
+    "foundit": "jobspy",
+    "instahyre": "jobspy",
+    "cutshort": "jobspy",
 }
 
 
@@ -968,6 +979,11 @@ def job_search_agent_node(state: AgentState) -> AgentState:
         emit(run_id, "thinking", {"step": "search", "message": "Searching public job sources"})
         platforms = _normalize_platforms(ctx.get("platforms"))
         jobs, warnings = run_coro_sync(search_all_platforms(query, platforms))
+        from app.services.indian_platforms_service import INDIAN_PLATFORMS, unavailable_notice
+
+        asked = [str(p).strip().lower() for p in ctx.get("platforms") or []]
+        if unread := [p for p in asked if p in INDIAN_PLATFORMS]:
+            warnings.append(unavailable_notice(unread))
         if not platforms:
             # A source the member picked explicitly is searched alone.
             jobs = _with_saved_boards(user_id, query, jobs, warnings)

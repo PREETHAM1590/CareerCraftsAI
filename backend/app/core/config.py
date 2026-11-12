@@ -80,6 +80,9 @@ class Settings(BaseSettings):
     PII_REDACTION_ENABLED: bool = True
     PII_REDACTION_STRICT: bool = True
     PII_REDACT_NAMES: bool = True
+    # Ignore a member's "hide personal info" opt-out (contact details and IDs
+    # are always hidden). Their name setting still applies.
+    PII_REDACTION_FORCED: bool = False
     # Pattern detection of emails/phones/IDs that are not in the profile,
     # including other people's in job descriptions and inbound mail.
     PII_PATTERN_DETECTION: bool = True
