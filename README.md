@@ -1,14 +1,14 @@
 # CareerCraft AI
 
-> **A full-stack, multi-agent job search automation platform. Bring your own AI API key — agents handle everything from finding roles to submitting applications, optimizing your LinkedIn profile, researching companies, negotiating salary, and following up with recruiters.**
+> **A full-stack, multi-agent job search automation platform. Bring your own AI API key — agents handle finding roles, tailoring resumes, preparing applications (a Chrome extension fills and submits them in your own browser), optimizing your LinkedIn profile, researching companies, negotiating salary, and following up with recruiters.**
 
-Your data stays yours. You pay only for your own AI usage.
+Your data stays yours. You pay only for your own AI usage. Personal details such as email and phone are replaced with placeholders before text reaches your model provider (see [Privacy](#privacy-personal-details-and-the-model)).
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
 [![Next.js 16](https://img.shields.io/badge/Next.js-16-black.svg)](https://nextjs.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111+-green.svg)](https://fastapi.tiangolo.com/)
-[![Tests](https://img.shields.io/badge/tests-542%20passing-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-run%20in%20CI-informational.svg)](#testing)
 
 ---
 
@@ -17,6 +17,10 @@ Your data stays yours. You pay only for your own AI usage.
 - [What It Does](#what-it-does)
 - [Architecture](#architecture)
 - [Feature Highlights](#feature-highlights)
+- [Job Search](#job-search)
+- [Applying and Auto-Submit](#applying-and-auto-submit)
+- [Privacy: Personal Details and the Model](#privacy-personal-details-and-the-model)
+- [Tailored Resumes](#tailored-resumes)
 - [Tech Stack](#tech-stack)
 - [Quick Start](#quick-start)
 - [Development](#development)
@@ -27,6 +31,8 @@ Your data stays yours. You pay only for your own AI usage.
 - [Human-in-the-Loop](#human-in-the-loop)
 - [Security](#security)
 - [Database Schema](#database-schema)
+- [Maintenance and Evals](#maintenance-and-evals)
+- [Known Limitations](#known-limitations)
 - [Deployment](#deployment-production)
 - [Documentation](#documentation)
 - [License](#license)
@@ -40,7 +46,7 @@ CareerCraft AI deploys a harness of specialized AI agents that collaborate to au
 | Agent | What it does |
 |---|---|
 | **Orchestrator** | LangGraph supervisor — routes tasks, manages shared state, streams live progress |
-| **Job Search** | Browses LinkedIn, Naukri, Indeed, and other job boards via Playwright; scores matches 0–100 |
+| **Job Search** | Searches the shared job catalog and live public sources through the connector registry (no browser automation); India-first by default; scores matches 0–100 |
 | **Resume** | RAG-powered resume rewriting tailored to a specific JD; generates ATS-optimized PDF |
 | **Cover Letter** | Generates personalized, role-specific cover letters with multiple tone variants |
 | **LinkedIn** | Rewrites headline, About section, and experience bullets for a target role |
@@ -52,10 +58,10 @@ CareerCraft AI deploys a harness of specialized AI agents that collaborate to au
 | **Company Research** | Deep-dives company culture, financials, news, Glassdoor signals, and interview patterns |
 | **Salary Agent** | Benchmarks compensation using market data; generates negotiation scripts |
 | **NL Search** | Natural-language job search — describe what you want in plain English |
-| **Auto-Apply Pipeline** | End-to-end automated application: finds job → tailors resume → fills form → submits |
+| **Auto-Apply Pipeline** | Chains search → score → recruiter lookup → resume tailoring, then queues the application for your Chrome extension, which fills and submits it in your browser |
 | **RAG** | Retrieves context from your uploaded documents via pgvector |
 
-> Every action that sends an email or submits an application requires **explicit human approval** — agents prepare, you decide.
+> Every action that sends an email or submits an application requires **explicit human approval** — agents prepare, you decide. The one exception is the opt-in, capped [auto-submit](#applying-and-auto-submit) setting, which is off by default.
 
 ---
 
@@ -120,7 +126,10 @@ from `extension/`, connect it under **Settings → Integrations → Browser
 extension**, and when you press Apply the `AutoApplyWorkflow` queues an
 extension task that your browser claims, fills (LinkedIn Easy Apply, Naukri,
 Greenhouse/Lever/Ashby/Workday-style forms), and shows you in a review panel
-— nothing is submitted until you explicitly approve **Submit**.
+— nothing is submitted until you explicitly approve **Submit**, unless you
+have turned on the opt-in [auto-submit](#applying-and-auto-submit) setting.
+Server-side browser automation is retired: the backend never drives a job
+site.
 Ambiguous in-page decisions (which option matches, did this confirm
 submission) are answered by a small "System One" decision engine — TypeSafe
 **Jev** or a self-hosted **Laya** (`deploy/laya/`) — falling back to
@@ -133,7 +142,7 @@ built-in heuristics when neither is configured. See
 ## Feature Highlights
 
 ### Auto-Apply Pipeline
-End-to-end automated job application. The pipeline finds matching jobs, tailors your resume, fills out application forms using browser automation (Playwright), and submits — all with a human approval gate before anything is sent. Supports Indian job platforms (Naukri, Shine, Freshersworld) and international boards (LinkedIn, Indeed, Glassdoor).
+The pipeline finds matching jobs, scores them, tailors your resume and queues each application for the Chrome extension, which fills the form in your own browser and shows a review panel. By default you press Submit yourself; the opt-in [auto-submit](#applying-and-auto-submit) setting is capped and never used on LinkedIn or Naukri. The server does not run a browser.
 
 ### ATS Scoring
 Every generated resume is scored against the target job description using keyword analysis, section completeness, and formatting rules. Score and improvement suggestions are shown before you download.
@@ -148,10 +157,10 @@ Market compensation data for any role + location, with percentile breakdowns and
 Live mock interview sessions with AI feedback. Scores your answers on clarity, relevance, and depth. Tracks improvement across sessions.
 
 ### Natural Language Job Search
-Describe what you want in plain English ("senior backend role at a climate startup, remote, $150k+") and the agent translates it into structured search queries across multiple job boards.
+Describe what you want in plain English ("senior backend role at a climate startup, remote, $150k+") and the agent translates it into structured search queries that run through the same connector-based [job search](#job-search) as everything else.
 
 ### LinkedIn Outreach Automation
-Finds recruiter contact info via Hunter.io and ProxyCurl, drafts personalized connection requests and InMails, and queues them for your approval.
+Drafts personalized connection requests and InMails for the contacts you supply and queues them for your approval. If you supply none, a ProxyCurl lookup is used as a fallback, and only when `PROXYCURL_API_KEY` is configured. LinkedIn passwords are not collected.
 
 ### Resume Personas
 Maintain multiple resume personas (e.g., "Backend Engineer", "Tech Lead", "Startup Generalist") — each with its own RAG context and tailoring strategy.
@@ -164,6 +173,44 @@ Agents can use Claude's extended thinking mode for complex tasks like cover lett
 
 ### Token Budget Management
 Tracks LLM token usage per user per agent run. Enforces configurable budgets to prevent runaway costs on BYOK keys.
+
+---
+
+## Job Search
+
+Job search has one implementation: `search_all_platforms` in `backend/app/services/job_search_service.py`, used by the Job Search agent (which the jobs API starts as a Temporal workflow), the chat orchestrator and scheduled searches. It reads the shared job catalog first and fills any shortfall from live public sources through the connector registry (`job_connectors.py`, 46 connector families: ATS platforms, aggregators, RSS and JSON-LD). Results are cached (`SEARCH_CACHE_ENABLED`, default on). The server does not drive job sites with a browser.
+
+- **India-first (on by default).** Roles in India and remote roles open to India rank first, and roles open only outside India are hidden. It switches off when every searched place is outside India, and an explicit `india_focus` value on the search overrides it. `backend/app/services/india_focus.py` decides using structured connector fields first, then location text, then residency phrases in remote postings.
+- **Multiple locations.** A search takes a list of locations (up to 20 preferred locations on the search request; Delhi/NCR covers the whole capital region).
+- **Direct portal search.** Paste a company careers link on the jobs page (or call `POST /api/v1/jobs/portal-search`) to read that one board live. The link must resolve through `resolve_careers_url` to one of: Workday, Greenhouse, Lever (including `jobs.eu.lever.co`), Ashby, SmartRecruiters, Workable, Recruitee, Personio, BambooHR, Teamtailor, Breezy, Pinpoint, HiBob, Trakstar, JobScore, Gem, Rippling, Oracle Recruiting, iCIMS, Jobvite, JazzHR, Dover, Paylocity, Taleo, SAP SuccessFactors, Keka, Freshteam, Kula or Zoho Recruit. Other links are refused with a 422. Matches are saved to your applications list.
+- **Saved boards.** Up to 20 careers links can be saved (`GET/POST /api/v1/jobs/boards`, `DELETE /api/v1/jobs/boards/{id}`) so later searches include them. The link is re-checked against the supported list on every use.
+- **Indian job boards.** Naukri, Foundit, Instahyre, Cutshort, Shine, Internshala and similar boards have no public listing API and used to be read by the retired server-side browser automation. They now report "unavailable" (`indian_platforms_service.py`) instead of returning jobs. Indian employers are covered by the catalog and connectors above (Greenhouse, Lever, Ashby, SmartRecruiters, Workday India boards, Keka, Freshteam, Kula, Zoho Recruit), the Himalayas feed, and LinkedIn/Indeed through JobSpy.
+
+---
+
+## Applying and Auto-Submit
+
+Applications are filled and submitted by the Chrome extension in your own browser; see [extension/README.md](extension/README.md). The extension shows a review panel marking where each answer came from, and by default you press Submit yourself.
+
+- **Saved answers.** Answers to common screening questions (work authorization, notice period, expected CTC and similar) are stored under **Settings → Applying** (`/api/v1/users/me/saved-answers`, `/api/v1/candidate-profile/answers`). The extension fills from these and your profile, and does not draft answers for questions it must not guess.
+- **Auto-submit.** Off by default, set under **Settings → Applying** (`user_preferences.auto_submit_enabled`, daily cap 1–50, default 10, counted over a rolling 24 hours). When on, the server may approve a fully answered form without a click. It never does so on LinkedIn or Naukri, and it refuses when any answer came from anything other than your saved answers or profile, such as an AI draft.
+- **Audit trail.** Each approval is stored in `application_submit_approvals`: who approved it (`member` or `auto_submit_setting`), when, the answers submitted, and a screenshot of the reviewed form when the browser allowed one. It is shown on the application.
+- **Device tokens.** Each paired browser has its own token, shown once and stored hashed. Tokens expire after 90 days and the extension swaps in a fresh one during the last 30. At most five browsers stay connected; pairing a sixth revokes the least recently used. You can revoke browsers under **Settings → Integrations → Browser extension**.
+- **Pairing confirmation.** Switching the paired account from a web page needs a confirmation in the extension popup, and sites outside the built-in job/ATS list need a one-time approval there.
+
+---
+
+## Privacy: Personal Details and the Model
+
+Chat and completion calls go through the internal LLM gateway. Before a request leaves, your email, phone, name, profile links and similar identifiers (from your stored profile, plus pattern detection for Aadhaar, PAN, passport, UPI, card numbers and dates of birth) are replaced with placeholders such as `[[EMAIL_1]]`; the reply is restored locally before agents see it. The mapping lives in memory for one request and is never logged or stored. Identity fields on application forms (name, email, phone, address, links, IDs) are filled from your stored profile without calling a model. Contact details and IDs are stripped from text before it is embedded or stored as RAG chunks. Redaction is on by default and can be turned off per member under **Settings → Models → Privacy**; with `PII_REDACTION_STRICT` (default on) the gateway sends nothing if redaction fails.
+
+Documented limits: the member's name still reaches the embedding provider; third-party names, spelled-out values and values inside images or attachments are not detected; a model that rewrites a placeholder returns the placeholder instead of the value; the decision engine (Jev/Laya), when configured, receives stored answers outside the gateway; and redaction lowers what a provider sees without guaranteeing it. Details: [docs/PRIVACY_PII.md](docs/PRIVACY_PII.md).
+
+---
+
+## Tailored Resumes
+
+Tailoring may reorder and reword but not add. A fact guard (`resume_grounding.py`) compares each tailored resume to your own documents and typed facts, and anything not supported — an invented employer, skill, number, date or title — reaches you as a "Not found in your documents" warning. The resume header uses contact details you verified, never model output. A parse-back check (`resume_parseback.py`) reads each generated PDF/DOCX back the way an applicant tracking system would and reports lost text, order or dates. Note that the PDF renderer cannot draw Devanagari or Tamil text (see [Known Limitations](#known-limitations)). Test coverage is described in [docs/TESTING.md](docs/TESTING.md).
 
 ---
 
