@@ -331,6 +331,19 @@ def ingest_document(
     return len(docs)
 
 
+class RetrievalResult(list):
+    """Chunk list whose `unavailable` flag separates a failed search from no matches."""
+
+    unavailable: bool = False
+
+
+def retrieval_unavailable(chunks) -> bool:
+    """True when retrieval failed, incl. the resume profile-text fallback."""
+    return bool(getattr(chunks, "unavailable", False)) or any(
+        (getattr(c, "metadata", None) or {}).get("rag_unavailable") is True for c in chunks
+    )
+
+
 def retrieve(
     user_id: str,
     doc_type: str,
@@ -382,4 +395,6 @@ def retrieve(
                         },
                     )
                 ]
-        return []
+        failed = RetrievalResult()
+        failed.unavailable = True
+        return failed

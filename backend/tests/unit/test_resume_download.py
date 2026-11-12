@@ -87,7 +87,7 @@ async def test_page_query_coerces_strings_and_rejects_out_of_range(monkeypatch):
 
     monkeypatch.setattr(
         "app.services.resume_export.fit_resume",
-        lambda *args: SimpleNamespace(pdf=b"%PDF-fitted", page_count=1),
+        lambda *args, **kwargs: SimpleNamespace(pdf=b"%PDF-fitted", page_count=1),
     )
     doc = _doc(uuid.uuid4(), {"template": "classic"})
     for pages in ("1", "2"):

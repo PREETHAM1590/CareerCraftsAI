@@ -19,9 +19,8 @@ Three categories:
      companies + 6 global AI labs (TCS, Infosys, …, OpenAI, Anthropic).
 
 All of this is **data**, not code. The actual fetchers are in
-``indian_platforms_service.py`` (browser-use), ``job_search.py``
-(JobSpy, ATS scrapers, web-search waterfall), and ``auto_apply_service.py``
-(apply pipeline).
+``indian_platforms_service.py`` (browser-use), ``job_search_service.py``
+(JobSpy, ATS scrapers, web-search waterfall).
 """
 
 from __future__ import annotations

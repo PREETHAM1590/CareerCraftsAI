@@ -57,7 +57,11 @@
     }
 
     if (data.type === "CAREERCRAFT_PAIR") {
-      if (data.appOrigin !== location.origin) return;
+      // Same shape the background re-checks; the page can only ever offer a
+      // token for its own origin, and a different account still needs the
+      // member to confirm in the extension popup.
+      if (typeof data.token !== "string" || !/^ccx_[A-Za-z0-9_-]{8,512}$/.test(data.token)) return;
+      if (typeof data.appOrigin !== "string" || data.appOrigin !== location.origin) return;
       try {
         chrome.runtime.sendMessage(
           { type: "CC_PAIR_FROM_BRIDGE", token: data.token, appOrigin: data.appOrigin },
