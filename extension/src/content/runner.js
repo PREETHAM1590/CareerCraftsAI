@@ -85,10 +85,11 @@
         const auto = !!(opts && opts.auto);
         const response = await send({ type: "CC_REVIEW", taskId: task.id, snapshot: reviewed, url: location.href, auto });
         if (response.error) throw new Error(response.error);
+        const refused = response.data && response.data.autoRefused ? `Auto-submit paused: ${response.data.autoRefused} ` : "";
         window.CareerCraftPanel.showStatus(
           response.data && response.data.autoApproved
-            ? "Auto-apply: submitting this application…"
-            : "Last step: click the CareerCraft icon in your browser toolbar and press Submit this application. Nothing is sent until you do."
+            ? "Auto-submit: submitting this application…"
+            : `${refused}Last step: click the CareerCraft icon in your browser toolbar and press Submit this application. Nothing is sent until you do.`
         );
         const deadline = Date.now() + 5 * 60 * 1000;
         while (Date.now() < deadline) {

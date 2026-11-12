@@ -117,71 +117,85 @@ Product consequence: generate one single-column template in both PDF and DOCX,
 pick the format from the detected portal, and run a parse-back check on the
 generated file (extract text, confirm name, email, titles and dates survive).
 
-## 5. Plan
+## 5. Status after the fix round (2026-11-12)
 
-### Phase 0 — land the prototypes (days)
+Everything below is on branch `feat/auto-apply-direct-portals-hardening`.
+Backend unit, security and eval suites: 1,674 passed. Extension: 20 node tests
+and 112 browser e2e checks. Frontend: typecheck clean, 36 tests.
 
-Already in the working tree, tests passing, not committed:
+### Done
 
-- Extension: Workday driver for the multi-step wizard, whole-word option
-  matching, custom dropdown / prompt / split-date support, resume attach on
-  hidden inputs, step-change waiting with validation messages, missing host
-  permissions, an opt-in auto-apply switch, and "Autofill this page".
-- Backend: fixed Workday and BambooHR legacy searches, fan-out timeout, Workday
-  pagination; new Workable, Oracle and iCIMS connectors; `resolve_careers_url`
-  and `search_board`.
+**Auto-apply (extension + backend)**
+- Workday multi-step driver: My Information, My Experience (resume upload,
+  work history and education with "Add" for extra blocks, calendar popups),
+  application questions, voluntary disclosures only from saved answers, step
+  navigation with validation-error detection.
+- Fixed wrong option matching, ignored custom widgets, skipped resume uploads,
+  fill failures reported as filled, and missing host permissions.
+- Server-controlled auto-submit: off by default, per-user switch and daily cap
+  (1-50) in Settings → Applying, enforced at approve-submit; never on LinkedIn
+  or Naukri; refused when any answer is AI-drafted; audit row per approval
+  with answers, sources and optional screenshot; shown in the applications
+  drawer as "Auto-submitted" vs "Approved by you".
+- Saved answers API and UI (work authorization, sponsorship, notice period,
+  salary, relocation, start date, voluntary disclosures).
+- Dead server-side apply path removed (auto_apply_service, form_filler,
+  applications/adapters, validator) after confirming no live callers.
+- Device tokens expire after 90 days with rotation; 5 devices per user;
+  LinkedIn password endpoint removed (cleanup SQL below).
+- Extension 0.6.0, least-privilege manifest, README matches behaviour.
 
-Before merging: review the diff, then test by hand on three real Workday
-tenants and one each of Greenhouse, Lever and Ashby. None of this has touched a
-live application form.
+**Direct portal search**
+- `POST /jobs/portal-search` resolves a pasted careers URL (Workday, Greenhouse,
+  Lever, Ashby, SmartRecruiters, Workable, Recruitee, Personio, BambooHR,
+  Teamtailor, Oracle, iCIMS) and fetches through the hardened client;
+  `GET/POST/DELETE /jobs/boards` saves boards (max 20) that join future
+  searches. A panel on the jobs page drives it.
+- Every location is honoured in the interactive, daily and ranking paths.
+- Legacy ATS fetchers deleted; job_connectors is the single implementation.
+- Catalog health command `python -m app.board_harvest health [--prune]`:
+  22 dead boards pruned, 45 live boards added (19 Workday tenants);
+  165 checked → 142 ok, 22 empty, 0 dead.
+- Workday/Oracle/iCIMS/Workable receive the user's keywords server-side;
+  per-host concurrency cap of 4 and 429/503 backoff.
 
-### Phase 1 — make auto-apply trustworthy (1–2 weeks)
+**Agents, prompt injection, RAG**
+- All 17 agents exercised with a stub model. Fixed: orchestrator stuck on an
+  unknown task, email monitor reporting success on total failure, interview
+  coach sending its raw template, company-research and computer-agent
+  KeyErrors, LinkedIn agent flagging retired automation.
+- Shared `untrusted()/fenced()/one_line()` helpers; fence break-out closed in
+  every live prompt; profile leak via browser navigation blocked; contact
+  details stripped from outreach notes; the model can no longer choose email
+  recipients; memory-poisoning filter; wider API-key redaction.
+- Inbound email changes an application's status only when the sender's
+  domain is the company's or a known ATS; otherwise it becomes a suggestion.
+- RAG: user scoping verified, blank/NUL chunk fixes, `distance` on results,
+  `format_context()` for delimited context, offline retrieval eval
+  (`backend/tests/evals`, docs/RAG_EVALS.md) wired into CI. Stub-embedding
+  scores validate plumbing only; real-embedding scores are unmeasured.
 
-1. Backend records whether a submit was approved by a person or by auto-apply,
-   and enforces the setting server-side with a per-day cap.
-2. Saved answers: a per-user store for sponsorship, notice period, salary,
-   relocation, and voluntary disclosures. Auto-apply only uses answers the user
-   wrote; anything AI-drafted forces a review.
-3. Hard stops stay hard: CAPTCHA, sign-in, account creation, verification
-   codes, consent checkboxes, unfilled required fields, validation errors.
-4. Workday gaps: date-picker popups and clicking "Add" for extra work-history
-   and education blocks.
-5. Evidence: store a screenshot and the submitted answers per application.
-6. Keep auto-submit off for LinkedIn (its terms explicitly forbid automation)
-   and Naukri (terms not reviewed); allow it on employer-hosted portals.
-7. Fix the `SUBMITTED` marker bug or delete the server-side path.
+### Still open
+- Nothing here has touched a real Workday, Greenhouse, Lever or Ashby form;
+  test by hand on three Workday tenants before trusting auto-submit.
+- Apply both migrations (`20261111120000_auto_submit_audit_and_token_expiry`,
+  `20261111130000_saved_job_boards`) before deploying; no Postgres was
+  available here, so they have not been executed.
+- Screenshots are captured only after the user clicks the toolbar icon, so
+  auto-submitted applications usually have none.
+- `rag_service.retrieve` still returns `[]` on error for non-resume types and
+  applies no similarity cutoff.
+- `/linkedin/outreach/identify` should accept user-supplied contacts
+  (Proxycurl is retired); `auto_apply_pipeline.py` still references it.
+- Taleo, SuccessFactors, Jobvite and JazzHR connectors; Chrome Web Store
+  publication; README rewrite; splitting oversized modules.
+- Browser check of the Applying settings page, the application drawer and the
+  jobs portal panel.
 
-### Phase 2 — direct portal search (1–2 weeks)
-
-1. API endpoint and UI field for "paste a company careers URL", persisting
-   user-added boards.
-2. Delete the legacy search paths; `job_connectors` becomes the only one.
-3. Catalog health check: most configured SmartRecruiters IDs look invalid, and
-   Lever `netflix` and Recruitee `mollie` return 404. Add a scheduled check
-   with a dead-board cache, and pass the user's keywords to Workday's
-   server-side search instead of refreshing with an empty query.
-4. Add Taleo, SuccessFactors, Jobvite and JazzHR connectors.
-5. Honour every location in a search, not just the first.
-6. Host-aware concurrency and 429 backoff.
-
-### Phase 3 — resume quality (1 week)
-
-Single-column template in PDF and DOCX, format chosen by portal, parse-back
-check, and a fact guard on generated claims.
-
-### Phase 4 — hygiene (ongoing)
-
-Remove LinkedIn credential storage and the dead adapters, expire extension
-tokens and cap devices, rewrite the README to match reality, split the
-oversized modules, and publish the extension to the Chrome Web Store.
-
-## 6. Not verified
-
-- No live application form on any portal was exercised.
-- Workday findings in the review were not live-tested by the reviewer; the
-  connector prototype did return jobs from live boards.
-- Frontend logic, migrations, deployment configs and LLM prompts were not
-  reviewed in depth.
-- Naukri and Workday-hosted site terms were not read; anti-bot behaviour per
-  portal is unsourced.
-- Browser-backed backend tests could not run here (no Playwright Chromium).
+### LinkedIn credential cleanup (run deliberately)
+```sql
+UPDATE public.users SET linkedin_password_enc = NULL, linkedin_email_enc = NULL
+ WHERE linkedin_password_enc IS NOT NULL OR linkedin_email_enc IS NOT NULL;
+-- after removing both columns from backend/app/models/db.py and deploying:
+ALTER TABLE public.users DROP COLUMN linkedin_password_enc, DROP COLUMN linkedin_email_enc;
+```

@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiClient, getApiErrorMessage } from "@/lib/api";
 import { Field, IslandButton, Select } from "@/components/vanguard";
 
-const sources = ["greenhouse", "lever", "ashby", "workable", "smartrecruiters", "recruitee", "adzuna", "remotive", "remoteok", "arbeitnow", "jsonld"];
+const sources = ["greenhouse", "lever", "ashby", "workday", "workable", "smartrecruiters", "recruitee", "bamboohr", "personio", "teamtailor", "adzuna", "remotive", "remoteok", "arbeitnow", "jsonld"];
 const DAYS = [1, 7, 14, 30, 90];
 
 type Props = { value: string; onChange: (v: string) => void; source: string; onSource: (v: string) => void; days: number; onDays: (v: number) => void };
