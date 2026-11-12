@@ -1499,5 +1499,113 @@
     "refresh_hours": 12,
     "provenance": "verified live 2026-11-11 via CXS jobs endpoint (returned jobs)",
     "policy": "public keyless board feed; stop on denial; no browser fallback"
+  },
+  {
+    "id": "jobvite:tylertech",
+    "family": "jobvite",
+    "tenant": "tylertech",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-12 via jobs.jobvite.com listing page (117 jobs)",
+    "policy": "public keyless board page; stop on denial; no browser fallback"
+  },
+  {
+    "id": "jobvite:nutanix",
+    "family": "jobvite",
+    "tenant": "nutanix",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-12 via jobs.jobvite.com listing page (125 jobs)",
+    "policy": "public keyless board page; stop on denial; no browser fallback"
+  },
+  {
+    "id": "jazzhr:innovatingjustice",
+    "family": "jazzhr",
+    "tenant": "innovatingjustice",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-12 via applytojob.com /apply listing page (54 jobs)",
+    "policy": "public keyless board page; stop on denial; no browser fallback"
+  },
+  {
+    "id": "jazzhr:belaycorporate",
+    "family": "jazzhr",
+    "tenant": "belaycorporate",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-12 via applytojob.com /apply listing page (10 jobs)",
+    "policy": "public keyless board page; stop on denial; no browser fallback"
+  },
+  {
+    "id": "dover:needletailai",
+    "family": "dover",
+    "tenant": "needletailai",
+    "permitted": true,
+    "refresh_hours": 24,
+    "provenance": "verified live 2026-11-12 via app.dover.com careers-page API (7 jobs)",
+    "policy": "public keyless board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "dover:dover",
+    "family": "dover",
+    "tenant": "Dover",
+    "permitted": true,
+    "refresh_hours": 24,
+    "provenance": "verified live 2026-11-12 via app.dover.com careers-page API (5 jobs)",
+    "policy": "public keyless board API; stop on denial; no browser fallback"
+  },
+  {
+    "id": "paylocity:9754ea65-df3a-4eae-9548-eebf27a1fce5",
+    "family": "paylocity",
+    "tenant": "9754ea65-df3a-4eae-9548-eebf27a1fce5",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-12 via recruiting.paylocity.com board page (6 jobs)",
+    "policy": "public keyless board page; stop on denial; no browser fallback"
+  },
+  {
+    "id": "paylocity:c2dcf9c2-ba80-41af-8539-fbce2a4bed81",
+    "family": "paylocity",
+    "tenant": "c2dcf9c2-ba80-41af-8539-fbce2a4bed81",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-12 via recruiting.paylocity.com board page (13 jobs)",
+    "policy": "public keyless board page; stop on denial; no browser fallback"
+  },
+  {
+    "id": "successfactors:jobs.zf.com",
+    "family": "successfactors",
+    "tenant": "jobs.zf.com",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-12 via /tile-search-results/ fragment (25 tiles per page)",
+    "policy": "public keyless career site fragment; stop on denial; no browser fallback"
+  },
+  {
+    "id": "successfactors:jobs.schaeffler.com",
+    "family": "successfactors",
+    "tenant": "jobs.schaeffler.com",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-12 via /tile-search-results/ fragment (100 tiles per page)",
+    "policy": "public keyless career site fragment; stop on denial; no browser fallback"
+  },
+  {
+    "id": "taleo:valero-2",
+    "family": "taleo",
+    "tenant": "valero.taleo.net|2",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-12 via careersection searchjobs REST (47 jobs)",
+    "policy": "public keyless career section; stop on denial; no browser fallback"
+  },
+  {
+    "id": "taleo:hyatt-10780",
+    "family": "taleo",
+    "tenant": "hyatt.taleo.net|10780",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "verified live 2026-11-12 via careersection searchjobs REST (712 jobs)",
+    "policy": "public keyless career section; stop on denial; no browser fallback"
   }
 ]

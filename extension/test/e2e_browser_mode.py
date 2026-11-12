@@ -114,7 +114,9 @@ def extension_copy(tmp):
     dst = Path(tmp) / "extension"
     shutil.copytree(ROOT / "extension", dst, ignore=shutil.ignore_patterns("test"))
     manifest = json.loads((dst / "manifest.json").read_text(encoding="utf8"))
-    manifest["host_permissions"].append("https://example.com/*")
+    manifest["host_permissions"] += ["https://example.com/*", "http://localhost/*", "http://127.0.0.1/*"]
+    for script in manifest["content_scripts"]:
+        script["matches"] += ["http://localhost/*", "http://127.0.0.1/*"]
     (dst / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf8")
     return dst
 
@@ -242,7 +244,7 @@ async def main():
                     else await context.wait_for_event("serviceworker")
                 )
                 await worker.evaluate(
-                    "p => chrome.storage.local.set({pairing: p})",
+                    "p => chrome.storage.local.set({pairing: p, approvedHosts: [\"example.com\"]})",
                     {"appOrigin": f"http://127.0.0.1:{port}", "token": token},
                 )
                 # Fire the poll alarm now: it (re)starts the command loop.

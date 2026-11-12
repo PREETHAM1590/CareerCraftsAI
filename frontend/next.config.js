@@ -1,3 +1,53 @@
+// Content-Security-Policy for static (non-nonce) rendering. Next.js App Router
+// emits inline bootstrap scripts and Clerk injects runtime styles, so
+// 'unsafe-inline' stays on script-src/style-src (per Clerk's manual-CSP
+// guidance); everything else is pinned to known origins. A nonce policy would
+// force every page to render per request.
+const isDev = process.env.NODE_ENV !== "production";
+
+function clerkFrontendHost() {
+  const key = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY || "";
+  try {
+    const host = Buffer.from(key.split("_").slice(2).join("_"), "base64").toString("utf8").replace(/\$$/, "");
+    if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(host)) return `https://${host}`;
+  } catch {
+    /* fall through to the development-instance wildcard */
+  }
+  return "https://*.clerk.accounts.dev";
+}
+
+function apiOrigin() {
+  try {
+    return new URL(process.env.NEXT_PUBLIC_API_URL || "").origin;
+  } catch {
+    return "";
+  }
+}
+
+function contentSecurityPolicy() {
+  const clerk = clerkFrontendHost();
+  const protect = "https://*.protect.clerk.com";
+  const turnstile = "https://challenges.cloudflare.com";
+  const directives = {
+    "default-src": ["'self'"],
+    "script-src": ["'self'", "'unsafe-inline'", ...(isDev ? ["'unsafe-eval'"] : []), clerk, turnstile, protect],
+    "style-src": ["'self'", "'unsafe-inline'"],
+    "img-src": ["'self'", "data:", "blob:", "https:"],
+    "font-src": ["'self'", "data:"],
+    "media-src": ["'self'", "blob:"],
+    "connect-src": ["'self'", apiOrigin(), clerk, "https://*.protect.clerk.com:*", ...(isDev ? ["ws:", "http://localhost:*"] : [])],
+    "frame-src": ["'self'", turnstile, protect],
+    "worker-src": ["'self'", "blob:"],
+    "manifest-src": ["'self'"],
+    "object-src": ["'none'"],
+    "base-uri": ["'self'"],
+    "form-action": ["'self'"],
+    "frame-ancestors": ["'self'"],
+  };
+  const policy = Object.entries(directives).map(([name, values]) => `${name} ${values.filter(Boolean).join(" ")}`);
+  return policy.join("; ");
+}
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: "standalone",
@@ -65,7 +115,10 @@ const nextConfig = {
         source: "/:path*",
         headers: [
           { key: "X-Frame-Options", value: "SAMEORIGIN" },
-          { key: "Content-Security-Policy", value: "frame-ancestors 'self'" },
+          { key: "Content-Security-Policy", value: contentSecurityPolicy() },
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=(), usb=()" },
         ],
       },
       {

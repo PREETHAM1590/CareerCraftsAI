@@ -22,6 +22,7 @@ import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildExtension } from "../scripts/build.mjs";
 
 const require = createRequire(import.meta.url);
 function loadPlaywright() {
@@ -35,7 +36,9 @@ function loadPlaywright() {
 const { chromium } = loadPlaywright();
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const extensionDir = path.resolve(here, "..");
+// The harness pairs with an app on 127.0.0.1, which only the dev build allows.
+const extensionDir = buildExtension({ out: path.join(os.tmpdir(), `cc-e2e-ext-${process.pid}`), dev: true });
+process.on("exit", () => fs.rmSync(extensionDir, { recursive: true, force: true }));
 const fixture = (name) => fs.readFileSync(path.join(here, "fixtures", name), "utf8");
 const HOSTS = ["boards.greenhouse.io", "jobs.lever.co", "careers.indeed.com", "acme.wd5.myworkdayjobs.com", "jobs.smartrecruiters.com", "apply.workable.com", "acme.wd3.myworkdaysite.com"];
 
@@ -183,13 +186,16 @@ const api = http.createServer(async (req, res) => {
     res.writeHead(200, { "Content-Type": "text/html" });
     return res.end("<!doctype html><title>CareerCraft</title>");
   }
-  if (req.headers.authorization !== `Bearer ${TOKEN}`) return send(401, { detail: "Extension is not connected" });
+  // Peer tokens for the pairing takeover checks: same API, different account.
+  const PEERS = { ccx_same_account_1: "ada@example.com", ccx_other_account: "mallory@example.com" };
+  const bearer = (req.headers.authorization || "").replace("Bearer ", "");
+  if (bearer !== TOKEN && !PEERS[bearer]) return send(401, { detail: "Extension is not connected" });
   const p = new URL(req.url, "http://x").pathname.replace(/^\/api\/v1\/extension\/device/, "");
   const raw = req.method === "POST" ? await collect(req, "utf8") : "";
   const json = raw ? JSON.parse(raw) : null;
   log.push([req.method, p.replace(task?.id || "-", ":id"), task?.status, json?.stage]);
 
-  if (p === "/me") return send(200, { device_id: "d1", device_name: "e2e", user: { email: "ada@example.com" } });
+  if (p === "/me") return send(200, { device_id: "d1", device_name: "e2e", user: { email: PEERS[bearer] || "ada@example.com" } });
   if (p === "/tasks/claim") {
     if (!task || task.status !== "pending") return send(204);
     task.status = "claimed";
@@ -327,7 +333,7 @@ async function panelHtml(page, limit = 1500) {
 
 // Opens the real toolbar popup (chrome.action.openPopup) and presses its
 // Submit button over CDP, since Playwright does not expose the popup as a page.
-async function popupApprove(worker, extensionId) {
+async function popupApprove(worker, extensionId, card = "review", button = "approve-submit") {
   const cdp = await context.newCDPSession(context.pages()[0]);
   await worker.evaluate(() => chrome.action.openPopup()).catch(() => {});
   const popupUrl = `chrome-extension://${extensionId}/popup.html`;
@@ -352,7 +358,7 @@ async function popupApprove(worker, extensionId) {
     });
   const rect = await waitUntil(async () => {
     const result = await call("Runtime.evaluate", {
-      expression: "(() => { const r = document.getElementById('review'); const b = document.getElementById('approve-submit'); if (!r || r.hidden || b.disabled) return null; b.scrollIntoView({ block: 'center' }); return JSON.stringify(b.getBoundingClientRect()); })()",
+      expression: `(() => { const r = document.getElementById('${card}'); const b = document.getElementById('${button}'); if (!r || r.hidden || b.disabled) return null; b.scrollIntoView({ block: 'center' }); return JSON.stringify(b.getBoundingClientRect()); })()`,
       returnByValue: true,
     });
     return result?.result?.value ? JSON.parse(result.result.value) : null;
@@ -632,6 +638,49 @@ try {
   await worker.evaluate(() => {
     chrome.tabs.captureVisibleTab = async () => "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ==";
   });
+
+  // Pairing takeover: a script on the app's own origin may offer tokens
+  // through the bridge, but a different account only replaces the pairing
+  // after a click in the extension popup.
+  const pairViaPage = (message) =>
+    app.evaluate(
+      (message) =>
+        new Promise((resolve) => {
+          const onMessage = (e) => {
+            if (e.data?.source === "careercraft-extension" && e.data.type === "CAREERCRAFT_PAIRED") {
+              window.removeEventListener("message", onMessage);
+              resolve(e.data);
+            }
+          };
+          window.addEventListener("message", onMessage);
+          window.postMessage({ source: "careercraft-app", type: "CAREERCRAFT_PAIR", appOrigin: location.origin, ...message }, location.origin);
+          setTimeout(() => resolve({ timeout: true }), 4000);
+        }),
+      message
+    );
+  const pairedToken = () => worker.evaluate(async () => (await chrome.storage.local.get("pairing")).pairing?.token);
+  {
+    const origin = new URL(app.url()).origin;
+    check((await pairViaPage({ token: "ccx_same_account_1" })).ok === true && (await pairedToken()) === "ccx_same_account_1", "the same account can re-pair itself from the page");
+    check((await pairViaPage({ token: "not-a-token" })).timeout === true && (await pairedToken()) === "ccx_same_account_1", "a malformed token never reaches the extension");
+    check((await pairViaPage({ token: "ccx_other_account", appOrigin: "https://evil.example" })).timeout === true, "an offer for another origin is dropped");
+    const takeover = await pairViaPage({ token: "ccx_other_account" });
+    check(takeover.ok === false && takeover.reason === "confirmation_required" && (await pairedToken()) === "ccx_same_account_1", `another account is held for confirmation, pairing unchanged (${takeover.reason})`);
+    // The popup page opened as a tab is not the toolbar popup, so it is refused too.
+    const imposter = await context.newPage();
+    await imposter.goto(`chrome-extension://${extensionId}/popup.html`);
+    const refused = await imposter.evaluate(() => chrome.runtime.sendMessage({ type: "CC_CONFIRM_PAIR" }));
+    await imposter.close();
+    check(/popup/i.test(refused?.error || "") && (await pairedToken()) === "ccx_same_account_1", "only the popup can confirm a pairing change");
+    const pending = await worker.evaluate(async () => (await chrome.storage.session.get("pendingPair")).pendingPair);
+    check(pending?.email === "mallory@example.com" && pending.pairing.appOrigin === origin, "the pending pairing names the new account");
+    await popupApprove(worker, extensionId, "pending-pair", "pair-confirm");
+    await waitUntil(async () => (await pairedToken()) === "ccx_other_account", 10000, "confirmed pairing");
+    check(true, "confirming in the popup switches the pairing");
+    await worker.evaluate(async (pairing) => chrome.storage.local.set({ pairing }), { appOrigin, token: TOKEN });
+    await worker.evaluate(() => chrome.storage.session.remove("pendingPair"));
+    await worker.evaluate(() => chrome.action.setBadgeText({ text: "" }));
+  }
 
   for (const [index, scenario] of SCENARIOS.entries()) {
     if (process.env.ONLY && !scenario.name.includes(process.env.ONLY)) continue;

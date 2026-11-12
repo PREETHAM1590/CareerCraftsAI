@@ -15,7 +15,13 @@ from app.services.ats_service import compute_ats_score
 from app.services.pdf_service import generate_resume_pdf
 from app.services.rag_service import retrieve
 from app.services.resume_export import PageOverflow
-from app.services.resume_grounding import source_text, unsupported_claims
+from app.services.resume_grounding import (
+    date_issues,
+    omitted_entries,
+    source_text,
+    unsupported_claims,
+)
+from app.services.resume_parseback import check_pdf
 from app.services.resume_structure import (
     apply_fixes,
     apply_saved_facts,
@@ -29,6 +35,54 @@ from app.services.storage_service import upload_file
 logger = logging.getLogger(__name__)
 
 
+MAX_SOURCE_CHARS = 30000
+
+
+def _full_resume_text(user_id: str) -> str:
+    """The whole stored resume (picked one, else primary), or "" when unavailable.
+
+    Retrieval returns a handful of 500-character chunks: roughly one page. A
+    longer resume would lose whole employers before the model ever saw them.
+    """
+    try:
+        from sqlalchemy import select
+
+        from app.core.sync_db import _get_sync_factory, _to_uuid, fetch_chosen_resume
+        from app.models.db import UserDocument
+
+        doc = fetch_chosen_resume(user_id)
+        if doc is None:
+            with _get_sync_factory()() as session:
+                doc = (
+                    session.execute(
+                        select(UserDocument)
+                        .where(
+                            UserDocument.user_id == _to_uuid(user_id),
+                            UserDocument.doc_type == "resume",
+                        )
+                        .order_by(UserDocument.is_primary.desc())
+                    )
+                    .scalars()
+                    .first()
+                )
+        text = getattr(doc, "raw_text", None)
+        return text if isinstance(text, str) and len(text) <= MAX_SOURCE_CHARS else ""
+    except Exception as exc:
+        logger.info("Full resume text unavailable, using retrieved chunks: %s", type(exc).__name__)
+        return ""
+
+
+def _parse_back(
+    pdf_bytes: bytes, markdown: str, full_name: str | None, page_target: int | None
+) -> dict | None:
+    """ATS read-back of the PDF just produced; a failing check never fails the run."""
+    try:
+        return check_pdf(pdf_bytes, markdown, full_name or "", page_target).to_dict()
+    except Exception as exc:
+        logger.warning("Resume parse-back check failed: %s", type(exc).__name__)
+        return None
+
+
 def _persist_resume_document(
     user_id: str,
     full_name: str | None,
@@ -38,6 +92,7 @@ def _persist_resume_document(
     pdf_bytes: bytes,
     warnings: list[str] | None = None,
     page_target: int | None = 2,
+    parse_back: dict | None = None,
 ) -> str:
     """Upload the tailored PDF to storage and record a UserDocument row.
 
@@ -67,6 +122,7 @@ def _persist_resume_document(
                     "page_target": page_target,
                     "estimate": estimate_resume(parsed.resume_markdown, jd_text),
                     "template": template,
+                    "parse_back": parse_back,
                     "keywords_matched": parsed.keywords_matched,
                     "keywords_missing": parsed.keywords_missing,
                     "warnings": list((parsed.warnings if warnings is None else warnings) or []),
@@ -136,12 +192,13 @@ def _ground_resume(
     full_name: str | None,
     verified_contact: dict,
     saved_facts: dict,
+    jd_text: str = "",
 ) -> tuple["ResumeOutput", list[str]]:
     """Make sure the tailored text only says what the candidate's own
     documents say. One repair pass asks the model to remove what is not in the
     source; whatever is still unsupported is returned for the caller to act on.
     """
-    unsupported = unsupported_claims(parsed.resume_markdown, source)
+    unsupported = unsupported_claims(parsed.resume_markdown, source, jd_text)
     if not unsupported:
         return parsed, []
     repair_prompt = (
@@ -158,7 +215,7 @@ def _ground_resume(
         logger.warning("Resume grounding repair failed: %s", type(exc).__name__)
         return parsed, unsupported
     repaired, _ = _finalize_markdown(repaired, full_name, verified_contact, saved_facts)
-    remaining = unsupported_claims(repaired.resume_markdown, source)
+    remaining = unsupported_claims(repaired.resume_markdown, source, jd_text)
     if len(remaining) <= len(unsupported):
         return repaired, remaining
     return parsed, unsupported
@@ -235,6 +292,9 @@ def resume_agent_node(state: AgentState) -> AgentState:
         chunk_texts = [
             c.page_content if hasattr(c, "page_content") else str(c) for c in resume_chunks
         ]
+        full_text = _full_resume_text(user_id)
+        if full_text.strip():
+            chunk_texts = [full_text]
         emit(
             run_id,
             "tool_result",
@@ -266,7 +326,7 @@ def resume_agent_node(state: AgentState) -> AgentState:
         parsed, review = _finalize_markdown(parsed, full_name, verified_contact, saved_facts)
         source = source_text(chunk_texts, saved_facts, full_name, json.dumps(verified_contact))
         parsed, unsupported = _ground_resume(
-            llm, parsed, source, full_name, verified_contact, saved_facts
+            llm, parsed, source, full_name, verified_contact, saved_facts, jd_text
         )
         if parsed.resume_markdown.strip():
             review = review_resume(parsed.resume_markdown)
@@ -274,6 +334,14 @@ def resume_agent_node(state: AgentState) -> AgentState:
             parsed.warnings = list(parsed.warnings or []) + [
                 "Not found in your documents, please check or remove: "
                 + ", ".join(unsupported[:10])
+            ]
+        if parsed.resume_markdown.strip():
+            parsed.warnings = list(parsed.warnings or []) + [
+                *date_issues(parsed.resume_markdown),
+                *(
+                    f"Left out of this tailored version: {name}"
+                    for name in omitted_entries(parsed.resume_markdown, source, saved_facts)
+                ),
             ]
         model_warnings = list(parsed.warnings or [])
 
@@ -323,6 +391,9 @@ def resume_agent_node(state: AgentState) -> AgentState:
                 )
                 model_warnings = list(model_warnings or []) + [fit_warning]
                 parsed.warnings = list(parsed.warnings or []) + [fit_warning]
+            parse_back = _parse_back(pdf_bytes, parsed.resume_markdown, full_name, page_target)
+            if parse_back:
+                parsed.warnings = list(parsed.warnings or []) + parse_back["warnings"]
             try:
                 pdf_document_id = _persist_resume_document(
                     user_id,
@@ -333,6 +404,7 @@ def resume_agent_node(state: AgentState) -> AgentState:
                     pdf_bytes,
                     warnings=model_warnings,
                     page_target=page_target,
+                    parse_back=parse_back,
                 )
             except Exception as se:
                 logger.warning("Resume PDF persist failed, continuing without download: %s", se)
