@@ -43,6 +43,7 @@ import {
 } from "@/components/vanguard";
 import { cn } from "@/lib/utils";
 import { PROVIDERS, PROVIDER_MODELS, type Provider } from "@/lib/model-providers";
+import { PrivacyCard } from "./PrivacyCard";
 
 interface ModelSetting {
   id: string;
@@ -528,6 +529,10 @@ export default function SettingsModelsPage() {
                   </motion.ul>
                 )}
               </section>
+            </Reveal>
+
+            <Reveal delay={0.12}>
+              <PrivacyCard />
             </Reveal>
 
             <Reveal delay={0.14}>

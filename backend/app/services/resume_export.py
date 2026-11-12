@@ -19,6 +19,7 @@ from app.services.pdf_service import (
     Theme,
     _plain,
     generate_resume_pdf,
+    page_size,
 )
 from app.services.resume_structure import clean_placeholders
 
@@ -44,7 +45,12 @@ class ResumeExport:
 
 
 def fit_resume(
-    markdown: str, full_name: str = "", template: str = "modern", page_target: int = 2
+    markdown: str,
+    full_name: str = "",
+    template: str = "modern",
+    page_target: int = 2,
+    *,
+    strict: bool = True,
 ) -> ResumeExport:
     if page_target not in (1, 2):
         raise ValueError("page_target must be 1 or 2")
@@ -61,7 +67,8 @@ def fit_resume(
     candidates.extend(replace(candidates[-1], body_size=size) for size in (10.8, 10.6))
     count = 0
     for theme in candidates:
-        pdf = generate_resume_pdf(text, full_name, template, theme_override=theme, strict=True)
+        # strict=False only measures the page count: the DOCX keeps every character.
+        pdf = generate_resume_pdf(text, full_name, template, theme_override=theme, strict=strict)
         with fitz.open(stream=pdf, filetype="pdf") as parsed:
             count = len(parsed)
         if count <= page_target:
@@ -73,7 +80,8 @@ def generate_resume_docx(layout: ResumeExport, full_name: str = "") -> bytes:
     document = Document()
     section = document.sections[0]
     theme = layout.theme
-    section.page_width, section.page_height = Inches(8.5), Inches(11)
+    width, height = page_size()
+    section.page_width, section.page_height = Pt(width), Pt(height)
     # ReportLab frames have 6pt padding inside the page margins.
     section.left_margin = section.right_margin = Inches(theme.margin_x) + Pt(6)
     section.top_margin = section.bottom_margin = Inches(theme.margin_y) + Pt(6)

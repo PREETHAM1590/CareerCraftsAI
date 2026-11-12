@@ -32,6 +32,7 @@ router.include_router(basis_router)
 logger = logging.getLogger(__name__)
 
 VALID_STATUSES = {"saved", "applied", "viewed", "interview", "offer", "rejected"}
+MAX_LOCATIONS = 5
 
 
 class JobSearchRequest(JobSearchQuerySchema):
@@ -49,6 +50,9 @@ class JobSearchRequest(JobSearchQuerySchema):
     job_type: str | None = None
     target_roles: list[str] | None = Field(None, max_length=20)
     preferred_locations: list[str] | None = Field(None, max_length=20)
+    # India-first (roles open only outside India hidden). Omitted: the member's
+    # saved switch, which is on unless every searched place is outside India.
+    india_focus: bool | None = None
 
 
 def make_job_search_id(
@@ -366,6 +370,8 @@ async def _resolve_search_context(
 
     requested_location = payload.location.strip()
     location = requested_location or "Remote"
+    # Every place the member asked for counts, not just the first.
+    locations = [location]
     work_modes = _split_pref_values(payload.work_mode)
     preferred_locations = [
         str(loc).strip() for loc in (payload.preferred_locations or []) if str(loc).strip()
@@ -386,6 +392,7 @@ async def _resolve_search_context(
             and preferred_locations
         ):
             location = preferred_locations[0]
+            locations = list(dict.fromkeys(preferred_locations))[:MAX_LOCATIONS]
     work_mode = ",".join(work_modes)
 
     source = {
@@ -394,12 +401,14 @@ async def _resolve_search_context(
             "preferences" if prefs and location != requested_location else "custom"
         ),
         "work_mode": work_mode or None,
+        "locations": locations,
         "experience_level": experience_level,
         "years_experience": years_experience,
         "job_type": payload.job_type or (prefs.job_type if prefs else None),
         "resume_skills": skills,
         "preference_id": str(prefs.id) if prefs else None,
         "resume_id": str(resume.id) if resume else None,
+        "india_focus_off": bool(prefs) and getattr(prefs, "india_focus", None) is False,
     }
     return search_query[:200], location[:200], work_mode, source
 
@@ -448,7 +457,11 @@ async def get_job_search_profile(
         if prefs
         else []
     )
-    location = "Remote" if primary_work_mode == "remote" else (locations[0] if locations else "Any")
+    location = (
+        "Remote"
+        if primary_work_mode == "remote"
+        else (", ".join(locations[:MAX_LOCATIONS]) if locations else "Any")
+    )
 
     missing_fields: list[str] = []
     if not resume:
@@ -709,6 +722,10 @@ async def search_jobs(
         search_query = " ".join(titles)
     if structured_locations:
         location = structured_locations[0]
+    search_locations = structured_locations or [
+        str(loc) for loc in (search_source.get("locations") or []) if loc
+    ]
+    search_locations = search_locations[:MAX_LOCATIONS] or [location]
     # Leave unset so job_search_service uses DEFAULT_PLATFORMS
     # (open_apis, jobspy, ats, remoteok).
     #
@@ -721,19 +738,25 @@ async def search_jobs(
     platforms = payload.platforms or []
 
     remote = (payload.remote or "").strip() or work_mode or "any"
+    from app.services.india_focus import wants_india
     from app.services.search_basis import resolve_basis
 
     resume, persona = await resolve_basis(
         db, current_user.id, payload.resume_id, payload.persona_id
     )
+    explicit_focus = payload.india_focus
+    if explicit_focus is None and search_source.get("india_focus_off"):
+        explicit_focus = False
     basis = {
         "resume_id": str(resume.id) if resume else None,
         "persona_id": str(persona.id) if persona else None,
         "posted_within_days": payload.posted_within_days,
         "titles": sorted(set(titles)),
-        "locations": sorted(set(structured_locations)),
+        "locations": sorted(set(search_locations)),
         "platforms": sorted(platforms),
         "remote": remote,
+        # Resolved here so the run, its dedupe id and every cache key see one value.
+        "india_focus": wants_india({"locations": search_locations, "india_focus": explicit_focus}),
     }
     stable_job_id = make_job_search_id(
         str(current_user.id), search_query, location, payload.max_results, basis
@@ -811,6 +834,144 @@ async def search_jobs(
         await db.commit()
         raise HTTPException(status_code=503, detail="Job search service unavailable") from exc
     return JobSearchResponse(run_id=run_id, queue_job_id=stable_job_id, queued=True)
+
+
+class PortalSearchRequest(BaseModel):
+    url: str = Field(min_length=3, max_length=2048)
+    query: str = Field(default="", max_length=200)
+    locations: list[str] = Field(default_factory=list, max_length=MAX_LOCATIONS)
+    max_results: int = Field(25, ge=1, le=50)
+    save_board: bool = False
+
+
+class SaveBoardRequest(BaseModel):
+    url: str = Field(min_length=3, max_length=2048)
+    label: str = Field(default="", max_length=150)
+
+
+class SavedBoardResponse(BaseModel):
+    id: uuid.UUID
+    source_id: str
+    family: str
+    label: str
+    careers_url: str
+    created_at: datetime
+
+
+class PortalBoardInfo(BaseModel):
+    source_id: str
+    family: str
+    label: str
+    saved_board_id: uuid.UUID | None = None
+
+
+class PortalSearchResponse(BaseModel):
+    board: PortalBoardInfo
+    total_found: int
+    saved_count: int
+    jobs: list[ApplicationResponse]
+
+
+def _portal_http_error(exc) -> HTTPException:
+    return HTTPException(status_code=exc.status_code, detail=exc.detail)
+
+
+@router.post("/portal-search", response_model=PortalSearchResponse)
+@limiter.limit("10/minute")
+async def search_company_portal(
+    request: Request,
+    payload: PortalSearchRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Read one company's careers portal live. Only links that resolve to a supported
+    ATS host are fetched; matches are saved to the member's list like a normal search."""
+    from app.services import saved_boards as boards
+
+    try:
+        source = boards.resolve_board(payload.url)
+        locations = [loc.strip() for loc in payload.locations if loc.strip()]
+        found, total = await boards.search_portal(
+            source, payload.query.strip(), locations, payload.max_results
+        )
+        ids, created = await boards.save_jobs(db, current_user.id, found)
+        saved_board_id = None
+        if payload.save_board:
+            board = await boards.add_board(
+                db, current_user.id, source, payload.url, boards.default_label(source, found)
+            )
+            saved_board_id = board.id
+    except boards.PortalError as exc:
+        raise _portal_http_error(exc) from exc
+    rows = []
+    if ids:
+        by_id = {
+            row.id: row
+            for row in (await db.execute(select(JobApplication).where(JobApplication.id.in_(ids))))
+            .scalars()
+            .all()
+        }
+        rows = [by_id[i] for i in ids if i in by_id]
+    return PortalSearchResponse(
+        board=PortalBoardInfo(
+            source_id=source.id,
+            family=source.family,
+            label=boards.default_label(source, found),
+            saved_board_id=saved_board_id,
+        ),
+        total_found=total,
+        saved_count=created,
+        jobs=await _with_tracking(db, current_user.id, rows),
+    )
+
+
+@router.get("/boards", response_model=list[SavedBoardResponse])
+async def list_saved_boards(
+    db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)
+):
+    from app.services import saved_boards as boards
+
+    return [
+        SavedBoardResponse(**vars(board)) for board in await boards.list_boards(db, current_user.id)
+    ]
+
+
+@router.post("/boards", response_model=SavedBoardResponse, status_code=201)
+@limiter.limit("30/minute")
+async def save_board(
+    request: Request,
+    payload: SaveBoardRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Remember a careers link so every future search includes it. Nothing is fetched here."""
+    from app.services import saved_boards as boards
+
+    try:
+        source = boards.resolve_board(payload.url)
+        board = await boards.add_board(
+            db,
+            current_user.id,
+            source,
+            payload.url,
+            payload.label.strip() or boards.default_label(source),
+        )
+    except boards.PortalError as exc:
+        raise _portal_http_error(exc) from exc
+    return SavedBoardResponse(**vars(board))
+
+
+@router.delete("/boards/{board_id}", status_code=204)
+async def delete_saved_board(
+    board_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from app.services import saved_boards as boards
+
+    if not await boards.remove_board(db, current_user.id, board_id):
+        raise HTTPException(status_code=404, detail="Board not found")
+    return Response(status_code=204)
 
 
 _SORTS = {

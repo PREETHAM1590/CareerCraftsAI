@@ -449,6 +449,84 @@ Update application status or notes.
 
 ---
 
+### `POST /jobs/portal-search`
+
+Read one company's careers board live and save the matches to the member's job list. Rate limit: 10/minute.
+
+**Request:**
+```json
+{
+  "url": "https://acme.wd5.myworkdayjobs.com/en-US/External",
+  "query": "data engineer",
+  "locations": ["Remote", "Berlin"],
+  "max_results": 25,
+  "save_board": false
+}
+```
+
+`url` is required (3–2048 characters). `query` defaults to `""`, `locations` takes up to 5 entries, `max_results` is 1–50 (default 25), and `save_board` defaults to `false`.
+
+**Response `200`:**
+```json
+{
+  "board": {"source_id": "workday:acme-external", "family": "workday", "label": "Acme", "saved_board_id": null},
+  "total_found": 42,
+  "saved_count": 7,
+  "jobs": []
+}
+```
+
+`jobs` holds application records as returned by `GET /jobs/applications`. `saved_board_id` is set when `save_board` is `true`.
+
+**Errors:** `422` when the link is not a supported careers page (the body lists the supported portals); `404` when the portal has no board at that address; `429` when the portal is rate limiting; `504` on timeout; `502` when the portal cannot be read.
+
+---
+
+### `GET /jobs/boards`
+
+List the member's saved boards.
+
+**Response `200`:**
+```json
+[
+  {
+    "id": "uuid",
+    "source_id": "greenhouse:acme",
+    "family": "greenhouse",
+    "label": "Acme",
+    "careers_url": "https://boards.greenhouse.io/acme",
+    "created_at": "2026-11-01T00:00:00Z"
+  }
+]
+```
+
+---
+
+### `POST /jobs/boards`
+
+Save a careers link so later searches include it. Nothing is fetched. Rate limit: 30/minute.
+
+**Request:**
+```json
+{"url": "https://boards.greenhouse.io/acme", "label": "Acme"}
+```
+
+`label` is optional (up to 150 characters) and defaults to a label derived from the board.
+
+**Response `201`:** a board object as in `GET /jobs/boards`.
+
+**Errors:** `422` for an unsupported link; `409` when 20 boards are already saved.
+
+---
+
+### `DELETE /jobs/boards/{board_id}`
+
+Remove a saved board.
+
+**Response `204`:** no body. `404` if the board does not belong to the member.
+
+---
+
 ## Email
 
 ### `GET /email/threads`
@@ -900,6 +978,56 @@ Save AI model API key (encrypted before storage).
 ```json
 {"updated": true}
 ```
+
+---
+
+### `GET /users/me/saved-answers`
+
+List the member's screening answers. Each catalogue question appears, with `value` `null` until answered, followed by any other saved answers (`group` `"other"`).
+
+**Response `200`:**
+```json
+{
+  "answers": [
+    {
+      "question_key": "disclosure.veteran_status",
+      "question": "Veteran status",
+      "group": "voluntary",
+      "optional": true,
+      "value": null,
+      "updated_at": null
+    }
+  ]
+}
+```
+
+---
+
+### `PUT /users/me/saved-answers/{question_key}`
+
+Save or replace one answer. `question_key` has the form `group.name` (lowercase letters, digits, `_` and spaces after the dot). Rate limit: 60/minute.
+
+**Request:**
+```json
+{"value": "Yes"}
+```
+
+`value` is a string, a boolean, or a list of up to 20 strings. Each text value is limited to 2000 characters. A blank string is rejected; send `DELETE` instead.
+
+**Response `200`:**
+```json
+{"question_key": "disclosure.veteran_status", "value": "Yes"}
+```
+
+**Errors:** `404` for a malformed or internal key; `422` for an empty or over-long answer.
+
+---
+
+### `DELETE /users/me/saved-answers/{question_key}`
+
+Remove a saved answer.
+
+**Response `204`:** no body.
 
 ---
 

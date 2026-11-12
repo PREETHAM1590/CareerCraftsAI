@@ -2,9 +2,17 @@ import json
 import uuid
 from unittest.mock import MagicMock, patch
 
+import pytest
 from langchain_core.messages import HumanMessage
 
 from app.agents.state import AgentState
+
+
+@pytest.fixture(autouse=True)
+def _stub_parse_back():
+    # These tests render with a fake PDF; test_resume_parseback covers real files.
+    with patch("app.agents.resume_agent._parse_back", return_value=None):
+        yield
 
 
 def make_state(jd_text: str = "Python engineer at Stripe") -> AgentState:
@@ -346,7 +354,9 @@ def test_resume_agent_keeps_template_render_when_fit_overflows(mock_llm):
     assert any("pages" in w for w in persist.call_args.kwargs["warnings"])
 
 
-def test_unsupported_details_are_flagged_and_block_auto_apply(mock_llm):
+def test_unsupported_details_are_removed_after_failed_repair(mock_llm):
+    from app.services.resume_grounding import unsupported_claims
+
     draft = "# Jane Doe\n## EXPERIENCE\n### Engineer | Acme\n- Cut costs 60% with Kubernetes\n"
     # first draft and the repair attempt both still contain Kubernetes
     mock_llm.responses = [_resume_json(draft)]
@@ -354,9 +364,12 @@ def test_unsupported_details_are_flagged_and_block_auto_apply(mock_llm):
     result, _, _, _ = _run_agent(
         mock_llm,
         _resume_json(draft),
-        unsupported=lambda *_: ["60", "Kubernetes"],
+        unsupported=unsupported_claims,
     )
 
     pending = result["pending_action"]
-    assert pending["grounding"] == {"checked": True, "unsupported": ["60", "Kubernetes"]}
-    assert any("60, Kubernetes" in w for w in pending["warnings"])
+    assert pending["grounding"]["checked"] is True
+    assert pending["grounding"]["unsupported"] == []
+    assert "Acme" in pending["grounding"]["removed"]
+    assert "Kubernetes" not in pending["resume_markdown"]
+    assert any("Removed because" in w for w in pending["warnings"])

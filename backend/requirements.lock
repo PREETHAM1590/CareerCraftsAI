@@ -427,8 +427,11 @@ psycopg-binary==3.3.6 ; implementation_name != 'pypy'
     # via psycopg
 psycopg-pool==3.3.3
     # via langchain-postgres
-pyasn1==0.6.4
-    # via pyasn1-modules
+pyasn1==0.6.5
+    # via
+    #   -c constraints.txt
+    #   -r requirements.txt
+    #   pyasn1-modules
 pyasn1-modules==0.4.2
     # via google-auth
 pycparser==3.0 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy'
@@ -475,8 +478,10 @@ pymupdf==1.28.2
     # via -r requirements.txt
 pyparsing==3.3.3
     # via httplib2
-pypdf==6.21.2
-    # via -r requirements.txt
+pypdf==6.21.4
+    # via
+    #   -c constraints.txt
+    #   -r requirements.txt
 pytest==9.1.1
     # via
     #   -r requirements.txt

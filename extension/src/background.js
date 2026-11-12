@@ -20,6 +20,12 @@ import {
   jobUrl,
   taskSenderAllowed,
   snapshotKey,
+  autoSubmitBlockedHost,
+  validBridgePair,
+  pairingNeedsConfirmation,
+  PENDING_PAIR_TTL_MS,
+  hostApproved,
+  approveHost,
 } from "./common.js";
 import {
   configureAgent,
@@ -122,12 +128,56 @@ async function fetchResume(pairing, taskId) {
   }
 }
 
+// Browser permission alone is not enough: the host must be a known job/ATS
+// host or one the member approved in the popup.
 async function hasHostPermission(urlString) {
   try {
     const u = new URL(urlString);
+    if (!(await hostApproved(urlString))) return false;
     return await chrome.permissions.contains({ origins: [u.origin + "/*"] });
   } catch (e) {
     return false;
+  }
+}
+
+// A screenshot of the reviewed form, stored with the submit approval. Only
+// when the application's tab is the one showing in its window, so another
+// tab is never captured; best effort (no screenshot never blocks a submit).
+// Chrome allows it only with activeTab (the member clicked the toolbar icon
+// on that tab) since the manifest deliberately has no <all_urls>.
+async function captureReview(pairing, taskId, tabId, reviewHash, pageUrl) {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (!tab.active || !tab.url || new URL(tab.url).origin !== new URL(pageUrl).origin) return false;
+    const screenshot = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "jpeg", quality: 60 });
+    if (!screenshot.startsWith("data:image/jpeg;base64,") || screenshot.length > 2_700_000) return false;
+    const res = await apiFetch(pairing, `/extension/device/tasks/${taskId}/evidence`, {
+      method: "POST",
+      json: { review_hash: reviewHash, screenshot },
+    });
+    return res.ok;
+  } catch (e) {
+    console.info("CareerCraft: no review screenshot", e && e.message);
+    return false;
+  }
+}
+
+// Tokens expire after 90 days; swap for a fresh one well before that.
+const ROTATION_CHECK_MS = 12 * 60 * 60 * 1000;
+
+async function rotateTokenIfDue() {
+  const pairing = await getPairing();
+  if (!pairing) return;
+  const { lastRotationCheck } = await chrome.storage.session.get("lastRotationCheck");
+  if (lastRotationCheck && Date.now() - lastRotationCheck < ROTATION_CHECK_MS) return;
+  await chrome.storage.session.set({ lastRotationCheck: Date.now() });
+  const me = await apiFetch(pairing, "/extension/device/me");
+  if (!me.ok || !me.data?.rotate_token) return;
+  const rotated = await apiFetch(pairing, "/extension/device/token/rotate", { method: "POST" });
+  const current = await getPairing();
+  // Only if nothing re-paired meanwhile; the old token is already dead server-side.
+  if (rotated.ok && rotated.data?.token && current?.token === pairing.token) {
+    await setPairing({ ...current, token: rotated.data.token });
   }
 }
 
@@ -311,7 +361,12 @@ async function requestTabPermission(active, url) {
 async function injectAndRun(tabId, task, submitting) {
   try {
     await chrome.scripting.executeScript({ target: { tabId }, files: CONTENT_SCRIPT_FILES });
-    await chrome.tabs.sendMessage(tabId, { type: "RUN_TASK", task, submitting: !!submitting });
+    // The server's per-task answer to "may this be auto-submitted?"; it
+    // re-checks at approval time, so this only spares a doomed attempt.
+    const tab = await chrome.tabs.get(tabId);
+    const autoApply = task.auto_submit === true && !autoSubmitBlockedHost(tab.url || task.job_url);
+    // Top frame only: autofill may have left runners in the page's iframes.
+    await chrome.tabs.sendMessage(tabId, { type: "RUN_TASK", task, submitting: !!submitting, autoApply }, { frameId: 0 });
   } catch (e) {
     // Common and harmless: chrome:// pages, PDF viewer tabs, or a tab that
     // navigated away again before the script could run.
@@ -345,9 +400,27 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
 // The popup's permission prompt usually closes the popup before its own
 // promise settles, so continue from here as soon as Chrome records the grant.
-chrome.permissions.onAdded.addListener(() => {
-  onPermissionAdded();
-  pollOnce();
+// Only the popup can request a permission (it needs a user gesture), so a
+// grant for the host we are waiting on is the member's approval of it.
+async function approvePendingHost(added) {
+  const { [SESSION_KEYS.HOST_PERMISSION_NEEDED]: host } = await chrome.storage.session.get(SESSION_KEYS.HOST_PERMISSION_NEEDED);
+  if (!host) return;
+  for (const origin of added?.origins || []) {
+    try {
+      if (new URL(origin.replace("://*.", "://")).hostname === host) await approveHost(host);
+    } catch (e) {
+      /* ignore malformed pattern */
+    }
+  }
+}
+
+chrome.permissions.onAdded.addListener((added) => {
+  approvePendingHost(added)
+    .catch(() => {})
+    .finally(() => {
+      onPermissionAdded();
+      pollOnce();
+    });
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -370,13 +443,21 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 // ── Messages ─────────────────────────────────────────────────────────────
 
+async function applyPairing(current, pairing) {
+  if (current && current.token !== pairing.token) await revokeCurrentPairing();
+  await setPairing(pairing);
+  await syncBridgeRegistration(pairing.appOrigin);
+  pollOnce();
+  startCommandLoop();
+}
+
 async function handleMessage(msg, sender) {
   const popup = sender.id === chrome.runtime.id && !sender.tab && sender.url === chrome.runtime.getURL("popup.html");
   const contentMessages = new Set(["CC_PLAN", "CC_EVENT", "CC_REVIEW", "CC_SUBMIT_STATUS", "CC_ANSWER", "CC_DECIDE", "CC_RESUME", "CC_NAVIGATE"]);
   if (contentMessages.has(msg?.type) && !taskSenderAllowed(sender, await getActiveTask(), msg, chrome.runtime.id)) {
     return { error: "This page does not own the active application." };
   }
-  if (["CC_GET_STATUS", "CC_VALIDATE_AND_PAIR", "CC_DISCONNECT", "CC_CHECK_NOW", "CC_APPROVE_SUBMIT"].includes(msg?.type) && !popup) return { error: "Open the CareerCraft extension popup to perform this action." };
+  if (["CC_GET_STATUS", "CC_VALIDATE_AND_PAIR", "CC_DISCONNECT", "CC_CHECK_NOW", "CC_APPROVE_SUBMIT", "CC_APPROVE_HOST", "CC_CONFIRM_PAIR", "CC_REJECT_PAIR"].includes(msg?.type) && !popup) return { error: "Open the CareerCraft extension popup to perform this action." };
   switch (msg && msg.type) {
     case "WAKE":
     case "CC_CHECK_NOW": {
@@ -442,6 +523,7 @@ async function handleMessage(msg, sender) {
       // same tab (never a new one), within the hop budget. `to` is null for
       // an in-page Apply button the runner clicks itself; it still counts.
       const active = await getActiveTask();
+      if (!active) return { error: "This application is no longer active." };
       if (active.submitting || active.review) return { error: "The application is already under review." };
       const hops = (active.navigations || 0) + 1;
       if (hops > MAX_NAVIGATIONS) return { error: "Could not find the application form after following the Apply links." };
@@ -465,11 +547,30 @@ async function handleMessage(msg, sender) {
       if (!res.ok) return { error: res.error };
       const active = await getActiveTask();
       if (!active || active.taskId !== msg.taskId) return { error: "This application is no longer active." };
-      await setActiveTask({ ...active, review: { ...res.data, snapshot: msg.snapshot }, submitPermit: null });
+      // Evidence first, so an approval (which may follow at once) finds it.
+      const screenshot = await captureReview(pairing, msg.taskId, active.tabId, res.data.review_hash, sender.url);
+      await setActiveTask({ ...active, review: { ...res.data, snapshot: msg.snapshot, screenshot }, submitPermit: null });
+      let autoRefused = null;
+      // Auto-submit: the driver found nothing that needs the person, and the
+      // server said this member's setting allows it (never the page's word).
+      // The server checks again and refuses (403) when it may not.
+      if (msg.auto && active.task?.auto_submit === true && !autoSubmitBlockedHost(sender.url)) {
+        const approval = await apiFetch(pairing, `/extension/device/tasks/${msg.taskId}/approve-submit`, {
+          method: "POST",
+          json: { review_hash: res.data.review_hash, user_confirmed: true, auto_approved: true },
+        });
+        const current = await getActiveTask();
+        if (approval.ok && current && current.taskId === msg.taskId) {
+          await setActiveTask({ ...current, submitPermit: { token: approval.data.submission_token, expiresAt: approval.data.expires_at } });
+          return { data: { ...res.data, autoApproved: true } };
+        }
+        // Fall back to the manual approval below, saying why.
+        autoRefused = approval.error || "Auto-submit was not allowed for this application.";
+      }
       // The user approves the final form in the popup: point them at it.
       await setBadge("1", "#2563eb");
       await openPopupIfPossible();
-      return { data: res.data };
+      return { data: { ...res.data, autoRefused } };
     }
 
     case "CC_APPROVE_SUBMIT": {
@@ -477,7 +578,10 @@ async function handleMessage(msg, sender) {
       const pairing = await getPairing();
       if (!active?.review || !pairing || active.taskId !== msg.taskId || active.review.review_hash !== msg.reviewHash) return { error: "Review changed; reopen the popup." };
       if (active.submitPermit || active.submitting) return { error: "Already approved; do not submit again." };
-      const res = await apiFetch(pairing, `/extension/device/tasks/${active.taskId}/approve-submit`, { method: "POST", json: { review_hash: active.review.review_hash, user_confirmed: true } });
+      // Opening the popup from the toolbar grants activeTab on the job tab,
+      // which is what lets Chrome capture it when the review could not.
+      if (!active.review.screenshot) await captureReview(pairing, active.taskId, active.tabId, active.review.review_hash, active.review.snapshot.url);
+      const res = await apiFetch(pairing, `/extension/device/tasks/${active.taskId}/approve-submit`, { method: "POST", json: { review_hash: active.review.review_hash, user_confirmed: true, auto_approved: false } });
       if (!res.ok) return { error: res.error };
       await setActiveTask({ ...active, submitPermit: { token: res.data.submission_token, expiresAt: res.data.expires_at } });
       await setBadge("");
@@ -542,8 +646,11 @@ async function handleMessage(msg, sender) {
         await syncBridgeRegistration(null);
         return { paired: false, hostPermissionNeeded: hostPermissionNeeded || null };
       }
+      const { [SESSION_KEYS.PENDING_PAIR]: pending } = await chrome.storage.session.get(SESSION_KEYS.PENDING_PAIR);
+      const pendingPair = pending && Date.now() - pending.since <= PENDING_PAIR_TTL_MS ? { appOrigin: pending.pairing.appOrigin, email: pending.email, deviceName: pending.deviceName } : null;
       return {
         paired: true,
+        pendingPair,
         appOrigin: pairing.appOrigin,
         device: me.ok ? me.data : null,
         activeTask: active,
@@ -568,15 +675,12 @@ async function handleMessage(msg, sender) {
     }
 
     case "CC_PAIR_FROM_BRIDGE": {
+      if (!sender.tab || !validBridgePair(msg, new URL(sender.url || "https://invalid.invalid").origin)) return { error: "Invalid app origin" };
       const origin = appOrigin(msg.appOrigin);
-      // A page can only (re)pair the extension to its own origin, and never
-      // take over a pairing to a different CareerCraft deployment — that
-      // needs the popup.
       const current = await getPairing();
-      const appUrl = new URL(origin);
-      const knownApp = ["careercraftsai.me", "www.careercraftsai.me", "app.careercraftsai.me"].includes(appUrl.hostname);
-      if (sender.id !== chrome.runtime.id || sender.frameId !== 0 || new URL(sender.url).origin !== origin || (!knownApp && current?.appOrigin !== origin)) return { error: "Invalid app origin" };
-      if (current && current.appOrigin !== origin) return { ok: false, reason: "paired_elsewhere" };
+      const knownApp = ["careercraftsai.me", "www.careercraftsai.me", "app.careercraftsai.me"].includes(new URL(origin).hostname);
+      if (sender.id !== chrome.runtime.id || sender.frameId !== 0 || (!knownApp && current?.appOrigin !== origin)) return { error: "Invalid app origin" };
+      if (current && current.appOrigin === origin && current.token === msg.token) return { ok: true };
       if (!isStaticOrigin(origin)) {
         const granted = await chrome.permissions.contains({ origins: [origin + "/*"] });
         if (!granted) return { ok: false, reason: "permission_required" };
@@ -584,17 +688,54 @@ async function handleMessage(msg, sender) {
       const pairing = { appOrigin: origin, token: msg.token };
       const me = await apiFetch(pairing, "/extension/device/me");
       if (!me.ok || !me.data) return { ok: false, reason: "invalid_token" };
-      if (current && current.token !== msg.token) await revokeCurrentPairing();
-      await setPairing(pairing);
-      await syncBridgeRegistration(origin);
-      pollOnce();
-      startCommandLoop();
+      if (current) {
+        // Re-pairing the same account on the same deployment is harmless. A
+        // different account or deployment needs the member's confirmation in
+        // the popup, which a page cannot click. A dead (401) pairing has
+        // nothing left to take over.
+        const currentMe = await apiFetch(current, "/extension/device/me");
+        const sameAccount = current.appOrigin === origin && currentMe.ok && !pairingNeedsConfirmation(current, currentMe.data?.user?.email, me.data.user?.email);
+        if (!sameAccount && currentMe.status !== 401) {
+          await chrome.storage.session.set({
+            [SESSION_KEYS.PENDING_PAIR]: { pairing, email: me.data.user?.email || null, deviceName: me.data.device_name || null, since: Date.now() },
+          });
+          await setBadge("?", "#d97706");
+          await openPopupIfPossible();
+          return { ok: false, reason: "confirmation_required" };
+        }
+      }
+      await applyPairing(current, pairing);
+      return { ok: true };
+    }
+
+    case "CC_CONFIRM_PAIR": {
+      const { [SESSION_KEYS.PENDING_PAIR]: pending } = await chrome.storage.session.get(SESSION_KEYS.PENDING_PAIR);
+      await chrome.storage.session.remove(SESSION_KEYS.PENDING_PAIR);
+      await setBadge("");
+      if (!pending || Date.now() - pending.since > PENDING_PAIR_TTL_MS) return { ok: false, error: "The connection request expired. Try again from CareerCraft." };
+      const me = await apiFetch(pending.pairing, "/extension/device/me");
+      if (!me.ok) return { ok: false, error: "That connection code is no longer valid." };
+      await applyPairing(await getPairing(), pending.pairing);
+      return { ok: true };
+    }
+
+    case "CC_REJECT_PAIR": {
+      await chrome.storage.session.remove(SESSION_KEYS.PENDING_PAIR);
+      await setBadge("");
+      return { ok: true };
+    }
+
+    case "CC_APPROVE_HOST": {
+      const { [SESSION_KEYS.HOST_PERMISSION_NEEDED]: host } = await chrome.storage.session.get(SESSION_KEYS.HOST_PERMISSION_NEEDED);
+      if (!host || msg.host !== host) return { ok: false };
+      await approveHost(host);
       return { ok: true };
     }
 
     case "CC_DISCONNECT": {
       await revokeCurrentPairing();
       await clearPairing();
+      await chrome.storage.session.remove(SESSION_KEYS.PENDING_PAIR);
       await resetActiveTask();
       await stopAgentTab();
       await syncBridgeRegistration(null);
@@ -631,6 +772,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === POLL_ALARM) {
     pollOnce();
     startCommandLoop();
+    rotateTokenIfDue().catch(() => {});
   }
 });
 chrome.runtime.onInstalled.addListener(() => {

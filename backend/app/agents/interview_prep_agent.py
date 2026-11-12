@@ -11,7 +11,7 @@ from app.agents.prompts.interview_prep_prompt import (
 from app.agents.state import AgentState
 from app.core.model_router import build_agent_llm
 from app.core.sync_db import fetch_model_settings
-from app.services.rag_service import retrieve
+from app.services.rag_service import retrieval_unavailable, retrieve
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,17 @@ def interview_prep_agent_node(state: AgentState) -> AgentState:
         context_text = (
             "\n".join(c.page_content for c in chunks) if chunks else "No resume context available."
         )
+        if not chunks:
+            context_warning = (
+                "No resume text could be retrieved (no resume uploaded, or document search "
+                "was unavailable), so this prep is generic."
+            )
+        elif retrieval_unavailable(chunks):
+            context_warning = (
+                "Document search was unavailable, so your saved profile text was used."
+            )
+        else:
+            context_warning = None
 
         llm = build_agent_llm(model_settings)
 
@@ -66,6 +77,7 @@ def interview_prep_agent_node(state: AgentState) -> AgentState:
             "target_role": target_role,
             "company": company,
             **prep_data,
+            **({"context_warning": context_warning} if context_warning else {}),
         }
         return {
             **state,

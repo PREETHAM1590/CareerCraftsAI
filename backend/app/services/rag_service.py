@@ -2,12 +2,14 @@ import logging
 import re
 
 from langchain_core.documents import Document
+from langchain_core.embeddings import Embeddings
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_ollama import OllamaEmbeddings
 from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.core.config import settings as app_settings
+from app.core.pii_vault import strip_contact_details
 from app.core.security import decrypt_api_key
 
 logger = logging.getLogger(__name__)
@@ -97,11 +99,16 @@ def extract_text(content: bytes, filename: str) -> str:
     return extract_verified_text(content, content_type)
 
 
+MAX_INDEXED_CHARS = 1_000_000  # matches the parser's extracted-text ceiling
+
+
 def chunk_text(text: str) -> list[str]:
+    """Split text into non-blank chunks; NULs (rejected by Postgres) are dropped."""
+    text = text.replace("\x00", "")[:MAX_INDEXED_CHARS]
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=app_settings.RAG_CHUNK_SIZE, chunk_overlap=app_settings.RAG_CHUNK_OVERLAP
     )
-    return splitter.split_text(text)
+    return [c for c in splitter.split_text(text) if c.strip()]
 
 
 def _relevant_chunks(chunks: list[str], query: str, k: int) -> list[str]:
@@ -120,7 +127,47 @@ def _relevant_chunks(chunks: list[str], query: str, k: int) -> list[str]:
     return [chunks[i] for i in sorted(best)]
 
 
+def _contact_free(text: str) -> str:
+    # Providers reject empty input; a chunk that was only contact lines
+    # still needs a vector.
+    return strip_contact_details(text).strip() or "-"
+
+
+class ContactFreeEmbeddings(Embeddings):
+    """Embeds text with emails, phone numbers, profile links and IDs removed.
+
+    Resume text is full of them and similarity search needs none, so they are
+    never sent to the embedding provider. Other attributes (``model``) come
+    from the wrapped provider model."""
+
+    def __init__(self, inner):
+        self.inner = inner
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return self.inner.embed_documents([_contact_free(t) for t in texts])
+
+    def embed_query(self, text: str) -> list[float]:
+        return self.inner.embed_query(_contact_free(text))
+
+    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
+        return await self.inner.aembed_documents([_contact_free(t) for t in texts])
+
+    async def aembed_query(self, text: str) -> list[float]:
+        return await self.inner.aembed_query(_contact_free(text))
+
+    def __getattr__(self, name):
+        if name == "inner":
+            raise AttributeError(name)
+        return getattr(self.inner, name)
+
+
 def get_embedding_model(model_settings):
+    """Provider embeddings (see _provider_embedding_model) that never receive
+    contact details or IDs."""
+    return ContactFreeEmbeddings(_provider_embedding_model(model_settings))
+
+
+def _provider_embedding_model(model_settings):
     """Embeddings for the user's active model, or the deployment fallback.
 
     Providers without an embeddings API (DeepSeek, Anthropic, OpenRouter,
@@ -218,7 +265,7 @@ def _ensure_hnsw_index() -> None:
         db.commit()
 
 
-def _search_live_documents(user_id, doc_type, provider, embeddings, query, k):
+def _search_live_documents(user_id, doc_type, provider, embeddings, query, k, max_distance=None):
     """Legacy/unowned/orphaned vectors never enter a model prompt."""
     from sqlalchemy import text
 
@@ -242,7 +289,9 @@ def _search_live_documents(user_id, doc_type, provider, embeddings, query, k):
     with _get_sync_factory()() as db:
         rows = db.execute(
             text(f"""
-            SELECT e.document, e.cmetadata
+            SELECT e.document, e.cmetadata,
+                   e.embedding::vector({dimension}) <=> CAST(:query AS vector({dimension}))
+                       AS distance
             FROM langchain_pg_embedding e
             JOIN langchain_pg_collection c ON c.uuid = e.collection_id
             WHERE c.name = :collection
@@ -262,7 +311,14 @@ def _search_live_documents(user_id, doc_type, provider, embeddings, query, k):
                 "limit": max(1, min(k, 100)),
             },
         ).all()
-    return [Document(page_content=row.document, metadata=row.cmetadata or {}) for row in rows]
+    return [
+        Document(
+            page_content=row.document,
+            metadata={**(row.cmetadata or {}), "distance": float(row.distance)},
+        )
+        for row in rows
+        if max_distance is None or row.distance <= max_distance
+    ]
 
 
 def ingest_document(
@@ -276,7 +332,11 @@ def ingest_document(
     if not metadata.get("document_id"):
         raise ValueError("document_id is required for owned vector ingestion")
     metadata = {**metadata, "user_id": str(user_id), "doc_type": doc_type}
-    chunks = chunk_text(text)
+    # Stored chunks feed agent prompts; contact details come from the profile
+    # (resume_facts.verified_contact), never from retrieved chunks.
+    chunks = chunk_text(strip_contact_details(text))
+    if not chunks:
+        raise ValueError("Document has no indexable text")
     embeddings = get_embedding_model(model_settings)
     docs = [
         Document(page_content=chunk, metadata={**metadata, "chunk_index": i})
@@ -292,14 +352,46 @@ def ingest_document(
     return len(docs)
 
 
+class RetrievalResult(list):
+    """Chunk list whose `unavailable` flag separates a failed search from no matches.
+
+    Slicing, `.copy()`, `+` and copy/deepcopy keep the flag; `list(result)`
+    does not, so callers check `retrieval_unavailable` on what retrieve returned."""
+
+    unavailable: bool = False
+
+    def _like(self, items) -> "RetrievalResult":
+        out = RetrievalResult(items)
+        out.unavailable = self.unavailable
+        return out
+
+    def __getitem__(self, index):
+        value = super().__getitem__(index)
+        return self._like(value) if isinstance(index, slice) else value
+
+    def copy(self) -> "RetrievalResult":
+        return self._like(self)
+
+    def __add__(self, other) -> "RetrievalResult":
+        return self._like([*self, *other])
+
+
+def retrieval_unavailable(chunks) -> bool:
+    """True when retrieval failed, incl. the resume profile-text fallback."""
+    return bool(getattr(chunks, "unavailable", False)) or any(
+        (getattr(c, "metadata", None) or {}).get("rag_unavailable") is True for c in chunks
+    )
+
+
 def retrieve(
     user_id: str,
     doc_type: str,
     query: str,
     model_settings,
     k: int | None = None,
+    max_distance: float | None = None,
 ) -> list[Document]:
-    """Retrieve top-k relevant chunks."""
+    """Retrieve top-k chunks, optionally dropping those beyond a cosine distance."""
     k = app_settings.RAG_TOP_K if k is None else k
     if doc_type == "resume":
         # A resume the member picked for this run replaces similarity search:
@@ -321,9 +413,12 @@ def retrieve(
             embeddings,
             query,
             k,
+            max_distance,
         )
     except Exception as exc:
-        logger.warning("Vector retrieval failed for %s/%s: %s", user_id, doc_type, exc)
+        logger.warning(
+            "Vector retrieval failed for %s/%s: %s", user_id, doc_type, exc, exc_info=True
+        )
         if doc_type == "resume":
             from app.core.sync_db import fetch_user_profile_text
 
@@ -339,4 +434,6 @@ def retrieve(
                         },
                     )
                 ]
-        return []
+        failed = RetrievalResult()
+        failed.unavailable = True
+        return failed

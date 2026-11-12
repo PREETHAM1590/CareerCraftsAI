@@ -10,7 +10,7 @@ def test_native_provider_is_used():
     settings = SimpleNamespace(provider="ollama", ollama_url="http://ollama:11434")
     with patch.object(rag_service, "QwenOllamaEmbeddings", return_value="ollama") as embeddings:
         assert rag_service.get_embedding_provider(settings) == "ollama"
-        assert rag_service.get_embedding_model(settings) == "ollama"
+        assert rag_service.get_embedding_model(settings).inner == "ollama"
     embeddings.assert_called_once_with(
         model=rag_service.OLLAMA_EMBEDDING_MODEL, base_url="http://ollama:11434"
     )
@@ -23,6 +23,8 @@ def test_ollama_branch_builds_the_qwen_subclass():
     model = rag_service.get_embedding_model(
         SimpleNamespace(provider="ollama", ollama_url="http://ollama:11434")
     )
+    assert isinstance(model, rag_service.ContactFreeEmbeddings)
+    model = model.inner
     assert isinstance(model, rag_service.QwenOllamaEmbeddings)
     assert isinstance(model, rag_service.OllamaEmbeddings)
     assert model.model == "qwen3-embedding:0.6b"
@@ -149,7 +151,7 @@ def test_google_uses_gemini_embedding_001_at_768_dims(monkeypatch):
     monkeypatch.setattr(rag_service, "decrypt_api_key", MagicMock(return_value="g-key"))
     settings = SimpleNamespace(provider="google", ollama_url=None, api_key_enc="enc")
     with patch.object(rag_service, "GeminiEmbeddings", return_value="google") as embeddings:
-        assert rag_service.get_embedding_model(settings) == "google"
+        assert rag_service.get_embedding_model(settings).inner == "google"
     embeddings.assert_called_once_with(model="models/gemini-embedding-001", google_api_key="g-key")
     assert rag_service.EMBEDDING_DIMENSIONS["google"] == 768
     assert rag_service.collection_name("u", "resume", "google") == "u_resume_google_768d"
@@ -215,7 +217,7 @@ def test_fallback_openai_never_reuses_the_chat_provider_key(monkeypatch):
 
     monkeypatch.setattr(rag_service.app_settings, "EMBEDDING_API_KEY", "sk-embed")
     with patch.object(rag_service, "OpenAIEmbeddings", return_value="openai") as embeddings:
-        assert rag_service.get_embedding_model(settings) == "openai"
+        assert rag_service.get_embedding_model(settings).inner == "openai"
     embeddings.assert_called_once_with(model="text-embedding-3-small", api_key="sk-embed")
     decrypt.assert_not_called()
 
@@ -226,5 +228,5 @@ def test_native_openai_still_uses_the_users_key(monkeypatch):
     monkeypatch.setattr(rag_service, "decrypt_api_key", MagicMock(return_value="sk-user"))
     settings = SimpleNamespace(provider="openai", ollama_url=None, api_key_enc="enc")
     with patch.object(rag_service, "OpenAIEmbeddings", return_value="openai") as embeddings:
-        assert rag_service.get_embedding_model(settings) == "openai"
+        assert rag_service.get_embedding_model(settings).inner == "openai"
     embeddings.assert_called_once_with(model="text-embedding-3-small", api_key="sk-user")

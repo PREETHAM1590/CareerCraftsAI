@@ -10,23 +10,88 @@ from app.agents.prompts.resume_prompt import (
     build_user_prompt as build_resume_json_prompt,
 )
 from app.agents.state import AgentState
+from app.core.pii_vault import strip_contact_details
 from app.services.ats_estimator import estimate_resume
 from app.services.ats_service import compute_ats_score
 from app.services.pdf_service import generate_resume_pdf
-from app.services.rag_service import retrieve
+from app.services.rag_service import retrieval_unavailable, retrieve
 from app.services.resume_export import PageOverflow
-from app.services.resume_grounding import source_text, unsupported_claims
+from app.services.resume_grounding import (
+    date_issues,
+    omitted_entries,
+    remove_unsupported,
+    source_text,
+    unsupported_claims,
+)
+from app.services.resume_parseback import check_pdf
 from app.services.resume_structure import (
     apply_fixes,
     apply_saved_facts,
     clean_placeholders,
     ensure_contact,
     filter_resolved_warnings,
+    parse_contact,
     review_resume,
 )
 from app.services.storage_service import upload_file
 
 logger = logging.getLogger(__name__)
+
+
+MAX_SOURCE_CHARS = 30000
+RESUME_UNAVAILABLE = (
+    "Your resume could not be read right now (document search is unavailable). "
+    "Nothing was generated; please try again in a few minutes."
+)
+RESUME_SEARCH_DEGRADED = (
+    "Your documents could not be searched, so this version was tailored from your "
+    "profile text only. Check it carefully before using it."
+)
+
+
+def _full_resume_text(user_id: str) -> str:
+    """The whole stored resume (picked one, else primary), or "" when unavailable.
+
+    Retrieval returns a handful of 500-character chunks: roughly one page. A
+    longer resume would lose whole employers before the model ever saw them.
+    """
+    try:
+        from sqlalchemy import select
+
+        from app.core.sync_db import _get_sync_factory, _to_uuid, fetch_chosen_resume
+        from app.models.db import UserDocument
+
+        doc = fetch_chosen_resume(user_id)
+        if doc is None:
+            with _get_sync_factory()() as session:
+                doc = (
+                    session.execute(
+                        select(UserDocument)
+                        .where(
+                            UserDocument.user_id == _to_uuid(user_id),
+                            UserDocument.doc_type == "resume",
+                        )
+                        .order_by(UserDocument.is_primary.desc())
+                    )
+                    .scalars()
+                    .first()
+                )
+        text = getattr(doc, "raw_text", None)
+        return text if isinstance(text, str) and len(text) <= MAX_SOURCE_CHARS else ""
+    except Exception as exc:
+        logger.info("Full resume text unavailable, using retrieved chunks: %s", type(exc).__name__)
+        return ""
+
+
+def _parse_back(
+    pdf_bytes: bytes, markdown: str, full_name: str | None, page_target: int | None
+) -> dict | None:
+    """ATS read-back of the PDF just produced; a failing check never fails the run."""
+    try:
+        return check_pdf(pdf_bytes, markdown, full_name or "", page_target).to_dict()
+    except Exception as exc:
+        logger.warning("Resume parse-back check failed: %s", type(exc).__name__)
+        return None
 
 
 def _persist_resume_document(
@@ -38,6 +103,7 @@ def _persist_resume_document(
     pdf_bytes: bytes,
     warnings: list[str] | None = None,
     page_target: int | None = 2,
+    parse_back: dict | None = None,
 ) -> str:
     """Upload the tailored PDF to storage and record a UserDocument row.
 
@@ -67,6 +133,7 @@ def _persist_resume_document(
                     "page_target": page_target,
                     "estimate": estimate_resume(parsed.resume_markdown, jd_text),
                     "template": template,
+                    "parse_back": parse_back,
                     "keywords_matched": parsed.keywords_matched,
                     "keywords_missing": parsed.keywords_missing,
                     "warnings": list((parsed.warnings if warnings is None else warnings) or []),
@@ -136,29 +203,40 @@ def _ground_resume(
     full_name: str | None,
     verified_contact: dict,
     saved_facts: dict,
+    jd_text: str = "",
+    prompt_source: str | None = None,
 ) -> tuple["ResumeOutput", list[str]]:
     """Make sure the tailored text only says what the candidate's own
     documents say. One repair pass asks the model to remove what is not in the
     source; whatever is still unsupported is returned for the caller to act on.
+
+    ``source`` (contact details included) is what the draft is checked
+    against; the repair prompt gets ``prompt_source`` and the draft with
+    contact details removed, and the contact line is put back afterwards.
     """
-    unsupported = unsupported_claims(parsed.resume_markdown, source)
+    unsupported = unsupported_claims(parsed.resume_markdown, source, jd_text)
     if not unsupported:
         return parsed, []
     repair_prompt = (
         "Your resume draft contains details that do not appear in the candidate's source "
         "documents. Remove or reword every one so the resume states only what the source "
-        "states. Do not add anything new.\n"
+        "states. Do not add anything new. Contact details have been removed and are added "
+        "back afterwards; do not add any.\n"
         f"UNSUPPORTED: {', '.join(unsupported[:30])}\n\n"
-        f"DRAFT_RESUME_MARKDOWN:\n{parsed.resume_markdown}\n\n"
-        f"CANDIDATE_SOURCE:\n{source[:12000]}"
+        f"DRAFT_RESUME_MARKDOWN:\n{strip_contact_details(parsed.resume_markdown)}\n\n"
+        f"CANDIDATE_SOURCE:\n{strip_contact_details(prompt_source or source)[:12000]}"
     )
     try:
         repaired = call_llm_json(llm, RESUME_JSON_SYSTEM_PROMPT, repair_prompt, ResumeOutput)
     except Exception as exc:  # the first draft stays and is reported as unsupported
         logger.warning("Resume grounding repair failed: %s", type(exc).__name__)
         return parsed, unsupported
-    repaired, _ = _finalize_markdown(repaired, full_name, verified_contact, saved_facts)
-    remaining = unsupported_claims(repaired.resume_markdown, source)
+    # The draft's own contact line (from the candidate's resume) fills what the
+    # verified profile lacks, so a repair never drops the header.
+    draft_contact = parse_contact(parsed.resume_markdown)
+    contact = {**draft_contact, **{k: v for k, v in verified_contact.items() if v}}
+    repaired, _ = _finalize_markdown(repaired, full_name, contact, saved_facts)
+    remaining = unsupported_claims(repaired.resume_markdown, source, jd_text)
     if len(remaining) <= len(unsupported):
         return repaired, remaining
     return parsed, unsupported
@@ -232,9 +310,19 @@ def resume_agent_node(state: AgentState) -> AgentState:
             },
         )
         resume_chunks = retrieve(user_id, "resume", jd_text, model_settings, k=8)
+        rag_failed = retrieval_unavailable(resume_chunks)
         chunk_texts = [
             c.page_content if hasattr(c, "page_content") else str(c) for c in resume_chunks
         ]
+        full_text = _full_resume_text(user_id)
+        if full_text.strip():
+            chunk_texts = [full_text]
+            rag_failed = False  # the whole stored resume needs no search
+        elif rag_failed and not any(t.strip() for t in chunk_texts):
+            # A failed search is not an empty resume: generating now would
+            # invent one from the job description alone.
+            emit(run_id, "error", {"message": RESUME_UNAVAILABLE})
+            return {**state, "status": "failed", "error": RESUME_UNAVAILABLE}
         emit(
             run_id,
             "tool_result",
@@ -265,15 +353,46 @@ def resume_agent_node(state: AgentState) -> AgentState:
         )
         parsed, review = _finalize_markdown(parsed, full_name, verified_contact, saved_facts)
         source = source_text(chunk_texts, saved_facts, full_name, json.dumps(verified_contact))
+        prompt_facts = {k: v for k, v in (saved_facts or {}).items() if k != "contact"}
         parsed, unsupported = _ground_resume(
-            llm, parsed, source, full_name, verified_contact, saved_facts
+            llm,
+            parsed,
+            source,
+            full_name,
+            verified_contact,
+            saved_facts,
+            jd_text,
+            prompt_source=source_text(chunk_texts, prompt_facts),
         )
+        date_warnings = date_issues(parsed.resume_markdown)
+        removed: list[str] = []
+        if unsupported and parsed.resume_markdown.strip():
+            # Still unsupported after the repair: taken out, never shipped. What
+            # the member confirmed (saved facts) is part of `source` already.
+            parsed.resume_markdown, removed = remove_unsupported(
+                parsed.resume_markdown, source, jd_text
+            )
+            unsupported = unsupported_claims(parsed.resume_markdown, source, jd_text)
+        if removed:
+            parsed.warnings = list(parsed.warnings or []) + [
+                "Removed because your documents do not support it: " + ", ".join(removed[:10])
+            ]
+        if rag_failed:
+            parsed.warnings = list(parsed.warnings or []) + [RESUME_SEARCH_DEGRADED]
         if parsed.resume_markdown.strip():
             review = review_resume(parsed.resume_markdown)
         if unsupported:
             parsed.warnings = list(parsed.warnings or []) + [
                 "Not found in your documents, please check or remove: "
                 + ", ".join(unsupported[:10])
+            ]
+        if parsed.resume_markdown.strip():
+            parsed.warnings = list(parsed.warnings or []) + [
+                *date_warnings,
+                *(
+                    f"Left out of this tailored version: {name}"
+                    for name in omitted_entries(parsed.resume_markdown, source, saved_facts)
+                ),
             ]
         model_warnings = list(parsed.warnings or [])
 
@@ -323,6 +442,9 @@ def resume_agent_node(state: AgentState) -> AgentState:
                 )
                 model_warnings = list(model_warnings or []) + [fit_warning]
                 parsed.warnings = list(parsed.warnings or []) + [fit_warning]
+            parse_back = _parse_back(pdf_bytes, parsed.resume_markdown, full_name, page_target)
+            if parse_back:
+                parsed.warnings = list(parsed.warnings or []) + parse_back["warnings"]
             try:
                 pdf_document_id = _persist_resume_document(
                     user_id,
@@ -333,6 +455,7 @@ def resume_agent_node(state: AgentState) -> AgentState:
                     pdf_bytes,
                     warnings=model_warnings,
                     page_target=page_target,
+                    parse_back=parse_back,
                 )
             except Exception as se:
                 logger.warning("Resume PDF persist failed, continuing without download: %s", se)
@@ -348,7 +471,7 @@ def resume_agent_node(state: AgentState) -> AgentState:
 
         pending = _resume_pending_action(parsed, pdf_document_id)
         pending["review"] = review
-        pending["grounding"] = {"checked": True, "unsupported": unsupported}
+        pending["grounding"] = {"checked": True, "unsupported": unsupported, "removed": removed}
         pending["template"] = template
         emit(run_id, "complete", {"result": pending})
         return {
