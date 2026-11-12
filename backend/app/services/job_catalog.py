@@ -344,8 +344,10 @@ def _cities(locations: list[str]) -> list[str] | None:
 def in_city(job: dict, locations: list[str]) -> bool:
     """The job is located in one of the requested cities (False for remote searches).
     Indian aliases match each other and a Delhi/NCR search covers the region."""
-    where = str(job.get("location") or "").lower()
-    job_cities = set(india_focus.cities_in(where))
+    raw = str(job.get("location") or "")
+    where = raw.lower()
+    # A posting that names only a state ("TS, IN") counts for that state's cities.
+    job_cities = set(india_focus.cities_in(where)) or india_focus.state_cities(raw)
     for place in [loc for loc in locations if loc] if _cities(locations) else []:
         wanted = india_focus.search_cities(place)
         if wanted & job_cities:
@@ -378,14 +380,29 @@ def location_matches(job: dict, locations: list[str]) -> bool:
     return _location_ok(job, [loc for loc in locations if loc])
 
 
+_COMPOUND_TITLE_WORDS = {
+    "frontend": "front[- ]?end",
+    "backend": "back[- ]?end",
+    "fullstack": "full[- ]?stack",
+    # Employers use either word for the same role ("Frontend Engineer").
+    "developer": "(?:developer|engineer)",
+    "engineer": "(?:engineer|developer)",
+}
+
+
 def _role_patterns(query: dict) -> list[list[str]]:
     """One conjunction per alternative; share literal matching across Python and SQL."""
     alternatives = query.get("titles") or [query.get("search_query") or "software engineer"]
     groups = []
     for role in alternatives:
         patterns = []
-        for word in role.lower().split():
+        # "Front End", "front-end" and "Frontend" are one word in titles.
+        folded = re.sub(r"\b(front|back|full)[\s-]+(end|stack)\b", r"\1\2", role.lower())
+        for word in folded.split():
             if word in _STOPWORDS:
+                continue
+            if word in _COMPOUND_TITLE_WORDS:
+                patterns.append(_COMPOUND_TITLE_WORDS[word])
                 continue
             literal = re.escape(word)
             patterns.append(r"(?<!\w)" + literal + r"(?!\w)" if len(word) <= 2 else literal)
