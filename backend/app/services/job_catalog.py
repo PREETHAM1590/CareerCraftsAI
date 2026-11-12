@@ -378,14 +378,26 @@ def location_matches(job: dict, locations: list[str]) -> bool:
     return _location_ok(job, [loc for loc in locations if loc])
 
 
+_COMPOUND_TITLE_WORDS = {
+    "frontend": "front[- ]?end",
+    "backend": "back[- ]?end",
+    "fullstack": "full[- ]?stack",
+}
+
+
 def _role_patterns(query: dict) -> list[list[str]]:
     """One conjunction per alternative; share literal matching across Python and SQL."""
     alternatives = query.get("titles") or [query.get("search_query") or "software engineer"]
     groups = []
     for role in alternatives:
         patterns = []
-        for word in role.lower().split():
+        # "Front End", "front-end" and "Frontend" are one word in titles.
+        folded = re.sub(r"\b(front|back|full)[\s-]+(end|stack)\b", r"\1\2", role.lower())
+        for word in folded.split():
             if word in _STOPWORDS:
+                continue
+            if word in _COMPOUND_TITLE_WORDS:
+                patterns.append(_COMPOUND_TITLE_WORDS[word])
                 continue
             literal = re.escape(word)
             patterns.append(r"(?<!\w)" + literal + r"(?!\w)" if len(word) <= 2 else literal)

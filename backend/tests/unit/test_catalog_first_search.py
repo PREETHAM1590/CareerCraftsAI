@@ -455,6 +455,7 @@ async def test_catalog_sql_prefilter_keeps_short_role_alternatives():
             {"titles": ["QA", "Backend Engineer"]}, [], live_platforms=["jobspy"]
         )
     assert db.execute.await_args.args[1]["title_0_0"] == r"(?<!\w)qa(?!\w)"
-    assert db.execute.await_args.args[1]["title_1_0"] == "backend"
+    # "Backend" also matches "Back End" and "back-end" titles.
+    assert db.execute.await_args.args[1]["title_1_0"] == "back[- ]?end"
     assert db.execute.await_args.args[1]["title_1_1"] == "engineer"
     assert {job["title"] for job in jobs} == {"QA Analyst", "Backend Engineer"}
