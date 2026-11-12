@@ -67,7 +67,30 @@ export function autoSubmitBlockedHost(urlString) {
   }
   return NO_AUTO_SUBMIT_HOSTS.some((h) => host === h || host.endsWith(`.${h}`));
 }
-export const SESSION_KEYS = { ACTIVE_TASK: "activeTask", HOST_PERMISSION_NEEDED: "hostPermissionNeeded" };
+export const SESSION_KEYS = { ACTIVE_TASK: "activeTask", HOST_PERMISSION_NEEDED: "hostPermissionNeeded", PENDING_PAIR: "pendingPair" };
+export const APPROVED_HOSTS_KEY = "approvedHosts";
+export const PENDING_PAIR_TTL_MS = 10 * 60 * 1000;
+const TOKEN_SHAPE = /^ccx_[A-Za-z0-9_-]{8,512}$/;
+
+// Message from the web page's bridge: strict shape, own origin only.
+export function validBridgePair(data, pageOrigin) {
+  return (
+    !!data &&
+    typeof data === "object" &&
+    typeof data.token === "string" &&
+    TOKEN_SHAPE.test(data.token) &&
+    typeof data.appOrigin === "string" &&
+    data.appOrigin === pageOrigin
+  );
+}
+
+// A page may pair the extension silently only when nothing is paired yet or
+// the new token belongs to the same account. Anything else is a takeover
+// until the member confirms it in the popup.
+export function pairingNeedsConfirmation(current, currentEmail, newEmail) {
+  if (!current) return false;
+  return !(currentEmail && newEmail && currentEmail.toLowerCase() === newEmail.toLowerCase());
+}
 
 export function appOrigin(value) {
   const url = new URL(value);
@@ -120,6 +143,35 @@ function hostMatchesStatic(hostname) {
     }
     return hostname === bare;
   });
+}
+
+const NON_JOB_HOSTS = ["localhost", "127.0.0.1", "careercraftsai.me", "www.careercraftsai.me", "app.careercraftsai.me"];
+
+// Hosts the extension may drive without asking: the job boards and ATS
+// vendors it ships with. Anything else needs the member's one-time approval.
+export function isKnownJobHost(hostname) {
+  const h = String(hostname || "").toLowerCase().replace(/\.$/, "");
+  return !NON_JOB_HOSTS.includes(h) && hostMatchesStatic(h);
+}
+
+export async function hostApproved(urlString) {
+  let host;
+  try {
+    host = new URL(urlString).hostname.toLowerCase();
+  } catch (e) {
+    return false;
+  }
+  if (isKnownJobHost(host)) return true;
+  const { [APPROVED_HOSTS_KEY]: approved } = await chrome.storage.local.get(APPROVED_HOSTS_KEY);
+  return Array.isArray(approved) && approved.includes(host);
+}
+
+export async function approveHost(hostname) {
+  const host = String(hostname || "").toLowerCase();
+  if (!host.includes(".")) return;
+  const { [APPROVED_HOSTS_KEY]: approved } = await chrome.storage.local.get(APPROVED_HOSTS_KEY);
+  const list = Array.isArray(approved) ? approved : [];
+  if (!list.includes(host)) await chrome.storage.local.set({ [APPROVED_HOSTS_KEY]: [...list, host].slice(-200) });
 }
 
 export function isStaticOrigin(origin) {

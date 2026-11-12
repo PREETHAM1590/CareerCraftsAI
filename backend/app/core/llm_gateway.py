@@ -7,6 +7,10 @@ The gateway injects the real API key at the HTTP transport layer.
 Even if an agent is fully compromised via prompt injection, it cannot
 extract the API key because the key never exists in the agent's context.
 
+It is also the privacy boundary: the member's personal details (and
+pattern-detected emails, phones and IDs) are replaced with placeholders
+before a request leaves and restored in the reply (see core/pii_vault.py).
+
 Architecture:
     Agent → ChatOpenAI(base_url="http://localhost:8001/v1", api_key=session_token)
          → LLM Gateway (this service)
@@ -31,10 +35,12 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from slowapi.util import get_remote_address
 
 from app.core.config import settings
+from app.core.pii_vault import PiiLogFilter, PiiVault
 from app.core.rate_limit import limiter
 from app.core.security import decrypt_api_key
 
 logger = logging.getLogger(__name__)
+logger.addFilter(PiiLogFilter())
 
 router = APIRouter(prefix="/llm-gateway", tags=["llm-gateway"])
 
@@ -244,6 +250,29 @@ def _validated_messages(raw_messages: list[dict], *, allow_tools: bool) -> list:
     return convert_to_messages(raw_messages)
 
 
+def _privacy_unavailable() -> HTTPException:
+    return HTTPException(
+        status_code=503, detail="Privacy filter unavailable; the request was not sent"
+    )
+
+
+async def _privacy_vault(session: dict) -> PiiVault | None:
+    """Per-request PII vault for the session's member; None when redaction is
+    off for them. In strict mode a loading failure stops the call here."""
+    from app.services import pii_profile
+
+    try:
+        policy, known = await pii_profile.load_privacy_context(session.get("user_id"))
+    except Exception as exc:
+        logger.warning("gateway_pii_unavailable error_type=%s", type(exc).__name__)
+        if settings.PII_REDACTION_STRICT:
+            raise _privacy_unavailable() from None
+        return None
+    if not policy.enabled:
+        return None
+    return PiiVault(known, detect_patterns=policy.detect_patterns)
+
+
 @router.post("/v1/{path:path}", operation_id="proxy_llm_request_post")
 @router.get("/v1/{path:path}", operation_id="proxy_llm_request_get")
 @limiter.limit("120/minute", key_func=_gateway_key)
@@ -269,7 +298,7 @@ async def proxy_llm_request(path: str, request: Request) -> Response:
 
     from pydantic import BaseModel, Field, ValidationError
 
-    from app.agents.prompts import with_security_rules
+    from app.agents.prompts import with_placeholder_rules, with_security_rules
     from app.core.model_router import _make_llm
     from app.services.llm_proxy_service import get_redaction_callback, redact_keys
 
@@ -304,6 +333,22 @@ async def proxy_llm_request(path: str, request: Request) -> Response:
         raise HTTPException(status_code=403, detail="Model does not match gateway session")
     if payload.stream:
         raise HTTPException(status_code=422, detail="Streaming is unavailable on this gateway")
+    # Personal values leave as placeholders; the reply is rehydrated below,
+    # so agents and form plans still receive the real values.
+    vault = await _privacy_vault(session)
+    if vault is not None:
+        try:
+            outbound = vault.redact_messages(payload.messages)
+            if vault.replaced_any:
+                messages = with_placeholder_rules(
+                    with_security_rules(_validated_messages(outbound, allow_tools=allow_tools))
+                )
+                logger.debug("gateway_pii_redacted counts=%s", vault.summary())
+        except Exception as exc:
+            logger.warning("gateway_pii_redaction_failed error_type=%s", type(exc).__name__)
+            if settings.PII_REDACTION_STRICT:
+                raise _privacy_unavailable() from None
+            vault = None
     if sum(len(str(message.content)) for message in messages) > 200000:
         raise HTTPException(status_code=413, detail="Chat input is too large")
     key = (
@@ -334,6 +379,9 @@ async def proxy_llm_request(path: str, request: Request) -> Response:
     content = result.content
     if isinstance(content, list):
         content = "".join(block.get("text", "") for block in content if isinstance(block, dict))
+    restore = vault is not None and vault.replaced_any
+    if restore:
+        content = vault.rehydrate(content)
     message: dict = {"role": "assistant", "content": content}
     finish_reason = "stop"
     if allow_tools:
@@ -348,7 +396,9 @@ async def proxy_llm_request(path: str, request: Request) -> Response:
                     "type": "function",
                     "function": {
                         "name": call["name"],
-                        "arguments": json.dumps(call["args"]),
+                        "arguments": json.dumps(
+                            vault.rehydrate_obj(call["args"]) if restore else call["args"]
+                        ),
                     },
                 }
             )

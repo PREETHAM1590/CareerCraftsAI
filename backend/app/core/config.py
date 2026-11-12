@@ -73,6 +73,16 @@ class Settings(BaseSettings):
 
     # ── LLM gateway ────────────────────────────────────────────────────
     LLM_GATEWAY_URL: str = "http://localhost:8000/llm-gateway/v1"
+    # Personal details are swapped for placeholders before a chat request
+    # leaves the gateway and restored in the reply (app/core/pii_vault.py).
+    # Members can opt out in their preferences. STRICT refuses the model call
+    # when redaction cannot run instead of sending the text unredacted.
+    PII_REDACTION_ENABLED: bool = True
+    PII_REDACTION_STRICT: bool = True
+    PII_REDACT_NAMES: bool = True
+    # Pattern detection of emails/phones/IDs that are not in the profile,
+    # including other people's in job descriptions and inbound mail.
+    PII_PATTERN_DETECTION: bool = True
 
     # Private OpenBot relay, reached over a deployment network or SSH tunnel.
     SANDBOX_RELAY_URL: str = ""
