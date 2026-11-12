@@ -12,7 +12,7 @@ This document covers CareerCraft AI's security architecture, threat model, known
 | User resume data | Unauthorized access | RLS: `user_id = auth.uid()` enforced in DB |
 | Job application actions | CSRF / replay | JWT on every request; HITL gate for irreversible actions |
 | Email sending (Gmail) | Sending without consent | Server-side HITL gate; `/approve` endpoint required |
-| Browser automation | Cross-user contamination | Playwright isolated browser context per user |
+| Job applications in a browser | Cross-user contamination, job-site credentials on the server | Applications run only in the member's own browser via the extension; the server runs no browser |
 | Admin endpoints | Public access | Nginx blocks `/internal/*` at edge |
 | Rate limiting | Credential stuffing / scraping | slowapi (60 req/min/user), Nginx (10 req/min for auth) |
 
@@ -124,7 +124,7 @@ Rate limit headers on every response: `X-RateLimit-Limit`, `X-RateLimit-Remainin
 
 ## Human-in-the-Loop Gate
 
-No agent can send an email or submit a job application without user approval. This is enforced server-side:
+No agent can send an email or submit a job application without user approval. The one exception is auto-submit, which a member enables in settings: the server then approves a fully answered form itself, within a daily cap, and records it as auto-approved. It never applies on LinkedIn or Naukri and refuses forms with AI-drafted answers. Email approval is enforced server-side:
 
 1. Agent emits `pending_action` in state and pauses
 2. Backend stores the pending action in Redis with the `run_id` key
@@ -157,17 +157,22 @@ location /internal { return 404; }
 
 ### Browser extension device tokens
 
-The Chrome extension (`extension/`) authenticates to `/api/v1/extension/device/*` with a device token instead of the user's Clerk session: a `ccx_`-prefixed random token, generated once when a browser is paired (`POST /extension/pair`) and shown to the user exactly once. Only its SHA-256 hash (`extension_service.hash_token`) is ever stored, as `extension_devices.token_hash`; the plaintext token cannot be recovered from the database. Each paired browser is listed under **Settings → Integrations → Browser extension** and can be revoked independently (`DELETE /extension/devices/{id}`), which is checked on every subsequent device-token request. Requests authenticated with a device token are rate-limited per device, not per user (`core/rate_limit.py` keys on a hash of the `Bearer ccx_…` value), so one compromised or misbehaving browser cannot exhaust another device's or another user's limit.
+The Chrome extension (`extension/`) authenticates to `/api/v1/extension/device/*` with a device token instead of the user's Clerk session: a `ccx_`-prefixed random token, generated once when a browser is paired (`POST /extension/pair`) and shown to the user exactly once. Only its SHA-256 hash (`extension_service.hash_token`) is ever stored, as `extension_devices.token_hash`; the plaintext token cannot be recovered from the database. Each paired browser is listed under **Settings → Integrations → Browser extension** and can be revoked independently (`DELETE /extension/devices/{id}`), which is checked on every subsequent device-token request. Tokens expire after 90 days and are rotated through `POST /extension/device/token/rotate` during their last 30 days; each member may have at most five active devices. Requests authenticated with a device token are rate-limited per device, not per user (`core/rate_limit.py` keys on a hash of the `Bearer ccx_…` value), so one compromised or misbehaving browser cannot exhaust another device's or another user's limit.
 
 ---
 
-## Browser Automation Security
+## No Server-Side Browser Automation
 
-Playwright creates an isolated browser context per user:
-- Cookies and sessions are not shared between users
-- Each automation run uses a fresh browser profile
-- Human-like delays (randomized 0.5–2s between actions) to avoid bot detection
-- LinkedIn and Naukri automation may violate their ToS — users acknowledge this in onboarding
+The backend does not drive job sites. Server-side browser execution is retired (`run_browser_task` raises `BrowserAutomationRetired`), so no job-site session or password is held on the server. Applications run in the member's own signed-in browser through the extension, which does not solve CAPTCHAs and stops for sign-in, CAPTCHAs, and unanswered questions. LinkedIn passwords are no longer accepted; `DELETE /users/me/linkedin-credentials` erases any stored by older versions.
+
+---
+
+## Untrusted Content
+
+Job postings, emails, and retrieved documents are data, not instructions:
+- Agent prompts wrap this text with the helpers in `backend/app/agents/prompts/__init__.py` (`untrusted()` and `fenced()`), and the shared security rules tell the model to ignore instructions inside fenced data.
+- Retrieved document chunks are wrapped in `<retrieved_context>` by `rag_service.format_context()`.
+- Inbound email changes an application's status only when the sender's domain is the company's own or a known job platform (`application_status_service.sender_is_trusted`). Other mail is recorded and the member is asked to check it; nothing moves.
 
 ---
 

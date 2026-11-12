@@ -155,7 +155,7 @@ async def refresh_source(source: Source, query="") -> tuple[list[dict], str | No
     try:
         # Workday/Oracle boards hold thousands of postings; three pages would
         # leave most of them unsearchable.
-        for _ in range(10 if source.family in {"workday", "oracle"} else 3):
+        for _ in range(10 if source.family in {"workday", "oracle", "taleo", "successfactors"} else 3):
             for attempt in range(2):
                 try:
                     result = await asyncio.wait_for(fetch_page(source, query, cursor), 15)
