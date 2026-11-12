@@ -85,6 +85,7 @@ async def _task_in_review(factory, user, device):
                     {"label": "Full name", "type": "text", "value": "Test Candidate"}
                 ],
                 "answer_sources": {"Full name": "profile"},
+                "answer_values": {"Full name": "Test Candidate"},
             },
             review_hash=uuid.uuid4().hex + uuid.uuid4().hex,
             review_url=application.job_url,
