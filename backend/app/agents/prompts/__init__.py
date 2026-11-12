@@ -106,6 +106,31 @@ def unvetted_destinations(text, trusted_sources) -> list[str]:
     return found
 
 
+PII_PLACEHOLDER_RULES = (
+    "PRIVATE VALUES\n"
+    "(12) Some personal details in this conversation were replaced with placeholder tokens "
+    "such as [[NAME_1]], [[EMAIL_1]] or [[PHONE_1]]. Each token stands for one real value. "
+    "Wherever that value belongs in your output, copy the token verbatim — same double "
+    "square brackets, capitals and number. Never alter, split, translate, describe or "
+    "invent tokens, never guess or ask for the real value, and never treat a token as "
+    "missing information."
+)
+
+
+def with_placeholder_rules(messages: list) -> list:
+    """Append PII_PLACEHOLDER_RULES to the leading system message (added by
+    the gateway only when it actually replaced something). Idempotent."""
+    from langchain_core.messages import SystemMessage
+
+    if messages and isinstance(messages[0], SystemMessage):
+        first = messages[0]
+        content = first.content if isinstance(first.content, str) else str(first.content)
+        if PII_PLACEHOLDER_RULES in content:
+            return list(messages)
+        return [SystemMessage(content=f"{content}\n\n{PII_PLACEHOLDER_RULES}"), *messages[1:]]
+    return [SystemMessage(content=PII_PLACEHOLDER_RULES), *messages]
+
+
 def with_security_rules(messages: list) -> list:
     """Return messages with SECURITY_RULES at the start of the system prompt.
 

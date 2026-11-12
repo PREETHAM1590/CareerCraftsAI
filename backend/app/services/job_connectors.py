@@ -8,14 +8,16 @@ import hashlib
 import html
 import json
 import re
+import time
 import weakref
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from html.parser import HTMLParser
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 from urllib.robotparser import RobotFileParser
 
 from app.core.config import settings
+from app.services.india_focus import canonical_city, country_code
 from app.services.public_http import public_get
 
 FAMILIES = {
@@ -55,6 +57,16 @@ FAMILIES = {
     "usajobs",
     "oracle",
     "icims",
+    "jobvite",
+    "jazzhr",
+    "dover",
+    "paylocity",
+    "successfactors",
+    "taleo",
+    "keka",
+    "freshteam",
+    "zohorecruit",
+    "kula",
 }
 
 
@@ -102,6 +114,27 @@ class Source:
     # How often the catalog re-reads this source: busy boards every few
     # hours, quiet ones daily.
     refresh_hours: int = 1
+    # ISO country the portal is asked to filter postings to (Workday facets,
+    # SmartRecruiters `country`, Himalayas `country`); "" reads the whole board.
+    country: str = ""
+    # Where the employer is headquartered, e.g. "IN" for Indian companies.
+    company_country: str = ""
+    # Display name for boards whose API only knows the tenant slug.
+    company: str = ""
+
+
+# job_sources.json / override keys that become Source fields.
+SOURCE_KEYS = (
+    "id",
+    "family",
+    "tenant",
+    "permitted",
+    "url",
+    "refresh_hours",
+    "country",
+    "company_country",
+    "company",
+)
 
 
 @dataclass
@@ -147,7 +180,7 @@ def normalize(raw: dict, source: Source) -> dict | None:
         url = canonical_url(str(raw.get("url") or ""))
     except ValueError:
         return None
-    title, company = plain(raw.get("title")), plain(raw.get("company"))
+    title, company = plain(raw.get("title")), plain(source.company or raw.get("company"))
     if not title or not company:
         return None
     location = plain(raw.get("location"))
@@ -156,7 +189,14 @@ def normalize(raw: dict, source: Source) -> dict | None:
     if date and date > now + timedelta(days=1):
         date = None
     expires = posted(raw.get("expires_at"))
+    countries = [country_code(c) for c in raw.get("countries") or [] if c and str(c).strip()]
+    if not countries and source.country:
+        countries = [source.country]
+    extra = {"countries": list(dict.fromkeys(countries))[:20]} if countries else {}
+    if source.company_country:
+        extra["company_country"] = source.company_country
     return {
+        **extra,
         "job_id": hashlib.sha256(url.encode()).hexdigest()[:32],
         "source_id": source.id,
         "source_job_id": str(raw.get("id") or url),
@@ -209,6 +249,16 @@ ATS_HOSTS = (
     "oraclecloud.com",
     "taleo.net",
     "applytojob.com",
+    "app.dover.com",
+    "jobs.dover.com",
+    "paylocity.com",
+    "successfactors.com",
+    "successfactors.eu",
+    "keka.com",
+    "freshteam.com",
+    "zohorecruit.com",
+    "zohorecruit.in",
+    "careers.kula.ai",
 )
 _COMPANY_SUFFIX = re.compile(
     r"\b(inc|llc|ltd|limited|pvt|private|corp|corporation|co|gmbh|technologies|technology|"
@@ -228,7 +278,9 @@ def role_key(job: dict) -> str:
     location = str(job.get("location") or "")
     remote = job.get("remote") == "remote" or "remote" in location.lower()
     title = _squash(str(job.get("title") or ""))
-    return f"{company}|{title}|{'remote' if remote else _squash(location)}"
+    # "Bangalore, Karnataka" on one board is "Bengaluru, India" on another.
+    place = "remote" if remote else (canonical_city(location) or _squash(location))
+    return f"{company}|{title}|{place}"
 
 
 def is_ats_url(url: str) -> bool:
@@ -635,6 +687,66 @@ def workday_posted(text) -> str | None:
     return None
 
 
+# Workday's country reference id is the same on every tenant.
+WORKDAY_COUNTRY_IDS = {"IN": "c4f78be1a8f14da0ab49ce1162348a5e"}
+_COUNTRY_WORDS = {"IN": "india"}
+_WORKDAY_FACET_TTL_S = 6 * 3600
+_workday_facets: dict[tuple, tuple[float, dict]] = {}
+
+
+def workday_country_facets(facets: list, country: str) -> dict:
+    """`appliedFacets` that limit a Workday board to one country: its country
+    facet when it has one (the facet name differs per tenant), otherwise every
+    location value in that country (e.g. "India, Bengaluru")."""
+    country_id, word = WORKDAY_COUNTRY_IDS.get(country), _COUNTRY_WORDS.get(country)
+    by_country: dict[str, list[str]] = {}
+    places: list[str] = []
+
+    def walk(groups, parent=None):
+        for group in groups or []:
+            if not isinstance(group, dict):
+                continue
+            param = group.get("facetParameter") or parent
+            for value in group.get("values") or []:
+                if not isinstance(value, dict):
+                    continue
+                if value.get("values"):
+                    walk([value], value.get("facetParameter") or param)
+                    continue
+                vid, label = str(value.get("id") or ""), str(value.get("descriptor") or "")
+                if not param or not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", param) or not vid:
+                    continue
+                if vid == country_id or (param != "locations" and label.lower() == word):
+                    by_country.setdefault(param, []).append(vid)
+                elif param == "locations" and re.search(rf"\b{word}\b", label, re.I):
+                    places.append(vid)
+
+    if word:
+        walk(facets)
+    if by_country:
+        param = next(iter(by_country))
+        return {param: by_country[param][:5]}
+    return {"locations": places[:200]} if places else {}
+
+
+async def _workday_country_facets(host: str, tenant: str, site: str, country: str) -> dict:
+    if country not in WORKDAY_COUNTRY_IDS:
+        raise ValueError("Unsupported Workday country filter")
+    key = (host, tenant, site, country)
+    loop_now = time.monotonic()
+    cached = _workday_facets.get(key)
+    if cached and cached[0] > loop_now:
+        return cached[1]
+    response = await _polite_get(
+        f"https://{host}/wday/cxs/{tenant}/{site}/jobs",
+        json_body={"appliedFacets": {}, "limit": 1, "offset": 0, "searchText": ""},
+    )
+    response.raise_for_status()
+    applied = workday_country_facets(response.json().get("facets") or [], country)
+    _workday_facets[key] = (loop_now + _WORKDAY_FACET_TTL_S, applied)
+    return applied
+
+
 async def _fetch_workday(source: Source, query: str, cursor: str | None) -> Page:
     """One page of a Workday CXS board. Tenant is `host|tenant|site`; cursor is
     the listing offset. Per-job detail requests are skipped (one request per
@@ -658,10 +770,16 @@ async def _fetch_workday(source: Source, query: str, cursor: str | None) -> Page
     )
     if offset < 0 or offset >= _WORKDAY_PAGE * _WORKDAY_MAX_PAGES:
         raise ValueError("Pagination limit exceeded")
+    applied: dict = {}
+    if source.country:
+        applied = await _workday_country_facets(host, tenant, site, source.country)
+        if not applied:
+            # The board lists nothing in that country.
+            return Page([])
     response = await _polite_get(
         f"https://{host}/wday/cxs/{tenant}/{site}/jobs",
         json_body={
-            "appliedFacets": {},
+            "appliedFacets": applied,
             "limit": _WORKDAY_PAGE,
             "offset": offset,
             "searchText": query or "",
@@ -795,6 +913,7 @@ _KEYLESS_ATS = {
     "trakstar",
     "hibob",
     "gem",
+    "keka",
 }
 _GEM_LIST = (
     "query JobBoardList($boardId: String!) { oatsExternalJobPostings(boardId: $boardId) "
@@ -833,6 +952,10 @@ async def _fetch_ats_board(source: Source, tenant: str, page: int) -> Page:
     elif family == "hibob":
         url = f"https://{tenant}.careers.hibob.com/api/job-ad"
         headers = {"Referer": f"https://{tenant}.careers.hibob.com/jobs"}
+    elif family == "keka":
+        # The careers page's own listing call; robots.txt allows /careers.
+        url = f"https://{tenant}.keka.com/careers/api/jobs/default/active"
+        headers = {"Accept": "application/json"}
     else:  # gem
         url = "https://jobs.gem.com/api/public/graphql"
         body = {
@@ -966,6 +1089,8 @@ async def _fetch_ats_board(source: Source, tenant: str, page: int) -> Page:
             for j in response.json().get("jobAdDetails", [])
             if j.get("id")
         ]
+    elif family == "keka":
+        rows = parse_keka(response.json(), tenant)
     else:  # gem
         data = (response.json().get("data") or {}).get("oatsExternalJobPostings") or {}
         rows = []
@@ -982,6 +1107,7 @@ async def _fetch_ats_board(source: Source, tenant: str, page: int) -> Page:
                     ),
                     "remote": any(p.get("isRemote") for p in places)
                     or (j.get("job") or {}).get("locationType") == "REMOTE",
+                    "countries": [p.get("isoCountry") for p in places],
                 }
             )
     return Page([job for raw in rows[:1000] if (job := normalize(raw, source))], next_cursor)
@@ -1140,6 +1266,458 @@ async def _fetch_icims(source: Source, tenant: str, query: str, page: int) -> Pa
     )
 
 
+def _clean(value) -> str:
+    return re.sub(r"\s+", " ", plain(value))
+
+
+_PAGE_TITLE = re.compile(r"<title>\s*(.*?)\s*</title>", re.S | re.I)
+_JOBVITE_ROW = re.compile(
+    r'<td class="jv-job-list-name">\s*<a href="/[^/"]+/job/([A-Za-z0-9]+)"[^>]*>(.*?)</a>'
+    r'.*?<td class="jv-job-list-location">(.*?)</td>',
+    re.S,
+)
+
+
+def parse_jobvite(page_html: str, tenant: str) -> list[dict]:
+    """Rows from a `jobs.jobvite.com/<tenant>/jobs` page (HTML only; no listing API)."""
+    title = _PAGE_TITLE.search(page_html)
+    company = re.sub(r"\s+Careers$", "", _clean(title.group(1))) if title else ""
+    return [
+        {
+            "id": m.group(1),
+            "title": _clean(m.group(2)),
+            "company": company or tenant,
+            "url": f"https://jobs.jobvite.com/{tenant}/job/{m.group(1)}",
+            "location": _clean(m.group(3)),
+        }
+        for m in _JOBVITE_ROW.finditer(page_html)
+    ]
+
+
+_JAZZ_ITEM = '<li class="list-group-item">'
+_JAZZ_LINK = re.compile(
+    r'<a href="(https://[a-z0-9-]+\.applytojob\.com/apply/([A-Za-z0-9]+)/[^"]*)"[^>]*>(.*?)</a>',
+    re.S,
+)
+_JAZZ_PLACE = re.compile(r"fa-map-marker'></i>(.*?)</li>", re.S)
+
+
+def parse_jazzhr(page_html: str, tenant: str) -> list[dict]:
+    """Rows from a `<tenant>.applytojob.com/apply` page (HTML only)."""
+    title = _PAGE_TITLE.search(page_html)
+    company = (
+        re.sub(r"\s*-\s*Career Page.*$", "", _clean(title.group(1)), flags=re.I) if title else ""
+    )
+    rows = []
+    for item in page_html.split(_JAZZ_ITEM)[1:]:
+        link = _JAZZ_LINK.search(item)
+        if not link:
+            continue
+        place = _JAZZ_PLACE.search(item)
+        rows.append(
+            {
+                "id": link.group(2),
+                "title": _clean(link.group(3)),
+                "company": company or tenant,
+                "url": link.group(1),
+                "location": _clean(place.group(1)) if place else "",
+            }
+        )
+    return rows
+
+
+def parse_paylocity(page_html: str, tenant: str) -> list[dict]:
+    """Postings from the `Jobs` array embedded in a Paylocity board page."""
+    marker = page_html.find('"Jobs":')
+    start = page_html.find("[", marker) if marker >= 0 else -1
+    if start < 0:
+        return []
+    try:
+        jobs, _ = json.JSONDecoder().raw_decode(page_html, start)
+    except ValueError:
+        return []
+    rows = []
+    for j in jobs if isinstance(jobs, list) else []:
+        if not isinstance(j, dict) or j.get("IsInternal") or not j.get("JobId"):
+            continue
+        where = j.get("JobLocation") or {}
+        rows.append(
+            {
+                "id": j["JobId"],
+                "title": j.get("JobTitle"),
+                "company": tenant,
+                "url": f"https://recruiting.paylocity.com/Recruiting/Jobs/Details/{j['JobId']}",
+                "location": j.get("LocationName") or _join(where.get("City"), where.get("State")),
+                "remote": bool(j.get("IsRemote")),
+                "description": j.get("Description"),
+                "posted_at": j.get("PublishedDate"),
+            }
+        )
+    return rows
+
+
+# ── India-centric ATS boards (Keka, Freshteam, Kula, Zoho Recruit) ─────────
+
+
+def parse_keka(data, tenant: str) -> list[dict]:
+    rows = []
+    for j in data if isinstance(data, list) else []:
+        if not isinstance(j, dict) or not str(j.get("id") or "").isdigit():
+            continue
+        places = [p for p in j.get("jobLocations") or [] if isinstance(p, dict)]
+        where = [_join(p.get("city") or p.get("name"), p.get("countryName")) for p in places]
+        rows.append(
+            {
+                "id": j["id"],
+                "title": j.get("title"),
+                "company": tenant,
+                "url": f"https://{tenant}.keka.com/careers/jobdetails/{j['id']}",
+                "location": "; ".join(w for w in where if w),
+                "remote": bool(j.get("isRemote")) or "remote" in str(j.get("title")).lower(),
+                "countries": [p.get("countryCode") or p.get("countryName") for p in places],
+                "description": j.get("description") or j.get("excerpt"),
+                "posted_at": j.get("publishedOn"),
+            }
+        )
+    return rows
+
+
+_FRESHTEAM_ROW = re.compile(
+    r'<a href="(/jobs/[A-Za-z0-9_-]{4,40}/[a-z0-9-]{0,200})" class="job-title">(.*?)</a>'
+    r'.*?class="location-info">(.*?)</a>',
+    re.S,
+)
+
+
+def parse_freshteam(page_html: str, tenant: str) -> list[dict]:
+    rows = []
+    for path, title, place in _FRESHTEAM_ROW.findall(page_html):
+        # "Bangalore, India <br/> Full Time": the place is before the line break.
+        location = _clean(re.split(r"<br\s*/?>", place)[0])
+        rows.append(
+            {
+                "id": path.split("/")[2],
+                "title": _clean(title),
+                "company": tenant,
+                "url": f"https://{tenant}.freshteam.com{path}",
+                "location": location,
+                "remote": "remote" in place.lower(),
+            }
+        )
+    return list({r["id"]: r for r in rows}.values())
+
+
+_KULA_FLIGHT = re.compile(r'self\.__next_f\.push\(\[1,("(?:[^"\\]|\\.)*")\]\)')
+
+
+def parse_kula(page_html: str, tenant: str) -> list[dict]:
+    """Kula renders its board with Next.js; the job list is JSON inside the page's
+    flight payload (`"jobs":[...]`)."""
+    try:
+        flight = "".join(json.loads(chunk) for chunk in _KULA_FLIGHT.findall(page_html))
+    except ValueError:
+        return []
+    start = flight.find('"jobs":[')
+    if start < 0:
+        return []
+    try:
+        jobs, _ = json.JSONDecoder().raw_decode(flight, start + len('"jobs":'))
+    except ValueError:
+        return []
+    rows = []
+    for j in jobs if isinstance(jobs, list) else []:
+        if not isinstance(j, dict) or not str(j.get("id") or "").isdigit():
+            continue
+        if j.get("listed") is False or j.get("on_career_page") is False:
+            continue
+        ats = j.get("ats_job") or {}
+        offices = [o for o in ats.get("offices") or [] if isinstance(o, dict)]
+        rows.append(
+            {
+                "id": j["id"],
+                "title": j.get("title"),
+                "company": tenant,
+                "url": f"https://careers.kula.ai/{tenant}/{j['id']}",
+                "location": "; ".join(str(o.get("location") or "") for o in offices),
+                "remote": ats.get("workplace") == "remote"
+                or any(o.get("remote") for o in offices),
+                "countries": [o.get("country_code") or o.get("country") for o in offices],
+                "posted_at": j.get("launch_at"),
+                "expires_at": j.get("end_at"),
+            }
+        )
+    return rows
+
+
+_ZOHO_JOBS = re.compile(r'<input[^>]*value="([^"]*)"[^>]*id="jobs"', re.S)
+
+
+def parse_zohorecruit(page_html: str, host: str) -> list[dict]:
+    """Zoho Recruit career sites embed the listing as JSON in a hidden input."""
+    match = _ZOHO_JOBS.search(page_html)
+    if not match:
+        return []
+    try:
+        jobs = json.loads(html.unescape(match.group(1)))
+    except ValueError:
+        return []
+    company = host.split(".")[0]
+    rows = []
+    for j in jobs if isinstance(jobs, list) else []:
+        if not isinstance(j, dict) or not str(j.get("id") or "").isdigit():
+            continue
+        if str(j.get("Publish")).lower() == "false":
+            continue
+        rows.append(
+            {
+                "id": j["id"],
+                "title": j.get("Posting_Title") or j.get("Job_Opening_Name"),
+                "company": company,
+                "url": f"https://{host}/jobs/Careers/{j['id']}",
+                "location": _join(j.get("City"), j.get("State"), j.get("Country")),
+                "remote": str(j.get("Remote_Job")).lower() == "true",
+                "countries": [j.get("Country")],
+                "description": j.get("Job_Description"),
+                "posted_at": j.get("Date_Opened"),
+            }
+        )
+    return rows
+
+
+_ZOHO_DOMAINS = {"": "zohorecruit.com", "in": "zohorecruit.in", "eu": "zohorecruit.eu"}
+
+
+async def _fetch_zohorecruit(source: Source, tenant: str, domain: str) -> Page:
+    host = f"{tenant}.{domain}"
+    response = await _polite_get(f"https://{host}/jobs/Careers", max_bytes=5_000_000)
+    response.raise_for_status()
+    rows = parse_zohorecruit(response.text, host)[:1000]
+    return Page([job for raw in rows if (job := normalize(raw, source))])
+
+
+_HTML_BOARDS = {
+    "freshteam": (lambda t: f"https://{t}.freshteam.com/jobs", parse_freshteam),
+    "kula": (lambda t: f"https://careers.kula.ai/{t}", parse_kula),
+    "jobvite": (lambda t: f"https://jobs.jobvite.com/{t}/jobs", parse_jobvite),
+    "jazzhr": (lambda t: f"https://{t}.applytojob.com/apply", parse_jazzhr),
+    "paylocity": (
+        lambda t: f"https://recruiting.paylocity.com/Recruiting/Jobs/All/{t}",
+        parse_paylocity,
+    ),
+}
+
+
+async def _fetch_html_board(source: Source, tenant: str) -> Page:
+    """One-request boards whose whole listing is server-rendered in a single page."""
+    url, parse = _HTML_BOARDS[source.family]
+    response = await _polite_get(url(tenant), max_bytes=3_000_000)
+    response.raise_for_status()
+    rows = parse(response.text, tenant)[:1000]
+    return Page([job for raw in rows if (job := normalize(raw, source))])
+
+
+def parse_dover(data: dict, tenant: str, company: str) -> list[dict]:
+    rows = []
+    for j in data.get("results") or []:
+        if not isinstance(j, dict) or not j.get("id") or j.get("is_sample"):
+            continue
+        if not j.get("is_published", True):
+            continue
+        rows.append(
+            {
+                "id": j["id"],
+                "title": j.get("title"),
+                "company": company or tenant,
+                "url": f"https://app.dover.com/apply/{tenant}/{j['id']}",
+                "location": _join(*((loc or {}).get("name") for loc in j.get("locations") or [])),
+                "remote": j.get("workplace_type") == "REMOTE",
+            }
+        )
+    return rows
+
+
+_DOVER_PAGE = 100
+
+
+async def _fetch_dover(source: Source, tenant: str, page: int) -> Page:
+    meta = await _polite_get(f"https://app.dover.com/api/v1/careers-page-slug/{tenant}")
+    meta.raise_for_status()
+    info = meta.json()
+    client_id = str(info.get("id") or "")
+    if not re.fullmatch(r"[A-Za-z0-9-]{8,64}", client_id):
+        raise ValueError("Dover board not found")
+    response = await _polite_get(
+        f"https://app.dover.com/api/v1/careers-page/{client_id}/jobs?"
+        + urlencode({"limit": _DOVER_PAGE, "offset": (page - 1) * _DOVER_PAGE})
+    )
+    response.raise_for_status()
+    data = response.json()
+    rows = parse_dover(data, tenant, info.get("name") or "")
+    return Page(
+        [job for raw in rows if (job := normalize(raw, source))],
+        str(page + 1) if data.get("next") else None,
+    )
+
+
+# SuccessFactors sites live on each employer's own domain, so only verified hosts are read.
+SUCCESSFACTORS_HOSTS = frozenset(
+    {"jobs.zf.com", "jobs.schaeffler.com", "jobs.volkswagen-group.com"}
+)
+_SF_MAX_ROW = 1000
+_SF_TILE = re.compile(r'<li class="job-tile job-id-(\d+)\b')
+_SF_TITLE = re.compile(r'class="jobTitle-link[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', re.S)
+
+
+def _sf_field(tile: str, job_id: str, name: str) -> str:
+    found = re.search(rf'id="job-{job_id}-desktop-section-{name}-value">(.*?)</', tile, re.S)
+    return _clean(found.group(1)) if found else ""
+
+
+def _sf_city_from_slug(path: str, title: str) -> str:
+    """Some tenants' tiles show no place; their URL slug is `City-Title-Code`."""
+    slug = unquote(path).split("/job/", 1)[-1].split("/", 1)[0]
+    words = [w for w in re.split(r"\W+", title)[:2] if w]
+    if not words:
+        return ""
+    found = re.search(r"[\W_]+".join(re.escape(w) for w in words), slug, re.I)
+    return slug[: found.start()].replace("-", " ").strip() if found and found.start() else ""
+
+
+def parse_successfactors(fragment: str, host: str) -> list[dict]:
+    """Tiles from a `/tile-search-results/` fragment of a Recruiting Marketing site."""
+    starts = list(_SF_TILE.finditer(fragment))
+    company = host.split(".")[1] if host.startswith("jobs.") else host.split(".")[0]
+    rows = []
+    for i, start in enumerate(starts):
+        tile = fragment[start.start() : starts[i + 1].start() if i + 1 < len(starts) else None]
+        link = _SF_TITLE.search(tile)
+        if not link:
+            continue
+        job_id, path, title = start.group(1), html.unescape(link.group(1)), _clean(link.group(2))
+        if not path.startswith("/") or "/job/" not in path:
+            continue
+        place = _join(*(_sf_field(tile, job_id, n) for n in ("city", "state", "location")))
+        try:
+            when = datetime.strptime(_sf_field(tile, job_id, "date"), "%b %d, %Y").replace(
+                tzinfo=UTC
+            )
+        except ValueError:
+            when = None
+        rows.append(
+            {
+                "id": job_id,
+                "title": title,
+                "company": company,
+                "url": f"https://{host}{path}",
+                "location": place or _sf_city_from_slug(path, title),
+                "posted_at": when.isoformat() if when else None,
+            }
+        )
+    return rows
+
+
+async def _fetch_successfactors(source: Source, cursor: str | None) -> Page:
+    host = source.tenant.lower()
+    if host not in SUCCESSFACTORS_HOSTS:
+        raise ValueError("Invalid source tenant")
+    startrow = int(cursor or "0")
+    if startrow < 0 or startrow >= _SF_MAX_ROW:
+        raise ValueError("Pagination limit exceeded")
+    response = await _polite_get(
+        f"https://{host}/tile-search-results/?" + urlencode({"q": "", "startrow": startrow}),
+        max_bytes=3_000_000,
+    )
+    response.raise_for_status()
+    rows = parse_successfactors(response.text, host)
+    return Page(
+        [job for raw in rows if (job := normalize(raw, source))],
+        str(startrow + len(_SF_TILE.findall(response.text))) if rows else None,
+    )
+
+
+_TALEO_HOST = re.compile(r"[a-z0-9-]+\.taleo\.net")
+_TALEO_SECTION = re.compile(r"[A-Za-z0-9_-]{1,60}")
+_TALEO_NOT_SECTION = {"rest"}
+_TALEO_PORTAL = re.compile(r"portalNo:\s*'(\d{1,20})'")
+_TALEO_DATE = re.compile(r"[A-Z][a-z]{2} \d{1,2}, \d{4}")
+_TALEO_BODY = {
+    "multilineEnabled": False,
+    "sortingSelection": {"sortBySelectionParam": "3", "ascendingSortingOrder": False},
+    "fieldData": {},
+    "filterSelectionParam": {"searchFilterSelections": []},
+    "advancedSearchFiltersSelectionParam": {"searchFilterSelections": []},
+}
+
+
+def parse_taleo(data: dict, host: str, section: str) -> list[dict]:
+    rows = []
+    for r in data.get("requisitionList") or []:
+        cells = r.get("column") if isinstance(r, dict) else None
+        if not cells or not r.get("contestNo"):
+            continue
+        places = []
+        for i in r.get("locationsColumns") or []:
+            try:
+                found = json.loads(cells[i])
+            except (IndexError, TypeError, ValueError):
+                continue
+            places += found if isinstance(found, list) else [found]
+        when = next((c for c in cells[1:] if _TALEO_DATE.fullmatch(str(c))), "")
+        try:
+            when_iso = datetime.strptime(when, "%b %d, %Y").replace(tzinfo=UTC).isoformat()
+        except ValueError:
+            when_iso = None
+        rows.append(
+            {
+                "id": r["contestNo"],
+                "title": cells[0],
+                "company": host.split(".")[0],
+                "url": f"https://{host}/careersection/{section}/jobdetail.ftl?"
+                + urlencode({"job": r["contestNo"], "lang": "en"}),
+                "location": "; ".join(str(p) for p in places),
+                "posted_at": when_iso,
+            }
+        )
+    return rows
+
+
+async def _fetch_taleo(source: Source, cursor: str | None) -> Page:
+    host, _, section = source.tenant.partition("|")
+    host = host.lower()
+    if not _TALEO_HOST.fullmatch(host) or not _TALEO_SECTION.fullmatch(section):
+        raise ValueError("Invalid source tenant")
+    if cursor:
+        portal, _, number = cursor.partition(":")
+        if not portal.isdigit() or not number.isdigit() or not 2 <= int(number) <= 10:
+            raise ValueError("Pagination limit exceeded")
+        page = int(number)
+    else:
+        opened = await _polite_get(
+            f"https://{host}/careersection/{section}/jobsearch.ftl?lang=en", max_bytes=2_000_000
+        )
+        opened.raise_for_status()
+        found = _TALEO_PORTAL.search(opened.text)
+        if not found:
+            raise ValueError("Taleo career section is not public")
+        portal, page = found.group(1), 1
+    response = await _polite_get(
+        f"https://{host}/careersection/rest/jobboard/searchjobs?"
+        + urlencode({"lang": "en", "portal": portal}),
+        headers={"tz": "GMT+00:00", "tzname": "UTC"},
+        json_body={**_TALEO_BODY, "pageNo": page},
+        max_bytes=3_000_000,
+    )
+    response.raise_for_status()
+    data = response.json()
+    count = len(data.get("requisitionList") or [])
+    paging = data.get("pagingData") or {}
+    more = bool(count) and page * int(paging.get("pageSize") or count) < int(
+        paging.get("totalCount") or 0
+    )
+    jobs = [job for raw in parse_taleo(data, host, section) if (job := normalize(raw, source))]
+    return Page(jobs, f"{portal}:{page + 1}" if more else None)
+
+
 async def fetch_page(source: Source, query: str = "", cursor: str | None = None) -> Page:
     if source.family not in FAMILIES or not source.permitted:
         raise ValueError("Source is not permitted")
@@ -1147,14 +1725,26 @@ async def fetch_page(source: Source, query: str = "", cursor: str | None = None)
         return await _fetch_workday(source, query, cursor)
     if source.family == "oracle":
         return await _fetch_oracle(source, query, cursor)
+    if source.family == "taleo":
+        return await _fetch_taleo(source, cursor)
+    if source.family == "successfactors":
+        return await _fetch_successfactors(source, cursor)
     tenant = source.tenant
     lever_host = "api.lever.co"
     if source.family == "lever" and tenant.startswith("eu:"):
         # Lever EU boards live on a separate host: tenant "eu:board".
         tenant, lever_host = tenant[3:], "api.eu.lever.co"
+    zoho_region = ""
+    if source.family == "zohorecruit" and tenant[:3] in {"in:", "eu:"}:
+        # Zoho Recruit data centres: tenant "in:acme" is acme.zohorecruit.in.
+        zoho_region, tenant = tenant[:2], tenant[3:]
     if tenant and not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", tenant):
         raise ValueError("Invalid source tenant")
     family = source.family
+    if family == "zohorecruit":
+        if not tenant:
+            raise ValueError("Source needs a tenant")
+        return await _fetch_zohorecruit(source, tenant, _ZOHO_DOMAINS[zoho_region])
     if family == "workable" and tenant and not settings.WORKABLE_API_TOKENS.get(tenant):
         return await _fetch_workable_public(source, query, cursor)
     page = int(cursor or "1")
@@ -1169,6 +1759,14 @@ async def fetch_page(source: Source, query: str = "", cursor: str | None = None)
         if not tenant:
             raise ValueError("Source needs a tenant")
         return await _fetch_icims(source, tenant, query, page)
+    if family in _HTML_BOARDS:
+        if not tenant:
+            raise ValueError("Source needs a tenant")
+        return await _fetch_html_board(source, tenant)
+    if family == "dover":
+        if not tenant:
+            raise ValueError("Source needs a tenant")
+        return await _fetch_dover(source, tenant, page)
     if family == "hn_hiring":
         rows, next_cursor = await _fetch_hn_hiring(page)
         return Page([job for raw in rows if (job := normalize(raw, source))], next_cursor)
@@ -1183,14 +1781,30 @@ async def fetch_page(source: Source, query: str = "", cursor: str | None = None)
         "lever": f"https://{lever_host}/v0/postings/{tenant}?mode=json&limit=100&skip={(page - 1) * 100}",
         "ashby": f"https://api.ashbyhq.com/posting-api/job-board/{tenant}?includeCompensation=true",
         "workable": f"https://{tenant}.workable.com/spi/v3/jobs?state=published",
-        "smartrecruiters": f"https://api.smartrecruiters.com/v1/companies/{tenant}/postings?limit=100&offset={(page - 1) * 100}",
+        "smartrecruiters": f"https://api.smartrecruiters.com/v1/companies/{tenant}/postings?limit=100&offset={(page - 1) * 100}"
+        + (f"&country={source.country.lower()}" if source.country else ""),
         "recruitee": f"https://{tenant}.recruitee.com/api/offers/",
         "remotive": "https://remotive.com/api/remote-jobs",
+        # Tenant is a Jobicy geo slug (e.g. "apac"); empty reads every region.
         "jobicy": "https://jobicy.com/api/v2/remote-jobs?"
-        + urlencode({"count": 50, **({"tag": query} if query else {})}),
+        + urlencode(
+            {"count": 50, **({"tag": query} if query else {}), **({"geo": tenant} if tenant else {})}
+        ),
         "remoteok": "https://remoteok.com/api",
         "arbeitnow": f"https://www.arbeitnow.com/api/job-board-api?page={page}",
-        "himalayas": f"https://himalayas.app/jobs/api?limit=100&offset={(page - 1) * 100}",
+        # The documented search endpoint filters to roles open to one country.
+        "himalayas": (
+            "https://himalayas.app/jobs/api/search?"
+            + urlencode(
+                {
+                    "country": _COUNTRY_WORDS.get(source.country, source.country),
+                    "page": page,
+                    **({"q": query} if query else {}),
+                }
+            )
+            if source.country
+            else f"https://himalayas.app/jobs/api?limit=100&offset={(page - 1) * 100}"
+        ),
         "workingnomads": "https://www.workingnomads.com/api/exposed_jobs/",
         "themuse": f"https://www.themuse.com/api/public/jobs?page={page - 1}",
     }
@@ -1302,6 +1916,8 @@ async def fetch_page(source: Source, query: str = "", cursor: str | None = None)
                 "company": tenant,
                 "url": j.get("hostedUrl"),
                 "location": (j.get("categories") or {}).get("location"),
+                "remote": j.get("workplaceType") == "remote",
+                "countries": [j.get("country")],
                 "description": j.get("descriptionPlain"),
                 "posted_at": j.get("createdAt"),
             }
@@ -1317,6 +1933,11 @@ async def fetch_page(source: Source, query: str = "", cursor: str | None = None)
                 "url": j.get("jobUrl"),
                 "location": j.get("location"),
                 "remote": j.get("isRemote"),
+                "countries": [
+                    ((place.get("address") or {}).get("postalAddress") or {}).get("addressCountry")
+                    for place in [j, *(j.get("secondaryLocations") or [])]
+                    if isinstance(place, dict)
+                ],
                 "description": j.get("descriptionPlain"),
                 "posted_at": j.get("publishedAt"),
                 "salary_text": _ashby_salary(j),
@@ -1357,6 +1978,7 @@ async def fetch_page(source: Source, query: str = "", cursor: str | None = None)
                     str((j.get("location") or {}).get("country") or "").upper(),
                 ),
                 "remote": bool((j.get("location") or {}).get("remote")),
+                "countries": [(j.get("location") or {}).get("country")],
                 "posted_at": j.get("releasedDate"),
                 "description": j.get("jobAd", {}).get("sections", {}),
             }
@@ -1467,6 +2089,7 @@ async def fetch_page(source: Source, query: str = "", cursor: str | None = None)
                 "company": j.get("companyName"),
                 "url": j.get("applicationLink") or j.get("guid"),
                 "location": ", ".join(j.get("locationRestrictions") or []) or "Worldwide",
+                "countries": j.get("locationRestrictions") or [],
                 "remote": True,
                 "description": j.get("description") or j.get("excerpt"),
                 "posted_at": j.get("pubDate"),
@@ -1480,7 +2103,9 @@ async def fetch_page(source: Source, query: str = "", cursor: str | None = None)
             for j in data.get("jobs", [])
         ]
         total = int(data.get("totalCount") or 0)
-        next_cursor = str(page + 1) if page * 100 < total else None
+        # Country search returns 20 a page; the browse feed 100.
+        per_page = 20 if source.country else 100
+        next_cursor = str(page + 1) if page * per_page < total else None
     elif family == "workingnomads":
         rows = [
             {
@@ -1614,7 +2239,20 @@ _PORTALS = (
     ("gem", r"jobs\.gem\.com", rf"/({_SLUG})"),
     ("rippling", r"ats\.rippling\.com", rf"/({_SLUG})"),
     ("icims", rf"({_SLUG})\.icims\.com", r""),
+    ("jobvite", r"jobs\.jobvite\.com", rf"/(?!api/)({_SLUG})"),
+    ("jazzhr", rf"({_SLUG})\.applytojob\.com", r""),
+    ("dover", r"app\.dover\.com", rf"/(?:jobs|apply)/({_SLUG})"),
+    ("dover", r"app\.dover\.com", rf"/({_SLUG})/careers"),
+    (
+        "paylocity",
+        r"(?:\d*recruiting|www)\.paylocity\.com",
+        rf"(?i:/recruiting/jobs/all/)({_SLUG})",
+    ),
+    ("keka", rf"({_SLUG})\.keka\.com", r""),
+    ("freshteam", rf"({_SLUG})\.freshteam\.com", r""),
+    ("kula", r"careers\.kula\.ai", rf"/({_SLUG})"),
 )
+_ZOHO_HOST = re.compile(rf"({_SLUG})\.zohorecruit\.(com|in|eu)")
 
 
 def resolve_careers_url(url: str) -> Source | None:
@@ -1658,6 +2296,29 @@ def resolve_careers_url(url: str) -> Source | None:
             id=f"oracle:{host.split('.')[0]}-{site}".lower(),
             family="oracle",
             tenant=f"{host}|{site}",
+        )
+    if _TALEO_HOST.fullmatch(host):
+        if (
+            len(segments) >= 2
+            and segments[0].lower() == "careersection"
+            and segments[1].lower() not in _TALEO_NOT_SECTION
+            and _TALEO_SECTION.fullmatch(segments[1])
+        ):
+            return Source(
+                id=f"taleo:{host.split('.')[0]}-{segments[1]}".lower(),
+                family="taleo",
+                tenant=f"{host}|{segments[1]}",
+            )
+        return None
+    if host in SUCCESSFACTORS_HOSTS:
+        return Source(id=f"successfactors:{host}", family="successfactors", tenant=host)
+    zoho = _ZOHO_HOST.fullmatch(host)
+    if zoho and zoho.group(1).lower() not in _NOT_A_BOARD:
+        region = "" if zoho.group(2) == "com" else zoho.group(2) + ":"
+        return Source(
+            id=f"zohorecruit:{region.replace(':', '-')}{zoho.group(1)}".lower(),
+            family="zohorecruit",
+            tenant=region + zoho.group(1),
         )
     for family, host_re, path_re in _PORTALS:
         match = re.fullmatch(host_re, host)

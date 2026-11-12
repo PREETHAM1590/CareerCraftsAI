@@ -12,8 +12,10 @@ from pathlib import Path
 import httpx
 from sqlalchemy import text
 
+from app.services import india_focus
 from app.services.job_connectors import (
     SERVER_SIDE_SEARCH,
+    SOURCE_KEYS,
     Source,
     dedupe,
     fetch_page,
@@ -38,6 +40,22 @@ PREFERRED_SOURCES = {
     "remoteok",
     "arbeitnow",
 }
+# Gap fill for India-first searches: Indian employers and India-scoped boards
+# that answered quickly in live checks, plus remote boards filtered to India.
+PREFERRED_INDIA_SOURCES = {
+    "himalayas:india",
+    "lever:meesho",
+    "lever:paytm",
+    "lever:cred",
+    "greenhouse:razorpaysoftwareprivatelimited",
+    "greenhouse:groww",
+    "smartrecruiters:freshworks",
+    "smartrecruiters:swiggy",
+    "ashby:sarvam",
+    "keka:fynd",
+    "kula:cashfree",
+    "remotive",
+}
 
 
 def sources() -> list[Source]:
@@ -45,14 +63,7 @@ def sources() -> list[Source]:
 
     rows = json.loads(Path(__file__).with_name("job_sources.json").read_text())
     mapped = {
-        row["id"]: Source(
-            **{
-                k: row[k]
-                for k in ("id", "family", "tenant", "permitted", "url", "refresh_hours")
-                if k in row
-            }
-        )
-        for row in rows
+        row["id"]: Source(**{k: row[k] for k in SOURCE_KEYS if k in row}) for row in rows
     }
     for row in settings.JOB_SOURCE_OVERRIDES[:100]:
         source = Source(**row)
@@ -155,7 +166,9 @@ async def refresh_source(source: Source, query="") -> tuple[list[dict], str | No
     try:
         # Workday/Oracle boards hold thousands of postings; three pages would
         # leave most of them unsearchable.
-        for _ in range(10 if source.family in {"workday", "oracle"} else 3):
+        for _ in range(
+            10 if source.family in {"workday", "oracle", "taleo", "successfactors"} else 3
+        ):
             for attempt in range(2):
                 try:
                     result = await asyncio.wait_for(fetch_page(source, query, cursor), 15)
@@ -319,51 +332,46 @@ async def refresh_catalog() -> dict:
 
 _STOPWORDS = {"and", "the", "for", "with", "role", "job", "jobs"}
 _ANYWHERE = {"", "remote", "anywhere", "worldwide", "any"}
-_CITY_ALIASES = {"bangalore": "bengaluru", "gurgaon": "gurugram", "bombay": "mumbai"}
-
-
-def _country_of(text: str) -> str | None:
-    from app.services.job_platforms_service import _COUNTRY_MAP
-
-    for key in sorted(_COUNTRY_MAP, key=len, reverse=True):
-        if re.search(r"\b" + re.escape(key) + r"\b", text):
-            return _COUNTRY_MAP[key]
-    return None
 
 
 def _cities(locations: list[str]) -> list[str] | None:
-    """Requested cities (aliases folded), or None for a remote/anywhere search."""
+    """Requested cities, or None for a remote/anywhere/whole-country search.
+    Indian spellings fold to one name ("Bangalore" -> "bengaluru")."""
     wanted = [loc.split(",")[0].strip().lower() for loc in locations]
-    if not wanted or any(w in _ANYWHERE for w in wanted):
+    if not wanted or any(w in _ANYWHERE or w in {"india", "remote india"} for w in wanted):
         return None
-    return [_CITY_ALIASES.get(w, w) for w in wanted]
+    return [india_focus.canonical_city(w) or w for w in wanted]
 
 
 def in_city(job: dict, locations: list[str]) -> bool:
-    """The job is located in one of the requested cities (False for remote searches)."""
+    """The job is located in one of the requested cities (False for remote searches).
+    Indian aliases match each other and a Delhi/NCR search covers the region."""
     where = str(job.get("location") or "").lower()
-    for city in _cities(locations) or []:
-        if city in where or any(a in where for a, c in _CITY_ALIASES.items() if c == city):
+    job_cities = set(india_focus.cities_in(where))
+    for place in [loc for loc in locations if loc] if _cities(locations) else []:
+        wanted = india_focus.search_cities(place)
+        if wanted & job_cities:
+            return True
+        city = place.split(",")[0].strip().lower()
+        if not wanted and city and city in where:
             return True
     return False
 
 
 def _location_ok(job: dict, locations: list[str]) -> bool:
-    """A job fits a city search when it is in that city, or remote and not
-    restricted to another country ("Remote, United States" is not a fit for
-    Bengaluru). Remote/anywhere searches accept every location."""
-    wanted = _cities(locations)
-    if wanted is None:
+    """A job fits a city search when it is in that city, or remote and open to
+    the searched city's country ("Remote, United States" is not a fit for
+    Bengaluru). Remote/anywhere searches accept every location here; the India
+    filter in `matches_query` handles country restrictions for those."""
+    if _cities(locations) is None:
         return True
     if in_city(job, locations):
         return True
-    where = str(job.get("location") or "").lower().replace(".", "")
-    hay = f"{where} {str(job.get('remote') or '').lower()}"
-    for city in wanted:
-        if "remote" in hay or job.get("remote") is True:
-            job_country = _country_of(where)
-            if job_country is None or job_country == _country_of(city):
-                return True
+    fit, _ = india_focus.classify(job)
+    if fit in {"india_remote", "remote_global"}:
+        # A remote role fits an Indian city search when it is open to India,
+        # and a foreign city search when nothing restricts it to India.
+        return any(india_focus.is_indian_place(p) for p in locations) or fit == "remote_global"
     return False
 
 
@@ -388,8 +396,10 @@ def _role_patterns(query: dict) -> list[list[str]]:
     return groups
 
 
-def matches_query(job: dict, query: dict) -> bool:
-    """The same relevance contract for catalog and live results."""
+def matches_query(job: dict, query: dict, india: bool = True) -> bool:
+    """The same relevance contract for catalog and live results. With India focus
+    on (the default, see `india_focus.wants_india`), roles open only outside
+    India never match; `india=False` checks everything else."""
     title = str(job.get("title") or "").lower()
     locations = [str(x) for x in (query.get("locations") or [query.get("location") or ""]) if x]
     if not any(
@@ -397,6 +407,8 @@ def matches_query(job: dict, query: dict) -> bool:
     ):
         return False
     if not _location_ok(job, locations):
+        return False
+    if india and india_focus.wants_india(query) and india_focus.classify(job)[0] == "foreign":
         return False
     mode = str(query.get("remote") or "any").lower()
     if mode not in {"remote", "hybrid", "onsite"}:
@@ -415,10 +427,12 @@ def matches_query(job: dict, query: dict) -> bool:
     return actual == mode
 
 
-async def search_catalog(query: dict, selected_sources=None, live_platforms=()):
+async def search_catalog(query: dict, selected_sources=None, live_platforms=(), stats=None):
     """Serve fresh shared-catalog jobs first; refresh public sources only for a shortfall.
 
     ``live_platforms`` also reads jobs other users' live searches stored under ``live:<name>``.
+    ``stats`` (a dict), when given, receives ``india_hidden_ids``: matching roles left
+    out because they are open only outside India.
     """
     families = set(selected_sources or [])
     live_ids = [f"live:{p}" for p in live_platforms]
@@ -432,8 +446,14 @@ async def search_catalog(query: dict, selected_sources=None, live_platforms=()):
     source_ids = sorted({s.id for s in public} | set(live_ids))
     days = query.get("posted_within_days", 30)
 
+    focus = india_focus.wants_india(query)
+
     def relevant_of(rows):
-        return [job for job in dedupe(rows, days) if matches_query(job, query)]
+        matched = [job for job in dedupe(rows, days) if matches_query(job, query, india=False)]
+        kept, hidden = india_focus.split(matched, query)
+        if stats is not None:
+            stats["india_hidden_ids"] = [job.get("job_id") for job in hidden]
+        return kept
 
     # The result is the same for every member who runs this query, so it is
     # cached as the ids of every matching row (before duplicates are merged);
@@ -456,6 +476,8 @@ async def search_catalog(query: dict, selected_sources=None, live_platforms=()):
                 "days": days,
                 "need": int(query.get("max_results") or 10),
                 "sources": source_ids,
+                # India focus changes which rows count toward `need` and so the gap fill.
+                "india": focus,
             }
         )
         + f":{version}"
@@ -552,7 +574,10 @@ async def _search_catalog_db(query: dict, public, live_ids, relevant_of):
         # Gap fill is bounded (<=12 sources, 6 at a time); refresh_source honours its own
         # lease/backoff so repeated shortfalls do not re-hit upstream. The Schedule refreshes
         # the complete employer catalog.
-        preferred = [s for s in public if s.id in PREFERRED_SOURCES]
+        wanted = (
+            PREFERRED_INDIA_SOURCES if india_focus.wants_india(query) else PREFERRED_SOURCES
+        )
+        preferred = [s for s in public if s.id in wanted]
 
         roles = [
             " ".join(w for w in role.split() if w.lower() not in _STOPWORDS)
@@ -573,6 +598,11 @@ async def _search_catalog_db(query: dict, public, live_ids, relevant_of):
         rows = rows + [j for jobs, _ in results for j in jobs]
         warnings.extend(w for _, w in results if w)
         relevant = relevant_of(rows)
-    # Every row that matches on its own, so a cache hit can redo the merge.
-    candidates = [row["job_id"] for row in rows if row.get("job_id") and matches_query(row, query)]
+    # Every row that matches on its own, so a cache hit can redo the merge (and
+    # count the roles India focus hides).
+    candidates = [
+        row["job_id"]
+        for row in rows
+        if row.get("job_id") and matches_query(row, query, india=False)
+    ]
     return relevant, warnings, list(dict.fromkeys(candidates))

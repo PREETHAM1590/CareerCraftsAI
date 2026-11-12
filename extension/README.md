@@ -168,6 +168,11 @@ the extension paces its actions like a person, and it never solves CAPTCHAs.
 
 ## Development
 
+- `manifest.json` is the production manifest and grants nothing on
+  `localhost`/`127.0.0.1`. For a local CareerCraft or the test harnesses, run
+  `node scripts/build.mjs --dev --out /tmp/cc-ext` and load that folder.
+- Sites outside the built-in job/ATS list need a one-time approval in the popup;
+  switching the paired account from a web page needs a popup confirmation.
 - `src/background.js` — service worker: pairing, polling, all network calls.
 - `src/content/*.js` — injected into the job tab: DOM helpers, review panel
   (closed shadow DOM), platform drivers, and the runner.
