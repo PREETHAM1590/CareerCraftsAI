@@ -91,3 +91,27 @@ def test_member_opt_out_is_honoured_unless_the_server_forces_redaction(monkeypat
 )
 def test_saved_answers_under_new_identity_keys_are_hidden(key, kind):
     assert pii_profile.key_type(key) == kind
+
+
+@pytest.mark.asyncio
+async def test_india_focus_preference_roundtrips_without_changing_other_preferences():
+    prefs = UserPreferences(user_id=uuid.uuid4(), india_focus=True, notify_email=True)
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = prefs
+    db = MagicMock()
+    db.execute = AsyncMock(return_value=result)
+    db.flush = AsyncMock()
+    user = SimpleNamespace(id=prefs.user_id)
+    out = await users.upsert_preferences(
+        UserPreferencesSchema(india_focus=False), db=db, current_user=user
+    )
+    assert out.india_focus is False and out.notify_email is True
+    read = await users.get_preferences(db=db, current_user=user)
+    assert read.india_focus is False
+
+
+def test_india_focus_defaults_and_migration():
+    column = UserPreferences.__table__.columns.india_focus
+    assert column.default.arg is True and not column.nullable
+    migration = next(MIGRATIONS.glob("*_india_focus_preference.sql")).read_text()
+    assert "ADD COLUMN IF NOT EXISTS india_focus boolean NOT NULL DEFAULT true" in migration

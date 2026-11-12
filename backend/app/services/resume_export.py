@@ -19,6 +19,7 @@ from app.services.pdf_service import (
     Theme,
     _plain,
     generate_resume_pdf,
+    page_size,
 )
 from app.services.resume_structure import clean_placeholders
 
@@ -79,7 +80,8 @@ def generate_resume_docx(layout: ResumeExport, full_name: str = "") -> bytes:
     document = Document()
     section = document.sections[0]
     theme = layout.theme
-    section.page_width, section.page_height = Inches(8.5), Inches(11)
+    width, height = page_size()
+    section.page_width, section.page_height = Pt(width), Pt(height)
     # ReportLab frames have 6pt padding inside the page margins.
     section.left_margin = section.right_margin = Inches(theme.margin_x) + Pt(6)
     section.top_margin = section.bottom_margin = Inches(theme.margin_y) + Pt(6)

@@ -204,6 +204,16 @@ jobs:
 
       - run: pip install -r requirements.lock
 
+      - name: Install PostgreSQL for hermetic journey
+        run: sudo apt-get update && sudo apt-get install -y postgresql
+
+      - name: Hermetic application journey and harness contracts
+        run: pytest tests/e2e/test_hermetic_core_journey.py tests/e2e/test_harness_contract.py -q -rs
+        env:
+          APP_SECRET_KEY: "test-secret-key-32-chars-minimum!!"
+          DATABASE_URL: "postgresql+asyncpg://x:x@localhost/x"
+          REDIS_URL: "redis://localhost:6379"
+
       - name: Collect E2E suite (no live credentials required)
         run: pytest tests/e2e --collect-only -q
         env:

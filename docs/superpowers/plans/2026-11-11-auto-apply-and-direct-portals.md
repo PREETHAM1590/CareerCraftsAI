@@ -199,3 +199,53 @@ UPDATE public.users SET linkedin_password_enc = NULL, linkedin_email_enc = NULL
 -- after removing both columns from backend/app/models/db.py and deploying:
 ALTER TABLE public.users DROP COLUMN linkedin_password_enc, DROP COLUMN linkedin_email_enc;
 ```
+
+## 6. Continuation: privacy, India eligibility and release verification
+
+This section supersedes the earlier "Still open" implementation list where
+code has since landed. Do not interpret historical test counts as current
+release evidence; use the pull request's Verification section for the final run.
+
+### Implemented since the first checkpoint
+
+- Request-local PII placeholders at the model gateway, local rehydration,
+  privacy preferences, deterministic identity-field answers, contact-stripped
+  embeddings and process-wide log scrubbing. This is pseudonymisation, not a
+  guarantee of anonymity: unknown free-text PII, member names in embeddings,
+  old vectors and explicit privacy opt-outs remain important limitations.
+- India-first job classification, city aliases, eligible-remote filtering,
+  more live-verified Indian employer boards and public connectors. Persisted
+  preference and application-candidate eligibility checks are part of the
+  final integration pass. India eligibility is not proof of Indian ownership
+  or headquarters, and remote eligibility must still be checked on the posting.
+- Additional verified ATS families: Jobvite, JazzHR, Dover, Paylocity,
+  SuccessFactors (verified hosts only), Taleo, Keka, Kula, Freshteam and Zoho
+  Recruit. No promise of "every provider": login-only or anti-bot-protected
+  services are explicitly unavailable rather than bypassed.
+- Resume fact checks, full-source handling, PDF/DOCX parse-back, A4 defaults,
+  stronger repair/fallback handling, and a hermetic FastAPI route journey.
+- Real Postgres migration/concurrency/deletion tests, explicit pairing-change
+  confirmation, job-host permission gates and production packaging without
+  localhost injection.
+- Model-cache key/privacy fixes and cache corruption handling. Production
+  dependency audits retain a documented upstream Zod 3 exception.
+
+### Release limitations
+
+- Managed frontend Preview was attempted and returned HTTP 500: no Clerk
+  publishable key is configured. The server was stopped through lifecycle
+  controls; signed-in settings, jobs and application-drawer visual checks
+  remain pending. No authentication bypass was introduced.
+- No live employer application was submitted. Local browser fixtures are
+  not proof of compatibility with every Workday tenant or job portal.
+- Real LLM placeholder fidelity and semantic retrieval quality are unmeasured
+  without configured providers; deterministic evals validate plumbing only.
+- Complex-script PDF rendering remains limited; parse-back warnings must be
+  shown rather than silently claiming all characters survived.
+- Production RLS/runtime-role isolation, sandbox Docker-socket privileges,
+  backups/restore, and deployment rollback require a separate operational
+  rehearsal. They are not resolved by passing application unit tests.
+
+See `docs/reports/2026-11-12-architecture-security-review.md` for the architecture
+assessment, `docs/PRIVACY_PII.md` for research and residual exposure, and
+`docs/TESTING.md` for the scope of each test suite.

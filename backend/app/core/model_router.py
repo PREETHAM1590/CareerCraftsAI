@@ -1,3 +1,6 @@
+import contextvars
+import hashlib
+import json
 import logging
 from typing import Any
 
@@ -23,7 +26,6 @@ LLM_MAX_RETRIES = 2
 # _check_budget_sync/TokenTrackingCallback.
 LLM_MAX_OUTPUT_TOKENS = 8192
 
-import contextvars
 
 # A mutable box held in a ContextVar, not a threading.local: sync agent nodes
 # run via asyncio.to_thread, which copies the context into the worker thread.
@@ -231,6 +233,7 @@ def _make_llm(model_settings, api_key: str) -> BaseChatModel:
 
 async def get_llm(user_id: str, db, task_type: str = "") -> BaseChatModel:
     from sqlalchemy import select
+
     from app.services.token_budget_service import check_budget
 
     # Check budget before building LLM
@@ -259,7 +262,17 @@ async def get_llm(user_id: str, db, task_type: str = "") -> BaseChatModel:
 
     llm = await gateway_chat_model(str(user_id), model_settings)
     llm.callbacks = [get_redaction_callback(), TokenTrackingCallback(user_id)]
-    return CachingLLM(llm, user_id, task_type)
+    redacting = True
+    if task_type in CACHEABLE_TASKS:
+        from app.models.db import UserPreferences
+        from app.services.pii_profile import policy_for
+
+        prefs = (
+            await db.execute(select(UserPreferences).where(UserPreferences.user_id == user_id))
+        ).scalar_one_or_none()
+        redacting = policy_for(prefs).enabled
+    model = f"{model_settings.provider}:{model_settings.model_name}"
+    return CachingLLM(llm, user_id, task_type, model=model, redacting=redacting)
 
 
 def _check_budget_sync(user_id: str) -> None:
@@ -333,13 +346,16 @@ def build_agent_llm(model_settings) -> BaseChatModel:
 
 
 # ── LLM response caching (Redis, 1h TTL) ────────────────────────
-# Cache is skipped for email/auto_apply tasks since they're always
-# unique and shouldn't be cached. Uses sha256 of (user_id, task_type,
-# prompt_text) as the cache key.
+# Opt-in per task: only analysis whose answer should not change on a re-run
+# is cached. Generation (resumes, cover letters, emails, outreach, answers)
+# must be regenerated, never replayed. Replies are cached only when the
+# member's privacy policy is off: the gateway puts real personal values back
+# into the reply before it reaches here, and those must not sit in Redis.
 
-import hashlib
 
-_SKIP_CACHE_TASKS = {"email", "auto_apply", "email_monitor", "linkedin_outreach"}
+CACHEABLE_TASKS = frozenset({"company_research", "job_search"})
+LLM_CACHE_TTL = 3600
+_REDIS_TIMEOUT_S = 0.5  # a slow Redis must never stall a model call
 
 _llm_cache = None
 
@@ -352,26 +368,58 @@ def _get_llm_cache():
         url = settings.REDIS_URL
         if url.startswith("redis://"):
             url = url.replace("redis://", "", 1)
-        _llm_cache = sync_redis.from_url(f"redis://{url}", decode_responses=True)
+        _llm_cache = sync_redis.from_url(
+            f"redis://{url}",
+            decode_responses=True,
+            socket_timeout=_REDIS_TIMEOUT_S,
+            socket_connect_timeout=_REDIS_TIMEOUT_S,
+        )
     return _llm_cache
 
 
-def _cache_key(user_id: str, task_type: str, prompt: str) -> str:
-    h = hashlib.sha256(f"{user_id}:{task_type}:{prompt}".encode()).hexdigest()[:32]
-    return f"llm_cache:{h}"
+def _messages_text(messages) -> str:
+    """Every message with its role, so the system prompt is part of the key."""
+    if isinstance(messages, str):
+        return messages
+    return json.dumps(
+        [[getattr(m, "type", type(m).__name__), str(getattr(m, "content", m))] for m in messages],
+        ensure_ascii=False,
+    )
+
+
+def _cache_key(user_id: str, task_type: str, prompt: str, model: str = "") -> str:
+    h = hashlib.sha256(
+        json.dumps([user_id, task_type, model, prompt], ensure_ascii=False).encode()
+    ).hexdigest()[:32]
+    return f"llm_cache:v2:{h}"
 
 
 class CachingLLM:
-    """Wraps a BaseChatModel with Redis response caching.
+    """Wraps a BaseChatModel with Redis response caching for CACHEABLE_TASKS.
 
-    Only caches for non-email, non-apply tasks. Cache TTL: 1 hour.
+    The key covers member, task, model and every message (system prompt
+    included). ``redacting`` (the member's privacy policy is on) disables
+    caching. Cache TTL: 1 hour.
     """
 
-    def __init__(self, llm: BaseChatModel, user_id: str, task_type: str):
+    def __init__(
+        self,
+        llm: BaseChatModel,
+        user_id: str,
+        task_type: str,
+        model: str = "",
+        redacting: bool = True,
+    ):
         self._llm = llm
         self._user_id = user_id
         self._task_type = task_type or ""
+        self._model = model
+        self._redacting = redacting
         self._cache = _get_llm_cache()
+
+    @property
+    def caches(self) -> bool:
+        return self._task_type in CACHEABLE_TASKS and not self._redacting
 
     @property
     def callbacks(self):
@@ -382,28 +430,24 @@ class CachingLLM:
         self._llm.callbacks = value
 
     def invoke(self, messages, **kwargs):
-        if self._task_type in _SKIP_CACHE_TASKS:
+        if not self.caches or kwargs:
             return self._llm.invoke(messages, **kwargs)
-        prompt = str(messages[-1].content) if hasattr(messages[-1], "content") else str(messages)
-        key = _cache_key(self._user_id, self._task_type, prompt)
+        key = _cache_key(self._user_id, self._task_type, _messages_text(messages), self._model)
         try:
             cached = self._cache.get(key)
             if cached:
-                import json
                 from langchain_core.messages import AIMessage
 
-                data = json.loads(cached)
-                return AIMessage(content=data["content"])
-        except Exception:
-            pass
+                return AIMessage(content=json.loads(cached)["content"])
+        except Exception as exc:
+            logger.debug("LLM cache read skipped: %s", type(exc).__name__)
         result = self._llm.invoke(messages, **kwargs)
-        try:
-            content = result.content if hasattr(result, "content") else str(result)
-            import json
-
-            self._cache.setex(key, 3600, json.dumps({"content": content}))
-        except Exception:
-            pass
+        content = getattr(result, "content", None)
+        if isinstance(content, str) and content and not getattr(result, "tool_calls", None):
+            try:
+                self._cache.setex(key, LLM_CACHE_TTL, json.dumps({"content": content}))
+            except Exception as exc:
+                logger.debug("LLM cache write skipped: %s", type(exc).__name__)
         return result
 
     def __getattr__(self, name):

@@ -89,6 +89,8 @@ class UserPreferencesSchema(BaseModel):
     # Hide contact details/IDs and, separately, the member's name from the model.
     llm_hide_personal_info: bool | None = None
     llm_hide_name: bool | None = None
+    # India-first: hide roles open only outside India from search and auto-apply.
+    india_focus: bool | None = None
     # Resume preferences (asked once on first auto-apply; resume_prefs_set_at
     # stays null until then). The client sets resume_prefs_set_at when saving.
     resume_template: str | None = Field(None, max_length=50)
