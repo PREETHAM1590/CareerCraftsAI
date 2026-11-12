@@ -194,8 +194,9 @@
   // person should look at (an empty required answer, an AI draft, a value the
   // page refused) still stops at the review panel.
   // Answers auto-submit may rely on: the member's saved answers ("user"),
-  // their profile, and values the site itself already shows ("page").
-  const AUTO_SOURCES = new Set(["user", "profile", "page"]);
+  // and their profile. Values the site itself already shows ("page") are
+  // unreviewed third-party content, so they still stop at the review panel.
+  const AUTO_SOURCES = new Set(["user", "profile"]);
   const NO_AUTO_HOST_RE = /(^|\.)(linkedin|naukri)\.com\.?$/i;
 
   function needsAttention(fields, typed) {

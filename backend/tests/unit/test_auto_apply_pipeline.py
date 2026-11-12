@@ -121,3 +121,30 @@ async def test_get_or_create_job_application_reuses_existing_row_by_url():
         job_application_id = await _get_or_create_job_application(user_id, job)
 
     assert job_application_id == str(existing.id)
+
+
+@pytest.mark.asyncio
+async def test_attach_resume_sets_resume_id_only_for_the_owners_document():
+    from app.agents.auto_apply_pipeline import _attach_resume
+    from app.models.db import UserDocument
+
+    owner, other = uuid.uuid4(), uuid.uuid4()
+    app_row = MagicMock(user_id=owner, resume_id=None)
+    own_doc = MagicMock(id=uuid.uuid4(), user_id=owner)
+    foreign_doc = MagicMock(id=uuid.uuid4(), user_id=other)
+    docs = {own_doc.id: own_doc, foreign_doc.id: foreign_doc}
+
+    db = MagicMock()
+    db.commit = AsyncMock()
+    db.get = AsyncMock(
+        side_effect=lambda model, pk: docs.get(pk) if model is UserDocument else app_row
+    )
+    session = MagicMock()
+    session.__aenter__ = AsyncMock(return_value=db)
+    session.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("app.core.database.AsyncSessionLocal", return_value=session):
+        assert not await _attach_resume(str(owner), str(uuid.uuid4()), str(foreign_doc.id))
+        assert app_row.resume_id is None
+        assert await _attach_resume(str(owner), str(uuid.uuid4()), str(own_doc.id))
+    assert app_row.resume_id == own_doc.id

@@ -882,12 +882,19 @@ async def save_answer(
 ):
     """Remember an answer the user typed in the review panel, so the same
     question is filled automatically next time."""
-    from app.applications import profile_service
+    from app.applications import profile_service, saved_answers
 
     if extension_service.is_section_label(body.label):
         # "Work Experience 2: Company" belongs to one block of one form.
         return {"question_key": None}
     key = body.question_key or extension_service.answer_key(body.label)
+    if not saved_answers.valid_key(key):
+        raise HTTPException(status_code=404, detail="Unknown question")
+    texts = body.value if isinstance(body.value, list) else [body.value]
+    if len(texts) > 20 or any(
+        isinstance(t, str) and len(t) > saved_answers.MAX_VALUE_CHARS for t in texts
+    ):
+        raise HTTPException(status_code=422, detail="Answer is too long")
     await profile_service.save_approved_answer(db, device.user_id, key, body.label, body.value)
     await db.commit()
     return {"question_key": key}

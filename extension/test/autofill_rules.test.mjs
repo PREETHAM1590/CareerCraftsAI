@@ -66,3 +66,10 @@ test("local plan never overwrites, never ticks consent, and lists what is left",
   assert.deepEqual(plan.map((p) => [p.field_id, p.value]), [["fn", "Ada"]]);
   assert.deepEqual(missing, ["Why us?", "I agree*"]);
 });
+
+test("values the page already shows never auto-submit unreviewed", () => {
+  // needsAttention is private to drivers.js; check the allowlist it uses.
+  const src = fs.readFileSync(new URL("../src/content/drivers.js", import.meta.url), "utf8");
+  const sources = vm.runInNewContext(`[${/AUTO_SOURCES = new Set\(\[([^\]]*)\]/.exec(src)[1]}]`);
+  assert.deepEqual([...sources], ["user", "profile"]);
+});

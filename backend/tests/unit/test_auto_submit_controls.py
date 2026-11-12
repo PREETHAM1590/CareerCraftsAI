@@ -502,3 +502,26 @@ async def test_saved_answers_api(monkeypatch):
             "/users/me/linkedin-credentials", json={"email": "a@b.c", "password": "pw"}
         )
         assert gone.status_code == 405
+
+
+@pytest.mark.asyncio
+async def test_device_answers_reject_internal_keys_and_oversized_values(gate, monkeypatch):
+    from app.applications import profile_service, saved_answers
+
+    save = AsyncMock()
+    monkeypatch.setattr(profile_service, "save_approved_answer", save)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=gate.app), base_url="http://test"
+    ) as client:
+        url = "/extension/device/answers"
+        bad = await client.post(
+            url, json={"label": "Facts", "value": "x", "question_key": "resume.facts"}
+        )
+        long = await client.post(
+            url, json={"label": "Why us?", "value": "x" * (saved_answers.MAX_VALUE_CHARS + 1)}
+        )
+        save.assert_not_awaited()
+        ok = await client.post(url, json={"label": "Why us?", "value": "Because"})
+    assert bad.status_code == 404 and long.status_code == 422
+    assert ok.status_code == 200 and ok.json()["question_key"] == "custom.why us"
+    save.assert_awaited_once()
