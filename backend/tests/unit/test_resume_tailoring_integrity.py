@@ -79,10 +79,12 @@ def test_invented_facts_are_surfaced_to_the_user(mock_llm):
     )
     result, _ = _run(mock_llm, forged)
     pending = result["pending_action"]
-    unsupported = " ".join(pending["grounding"]["unsupported"])
+    unsupported = " ".join(pending["grounding"]["removed"])
     for item in ("Google", "70%", "Terraform"):
         assert item in unsupported
-    assert any("Not found in your documents" in w for w in pending["warnings"])
+        assert item not in pending["resume_markdown"]
+    assert pending["grounding"]["unsupported"] == []
+    assert any("Removed because" in w for w in pending["warnings"])
 
 
 def test_a_long_resume_is_grounded_on_the_whole_document_not_eight_chunks(mock_llm):

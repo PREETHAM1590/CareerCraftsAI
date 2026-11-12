@@ -371,3 +371,35 @@ async def test_live_role_city_fanout_reuses_each_cached_group(redis, monkeypatch
     assert set(calls) == {(r, c) for r in query["titles"] for c in query["locations"]}
     assert len(calls) == 4
     write.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", ["{broken", '{"old": "format"}'])
+async def test_corrupt_entry_is_evicted_and_recomputed(redis, payload):
+    await redis.set("corrupt", payload)
+    calls = []
+    result = await search_cache.get_or_compute_decoded(
+        "live", "corrupt", 60, _compute(calls, [1], "[1]"),
+        search_cache.decode_json_list, wait_s=1,
+    )
+    assert result == ([1], False)
+    assert calls == [1]
+    assert await redis.get("corrupt") == "[1]"
+
+
+@pytest.mark.asyncio
+async def test_board_cache_key_does_not_expose_role_or_url(redis, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from app.services import saved_boards
+
+    source = SimpleNamespace(id="private-board-id")
+    role = "jane@example.com private search"
+    fetch = AsyncMock(return_value=[{"title": "Engineer"}])
+    monkeypatch.setattr(saved_boards, "search_board", fetch)
+    assert await saved_boards._cached_board_fetch(source, role)
+    assert await saved_boards._cached_board_fetch(source, role)
+    fetch.assert_awaited_once()
+    keys = await redis.keys(f"{search_cache.PREFIX}:board:*")
+    assert len(keys) == 1
+    assert role not in keys[0] and source.id not in keys[0]

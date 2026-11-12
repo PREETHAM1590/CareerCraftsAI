@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     # Shared Redis cache for job-search catalog/live results
     # (app/services/search_cache.py). Off = every search computes fresh.
     SEARCH_CACHE_ENABLED: bool = True
+    # Paper size of generated resume PDF/DOCX files. A4 is what Indian
+    # recruiters print on; LETTER for US-style output.
+    RESUME_PAGE_SIZE: Literal["A4", "LETTER"] = "A4"
 
     DB_POOL_SIZE: int = Field(default=10, ge=1, le=100)
     DB_MAX_OVERFLOW: int = Field(default=5, ge=0, le=100)
