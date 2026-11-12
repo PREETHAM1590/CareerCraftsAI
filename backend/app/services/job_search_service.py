@@ -302,10 +302,14 @@ async def search_all_platforms(
             if name in NO_CATALOG:
                 # Public demo input never populates the shared cache.
                 return (await compute())[0], False
-            jobs, cached = await search_cache.get_or_compute(
-                "live", key, search_cache.LIVE_TTL, compute, wait_s=max(timeout, timeout_s)
+            return await search_cache.get_or_compute_decoded(
+                "live",
+                key,
+                search_cache.LIVE_TTL,
+                compute,
+                search_cache.decode_json_list,
+                wait_s=max(timeout, timeout_s),
             )
-            return (json.loads(cached), True) if cached is not None else (jobs, False)
         except Exception as exc:
             logger.warning("Platform %s (%s) failed: %s", name, location, exc)
             warnings.append(f"{name} failed: {type(exc).__name__}")
