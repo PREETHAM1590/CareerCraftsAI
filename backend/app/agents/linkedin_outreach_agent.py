@@ -1,7 +1,7 @@
 """LinkedIn outreach agent.
 
-Finds recruiter/talent contacts for a company, drafts short connection notes,
-stores them in the approval queue, and returns a human-review checkpoint.
+Drafts short connection notes for contacts the user supplies (or a configured
+lookup finds), stores them in the approval queue, and returns a human-review checkpoint.
 """
 
 from __future__ import annotations
@@ -19,8 +19,10 @@ from app.core.database import AsyncSessionLocal
 from app.core.sync_db import fetch_user_profile_text, run_coro_sync
 from app.models.db import LinkedInOutreachQueue
 from app.services.linkedin_outreach_service import (
+    NO_LOOKUP_NOTICE,
     draft_outreach_message,
     filter_contacts_by_title,
+    lookup_configured,
 )
 from app.services.proxycurl_service import ProxycurlService
 
@@ -101,14 +103,14 @@ async def _build_outreach(state: AgentState) -> AgentState:
     supplied = _supplied_contacts(ctx.get("contacts"))
     if supplied:
         relevant_contacts = supplied
-    else:
-        # Proxycurl lookup is optional (and may be unavailable); it returns []
-        # without a key, which leads to the notice below.
+    elif lookup_configured():
         contacts = await ProxycurlService().find_contacts(company, role_context or None)
         relevant_contacts = filter_contacts_by_title(contacts) or contacts
         relevant_contacts = [
             c for c in relevant_contacts[:10] if c.get("name") and c.get("linkedin_url")
         ][:5]
+    else:
+        relevant_contacts = []
 
     if not relevant_contacts:
         return {
@@ -120,7 +122,9 @@ async def _build_outreach(state: AgentState) -> AgentState:
                 "contacts": [],
                 "messages": [],
                 "notice": (
-                    "No recruiter or hiring contacts found. Add the people you want to "
+                    NO_LOOKUP_NOTICE
+                    if not lookup_configured()
+                    else "No recruiter or hiring contacts found. Add the people you want to "
                     "reach (name, title and LinkedIn profile URL) and run it again."
                 ),
             },
