@@ -3,9 +3,10 @@ import logging
 import time
 import uuid
 from datetime import UTC, datetime
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -118,9 +119,26 @@ async def optimize_uploaded_profile(
     )
 
 
+class OutreachContact(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    title: str = Field(default="", max_length=150)
+    linkedin_url: str = Field(max_length=300)
+
+    @field_validator("linkedin_url")
+    @classmethod
+    def _linkedin_https(cls, value: str) -> str:
+        value = value.strip()
+        parsed = urlsplit(value)
+        host = (parsed.hostname or "").lower()
+        if parsed.scheme != "https" or not (host == "linkedin.com" or host.endswith(".linkedin.com")):
+            raise ValueError("linkedin_url must be an https linkedin.com URL")
+        return value
+
+
 class OutreachIdentifyRequest(BaseModel):
     company_name: str
     role_context: str | None = None
+    contacts: list[OutreachContact] = Field(default_factory=list, max_length=5)
 
 
 class OutreachApproveRequest(BaseModel):
@@ -134,15 +152,21 @@ async def identify_contacts(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Find contacts at a company via Proxycurl, filter, and draft messages.
+    """Draft outreach messages for the supplied contacts at a company.
 
-    Runs as a durable agent run; drafts appear in GET /outreach/queue.
+    Contacts come from the request; a configured lookup provider is only a
+    fallback when none are given. Runs as a durable agent run; drafts appear
+    in GET /outreach/queue.
     """
     run_id = await queue_agent_run(
         db,
         current_user,
         "linkedin_outreach",
-        {"company_name": body.company_name, "role_context": body.role_context},
+        {
+            "company_name": body.company_name,
+            "role_context": body.role_context,
+            "contacts": [c.model_dump() for c in body.contacts],
+        },
     )
     return {"run_id": run_id, "status": "queued"}
 
