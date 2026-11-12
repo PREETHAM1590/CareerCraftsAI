@@ -21,13 +21,19 @@ submitted before the panel's Submit button is pressed; the script asserts it.
 import asyncio
 import json
 import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 from playwright.async_api import async_playwright
 
-EXT = str(Path(__file__).resolve().parents[1])
+# manifest.json is the production manifest; the live run pairs with localhost.
+EXT = str(Path(tempfile.mkdtemp(prefix="cc-ext-")) / "extension")
+subprocess.run(
+    ["node", str(Path(__file__).resolve().parents[1] / "scripts" / "build.mjs"), "--out", EXT, "--dev"],
+    check=True,
+)
 CHROME = os.environ.get(
     "CC_CHROME", "/opt/pw-browsers/chromium-1194/chrome-linux/chrome"
 )

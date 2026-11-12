@@ -35,8 +35,6 @@
     "activeTab"
   ],
   "host_permissions": [
-    "http://localhost/*",
-    "http://127.0.0.1/*",
     "https://www.careercraftsai.me/*",
     "https://careercraftsai.me/*",
     "https://app.careercraftsai.me/*",
@@ -73,8 +71,6 @@
   "content_scripts": [
     {
       "matches": [
-        "http://localhost/*",
-        "http://127.0.0.1/*",
         "https://careercraftsai.me/*",
         "https://app.careercraftsai.me/*",
         "https://www.careercraftsai.me/*"

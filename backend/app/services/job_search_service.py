@@ -204,11 +204,12 @@ async def search_all_platforms(
     need = int(query.get("max_results", 10))
     # 1. Shared catalog first (public sources + jobs other users' live searches stored).
     catalog_jobs: list[dict] = []
+    stats: dict = {}
     cacheable = [n for n in valid_names if n not in NO_CATALOG]
     if public or cacheable:
         try:
             catalog_jobs, catalog_warnings = await search_catalog(
-                query, public, live_platforms=cacheable
+                query, public, live_platforms=cacheable, stats=stats
             )
             catalog_jobs = [job for job in catalog_jobs if matches_query(job, query)]
             warnings.extend(catalog_warnings)
@@ -243,7 +244,7 @@ async def search_all_platforms(
     if not valid_names or (
         platforms is None and len(cacheable) == len(valid_names) and len(covering) >= need
     ):
-        return catalog_jobs, warnings
+        return catalog_jobs, warnings + _explain(query, catalog_jobs, stats.get("india_hidden", 0))
 
     # 2. Shortfall: live adapters fill the gap.
     titles = query.get("titles") or []
@@ -326,7 +327,33 @@ async def search_all_platforms(
 
     # Catalog rows go first so they keep their ids; a LinkedIn/Indeed copy of a
     # catalog role (different URL, same company+title+place) folds into it.
+    from app.services import india_focus
     from app.services.job_connectors import merge_duplicates
 
     jobs = merge_duplicates(catalog_jobs + [job for group in per_source for job in group])
-    return [job for job in jobs if matches_query(job, query)], warnings
+    relevant = [job for job in jobs if matches_query(job, query, india=False)]
+    kept, hidden = india_focus.split(relevant, query)
+    # Catalog rows are already India-filtered; count what it hid too.
+    hidden_total = len(hidden) + stats.get("india_hidden", 0)
+    return kept, warnings + _explain(query, kept, hidden_total)
+
+
+def _explain(query: dict, jobs: list[dict], india_hidden: int) -> list[str]:
+    """Plain-language notes for what the member sees: roles hidden by India focus,
+    and why a search found nothing."""
+    notes = []
+    if india_hidden:
+        notes.append(
+            f"Hid {india_hidden} matching role{'s' if india_hidden != 1 else ''} open only "
+            "outside India (India focus is on; search a location outside India to see them)"
+        )
+    if not jobs:
+        roles = ", ".join(query.get("titles") or [str(query.get("search_query") or "")])
+        places = ", ".join(str(p) for p in query.get("locations") or [] if p) or "any location"
+        days = query.get("posted_within_days", 30)
+        notes.append(
+            f"No open roles matched every word of '{roles}' in {places} posted in the last "
+            f"{days} days. Try a shorter or more common title, a nearby city or Remote, "
+            "or a longer posting window."
+        )
+    return notes
