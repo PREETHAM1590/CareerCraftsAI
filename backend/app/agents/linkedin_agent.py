@@ -12,7 +12,7 @@ from app.agents.state import AgentState
 from app.agents.thinking import think_and_select
 from app.core.model_router import build_agent_llm
 from app.core.sync_db import fetch_model_settings
-from app.services.rag_service import retrieve
+from app.services.rag_service import retrieval_unavailable, retrieve
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +28,15 @@ def linkedin_agent_node(state: AgentState) -> AgentState:
 
         chunks = retrieve(user_id, "resume", target_role, model_settings, k=5)
         context_text = "\n".join(c.page_content for c in chunks)
-        context_warning = (
-            None
-            if context_text.strip()
-            else "No resume text could be retrieved (no resume uploaded, or document search "
-            "was unavailable), so these suggestions are not grounded in your resume."
-        )
+        if not context_text.strip():
+            context_warning = (
+                "No resume text could be retrieved (no resume uploaded, or document search "
+                "was unavailable), so these suggestions are not grounded in your resume."
+            )
+        elif retrieval_unavailable(chunks):
+            context_warning = "Document search was unavailable, so your saved profile text was used."
+        else:
+            context_warning = None
 
         llm = build_agent_llm(model_settings)
 
