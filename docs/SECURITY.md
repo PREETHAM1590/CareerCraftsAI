@@ -12,7 +12,7 @@ This document covers CareerCraft AI's security architecture, threat model, known
 | User resume data | Unauthorized access | RLS: `user_id = auth.uid()` enforced in DB |
 | Job application actions | CSRF / replay | JWT on every request; HITL gate for irreversible actions |
 | Email sending (Gmail) | Sending without consent | Server-side HITL gate; `/approve` endpoint required |
-| Browser automation | Cross-user contamination | Playwright isolated browser context per user |
+| Job applications in a browser | Cross-user contamination, job-site credentials on the server | Applications run only in the member's own browser via the extension; the server runs no browser |
 | Admin endpoints | Public access | Nginx blocks `/internal/*` at edge |
 | Rate limiting | Credential stuffing / scraping | slowapi (60 req/min/user), Nginx (10 req/min for auth) |
 
