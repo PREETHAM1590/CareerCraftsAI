@@ -50,6 +50,9 @@ class JobSearchRequest(JobSearchQuerySchema):
     job_type: str | None = None
     target_roles: list[str] | None = Field(None, max_length=20)
     preferred_locations: list[str] | None = Field(None, max_length=20)
+    # India-first (roles open only outside India hidden). Omitted: the member's
+    # saved switch, which is on unless every searched place is outside India.
+    india_focus: bool | None = None
 
 
 def make_job_search_id(
@@ -405,6 +408,7 @@ async def _resolve_search_context(
         "resume_skills": skills,
         "preference_id": str(prefs.id) if prefs else None,
         "resume_id": str(resume.id) if resume else None,
+        "india_focus_off": bool(prefs) and getattr(prefs, "india_focus", None) is False,
     }
     return search_query[:200], location[:200], work_mode, source
 
@@ -734,11 +738,15 @@ async def search_jobs(
     platforms = payload.platforms or []
 
     remote = (payload.remote or "").strip() or work_mode or "any"
+    from app.services.india_focus import wants_india
     from app.services.search_basis import resolve_basis
 
     resume, persona = await resolve_basis(
         db, current_user.id, payload.resume_id, payload.persona_id
     )
+    explicit_focus = payload.india_focus
+    if explicit_focus is None and search_source.get("india_focus_off"):
+        explicit_focus = False
     basis = {
         "resume_id": str(resume.id) if resume else None,
         "persona_id": str(persona.id) if persona else None,
@@ -747,6 +755,10 @@ async def search_jobs(
         "locations": sorted(set(search_locations)),
         "platforms": sorted(platforms),
         "remote": remote,
+        # Resolved here so the run, its dedupe id and every cache key see one value.
+        "india_focus": wants_india(
+            {"locations": search_locations, "india_focus": explicit_focus}
+        ),
     }
     stable_job_id = make_job_search_id(
         str(current_user.id), search_query, location, payload.max_results, basis
