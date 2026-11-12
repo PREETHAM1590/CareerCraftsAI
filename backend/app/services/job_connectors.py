@@ -2275,6 +2275,51 @@ _PORTALS = (
     ("kula", r"careers\.kula\.ai", rf"/({_SLUG})"),
 )
 _ZOHO_HOST = re.compile(rf"({_SLUG})\.zohorecruit\.(com|in|eu)")
+# Every family resolve_careers_url can return: the host-pattern families it
+# special-cases plus everything in _PORTALS.
+CAREERS_URL_FAMILIES = tuple(
+    dict.fromkeys(
+        ["workday", "oracle", "taleo", "successfactors", "zohorecruit"]
+        + [family for family, _, _ in _PORTALS]
+    )
+)
+PORTAL_LABELS = {
+    "workday": "Workday",
+    "oracle": "Oracle Recruiting",
+    "taleo": "Taleo",
+    "successfactors": "SAP SuccessFactors",
+    "zohorecruit": "Zoho Recruit",
+    "greenhouse": "Greenhouse",
+    "ashby": "Ashby",
+    "lever": "Lever",
+    "smartrecruiters": "SmartRecruiters",
+    "workable": "Workable",
+    "recruitee": "Recruitee",
+    "personio": "Personio",
+    "bamboohr": "BambooHR",
+    "teamtailor": "Teamtailor",
+    "breezy": "Breezy",
+    "pinpoint": "Pinpoint",
+    "hibob": "HiBob",
+    "trakstar": "Trakstar",
+    "jobscore": "JobScore",
+    "gem": "Gem",
+    "rippling": "Rippling",
+    "icims": "iCIMS",
+    "jobvite": "Jobvite",
+    "jazzhr": "JazzHR",
+    "dover": "Dover",
+    "paylocity": "Paylocity",
+    "keka": "Keka",
+    "freshteam": "Freshteam",
+    "kula": "Kula",
+}
+
+
+def supported_portal_names() -> str:
+    """'Workday, Oracle Recruiting, … and Kula': every careers-URL family, for messages."""
+    names = [PORTAL_LABELS.get(f, f.title()) for f in CAREERS_URL_FAMILIES]
+    return ", ".join(names[:-1]) + " and " + names[-1]
 
 
 def resolve_careers_url(url: str) -> Source | None:
