@@ -1,4 +1,5 @@
 """Unit tests for Auto Apply Pipeline — multi-step flow, HITL checkpoints, error handling."""
+
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -42,7 +43,10 @@ def test_score_job_quick_returns_0_100():
         platform="linkedin",
     )
 
-    with patch("app.agents.thinking.think_about_job_match", return_value={"match_level": "HIGH", "decision": "YES"}):
+    with patch(
+        "app.agents.thinking.think_about_job_match",
+        return_value={"match_level": "HIGH", "decision": "YES"},
+    ):
         score = _score_job_quick(mock_llm, job, "Profile text")
 
     assert isinstance(score, int)
@@ -57,7 +61,15 @@ def test_generate_cold_email_structure():
         content="Subject: Following up\n\nDear team,\n\nI'm reaching out..."
     )
 
-    result = _generate_cold_email(mock_llm, "Recruiter Name", "recruiter@stripe.com", "Stripe", "Engineer", "Job desc", "My profile")
+    result = _generate_cold_email(
+        mock_llm,
+        "Recruiter Name",
+        "recruiter@stripe.com",
+        "Stripe",
+        "Engineer",
+        "Job desc",
+        "My profile",
+    )
     assert isinstance(result, dict)
     assert "subject" in result
     assert "body" in result
@@ -71,16 +83,28 @@ async def test_get_or_create_job_application_reuses_existing_row_by_url():
     from contextlib import asynccontextmanager
 
     user_id = str(uuid.uuid4())
-    job = JobListing(title="Engineer", company="Acme", location="Remote",
-                     description="desc", job_url="https://acme.test/apply", platform="linkedin")
-    existing = JobApplication(id=uuid.uuid4(), user_id=uuid.UUID(user_id),
-                              company="Acme", role="Engineer", job_url=job.job_url)
+    job = JobListing(
+        title="Engineer",
+        company="Acme",
+        location="Remote",
+        description="desc",
+        job_url="https://acme.test/apply",
+        platform="linkedin",
+    )
+    existing = JobApplication(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(user_id),
+        company="Acme",
+        role="Engineer",
+        job_url=job.job_url,
+    )
 
     class _FakeDB:
         async def execute(self, *a, **k):
             class _R:
                 def scalar_one_or_none(self):
                     return existing
+
             return _R()
 
         def add(self, obj):

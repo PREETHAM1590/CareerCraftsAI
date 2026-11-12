@@ -1,4 +1,5 @@
 """Careers-URL resolution plus the Workable (public), Oracle and iCIMS connectors."""
+
 # ruff: noqa: E501
 
 import httpx

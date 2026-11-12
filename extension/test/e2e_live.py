@@ -31,7 +31,13 @@ from playwright.async_api import async_playwright
 # manifest.json is the production manifest; the live run pairs with localhost.
 EXT = str(Path(tempfile.mkdtemp(prefix="cc-ext-")) / "extension")
 subprocess.run(
-    ["node", str(Path(__file__).resolve().parents[1] / "scripts" / "build.mjs"), "--out", EXT, "--dev"],
+    [
+        "node",
+        str(Path(__file__).resolve().parents[1] / "scripts" / "build.mjs"),
+        "--out",
+        EXT,
+        "--dev",
+    ],
     check=True,
 )
 CHROME = os.environ.get(
