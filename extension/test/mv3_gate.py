@@ -52,7 +52,8 @@ async def main():
     root = Path(__file__).resolve().parents[1]
     extension = Path(tempfile.mkdtemp(prefix="cc-ext-")) / "extension"
     # manifest.json is the production manifest; the gate pairs with localhost.
-    subprocess.run(
+    await asyncio.to_thread(
+        subprocess.run,
         ["node", str(root / "scripts" / "build.mjs"), "--out", str(extension), "--dev"],
         check=True,
     )
