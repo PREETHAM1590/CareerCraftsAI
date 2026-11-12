@@ -343,6 +343,7 @@ def _agent_patches(llm) -> list:
         patch(f"{agents}.interview_coach_agent._save_interview_session", return_value=None),
         patch(f"{agents}.resume_agent.generate_resume_pdf", return_value=b"%PDF"),
         patch(f"{agents}.resume_agent._persist_resume_document", return_value=None),
+        patch(f"{agents}.resume_agent._full_resume_text", return_value=""),
         patch(f"{agents}.orchestrator.emit"),
         patch("app.core.event_bus.emit"),
         patch("app.core.sync_db.fetch_user_full_name", return_value=NAME),
