@@ -54,6 +54,17 @@ test("local autofill answers only what the profile holds", () => {
   assert.equal(autofill.answerFor("Will you require visa sponsorship?", { requiresSponsorship: "No" }), "No");
 });
 
+test("sponsorship and name rules do not shadow other questions", () => {
+  const profile = { firstName: "Ada", lastName: "Lovelace", currentCompany: "Acme", workAuthorized: "Yes", requiresSponsorship: "No" };
+  assert.equal(autofill.answerFor("Are you legally authorized to work in the US without sponsorship?*", profile), "Yes");
+  assert.equal(autofill.answerFor("Can you work here without requiring visa sponsorship?", profile), "Yes");
+  assert.equal(autofill.answerFor("Do you require sponsorship to be authorized to work?", profile), "No");
+  assert.equal(autofill.answerFor("Will you now or in the future require sponsorship?", profile), "No");
+  assert.equal(autofill.answerFor("Name of current employer", profile), "Acme");
+  assert.equal(autofill.answerFor("Full Name*", profile), "Ada Lovelace");
+  assert.equal(autofill.answerFor("Name", profile), "Ada Lovelace");
+});
+
 test("local plan never overwrites, never ticks consent, and lists what is left", () => {
   const fields = [
     { id: "fn", type: "text", label: "First Name*", value: "", visible: true, required: true },

@@ -22,7 +22,8 @@
     [/first name|given name|forename/, (p) => p.firstName],
     [/last name|family name|surname/, (p) => p.lastName],
     [/middle name/, () => null],
-    [/^(full |legal |your |candidate )?name\b/, (p) => [p.firstName, p.lastName].filter(Boolean).join(" ")],
+    // "Name of current employer" / "Name of school" are not the person's name.
+    [/^(full |legal |your |candidate )?name\b(?! of\b)/, (p) => [p.firstName, p.lastName].filter(Boolean).join(" ")],
     [/e-?mail/, (p) => p.email],
     [/phone|mobile|telephone|contact number/, (p) => p.phone],
     [/address line ?2|apartment|suite/, () => null],
@@ -38,6 +39,8 @@
     [/current (job )?title|most recent (job )?title|^job title\b/, (p) => p.currentTitle],
     [/years of (relevant |professional |total )?experience/, (p) => p.yearsExperience],
     [/hear about|how did you (hear|find|learn)|referral source|^source\b/, (p) => p.howDidYouHear],
+    // "Authorized to work ... without sponsorship?" asks about authorization.
+    [/without\b.{0,40}sponsor/, (p) => p.workAuthorized],
     [/sponsor/, (p) => p.requiresSponsorship],
     [/authori[sz]ed to work|legally (authori[sz]ed|eligible|able) to work|right to work|work authori[sz]ation|eligible to work/, (p) => p.workAuthorized],
     [/gender|\bsex\b/, (p) => p.gender],
