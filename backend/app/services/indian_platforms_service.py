@@ -15,8 +15,6 @@ from __future__ import annotations
 
 import logging
 
-from app.services.job_platforms_service import JobListing
-
 logger = logging.getLogger(__name__)
 
 # key -> (display name, home page, why it is not read)
@@ -68,10 +66,6 @@ COVERAGE = (
 )
 
 
-class PlatformUnavailable(RuntimeError):
-    """The board cannot be read lawfully from the server."""
-
-
 def unavailable_notice(platforms: list[str] | None = None) -> str:
     names = [
         INDIAN_PLATFORMS[p]["name"] for p in platforms or INDIAN_PLATFORMS if p in INDIAN_PLATFORMS
@@ -85,48 +79,3 @@ def platform_status() -> list[dict[str, str | bool]]:
         {"key": key, "name": p["name"], "url": p["url"], "available": False, "reason": p["reason"]}
         for key, p in INDIAN_PLATFORMS.items()
     ]
-
-
-async def scrape_indian_platform(
-    llm=None,
-    user_id: str | None = None,
-    platform: str = "naukri",
-    search_term: str = "",
-    location: str = "",
-    results_wanted: int = 10,
-) -> list[JobListing]:
-    """Always raises PlatformUnavailable with the reason the board is not read."""
-    info = INDIAN_PLATFORMS.get(platform)
-    if info is None:
-        raise PlatformUnavailable(f"Unknown platform: {platform}")
-    raise PlatformUnavailable(f"{info['name']} is not searched: {info['reason']}")
-
-
-async def scrape_all_indian_platforms(
-    llm=None,
-    user_id: str | None = None,
-    search_term: str = "",
-    location: str = "",
-    results_wanted: int = 10,
-    platforms: list[str] | None = None,
-) -> list[JobListing]:
-    """Raises PlatformUnavailable naming every requested board (none can be read)."""
-    raise PlatformUnavailable(unavailable_notice(platforms))
-
-
-async def search_google_jobs(
-    llm=None,
-    user_id: str | None = None,
-    search_term: str = "",
-    location: str = "India",
-    results_wanted: int = 15,
-    live_browser: bool = False,
-    run_id: str | None = None,
-) -> list[JobListing]:
-    """Google Jobs has no public API and Google's terms forbid automated queries,
-    so the former headless-browser scrape is gone. Raises PlatformUnavailable."""
-    raise PlatformUnavailable(
-        "Google Jobs is not searched (no public API; automated queries are not permitted). "
-        + COVERAGE
-        + "."
-    )

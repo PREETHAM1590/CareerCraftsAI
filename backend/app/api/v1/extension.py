@@ -195,6 +195,11 @@ async def cancel_task(
         raise HTTPException(status_code=404, detail="Task not found")
     if task.status not in extension_service_open_statuses():
         return {"status": task.status}
+    if task.status == "submitting":
+        # The click may already be happening; a cancel would drop its result.
+        raise HTTPException(
+            status_code=409, detail="Submission is in progress; it cannot be cancelled"
+        )
     await _signal(
         task.workflow_id,
         {"stage": "cancelled", "details": {"message": "Cancelled from the web app"}},

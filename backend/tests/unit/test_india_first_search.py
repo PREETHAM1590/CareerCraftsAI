@@ -189,12 +189,6 @@ def test_indeed_country_from_location(location, country):
 async def test_indian_boards_report_unavailable_instead_of_empty():
     from app.services import indian_platforms_service as indian
 
-    with pytest.raises(indian.PlatformUnavailable, match="Naukri is not searched"):
-        await indian.scrape_indian_platform(platform="naukri")
-    with pytest.raises(indian.PlatformUnavailable, match="Foundit"):
-        await indian.scrape_all_indian_platforms()
-    with pytest.raises(indian.PlatformUnavailable, match="Google Jobs"):
-        await indian.search_google_jobs()
     assert all(not p["available"] and p["reason"] for p in indian.platform_status())
 
 

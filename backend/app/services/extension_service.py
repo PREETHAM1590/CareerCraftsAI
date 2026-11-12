@@ -28,6 +28,7 @@ from urllib.parse import urlsplit
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.prompts import fenced, one_line
 from app.applications.answer_resolver import resolve_fields
 from app.applications.models import ApplicationField
 from app.applications.question_normalizer import normalize_question
@@ -247,6 +248,10 @@ async def auto_submit_status(db: AsyncSession, user_id: uuid.UUID, *, lock: bool
     }
 
 
+def _norm(value):
+    return " ".join(value.split()).casefold() if isinstance(value, str) else value
+
+
 def auto_submit_refusal(status: dict, task: ExtensionTask) -> str | None:
     """Why this task may not be submitted without the member's click, or None."""
     if not status["enabled"]:
@@ -271,6 +276,17 @@ def auto_submit_refusal(status: dict, task: ExtensionTask) -> str | None:
     ]
     if unplanned:
         return "Some answers were not saved by you: " + ", ".join(unplanned[:5])
+    # The page may have changed an answer after CareerCraft planned it.
+    planned = (task.payload or {}).get("answer_values") or {}
+    changed = [
+        a["label"]
+        for a in answers
+        if a["type"] != "file"
+        and a["value"] not in (None, "", False, [])
+        and _norm(a["value"]) != _norm(planned.get(a["label"]))
+    ]
+    if changed:
+        return "Some answers differ from the ones CareerCraft planned: " + ", ".join(changed[:5])
     return apply_limits.auto_submit_cap_error(status["used_last_24h"], status["daily_cap"])
 
 
@@ -462,9 +478,9 @@ def _narrative_generator(user_id: uuid.UUID, task: ExtensionTask, budget: list[i
                 ),
                 HumanMessage(
                     content=(
-                        f"Role: {payload.get('role') or 'unknown'} "
-                        f"at {payload.get('company') or 'unknown'}\n"
-                        f"Question: {field.label}\n\nResume:\n{resume}"
+                        f"Role: {one_line(payload.get('role'))} "
+                        f"at {one_line(payload.get('company'))}\n"
+                        f"{fenced('QUESTION', field.label, 500)}\n\nResume:\n{resume}"
                     )
                 ),
             ]
@@ -688,6 +704,7 @@ def _remember_answer_sources(task: ExtensionTask, plan: list[dict]) -> None:
     form, for the approval audit and the auto-submit check."""
     payload = dict(task.payload or {})
     sources = dict(payload.get("answer_sources") or {})
+    values = dict(payload.get("answer_values") or {})
     blockers = list(payload.get("auto_blockers") or [])
     for entry in plan:
         if entry["value"] in (None, ""):
@@ -695,9 +712,13 @@ def _remember_answer_sources(task: ExtensionTask, plan: list[dict]) -> None:
         label = (entry["label"] or entry["field_id"] or "").strip()[:200]
         if len(sources) < _MAX_RECORDED_SOURCES:
             sources[label] = entry["source"]
-        if entry["source"] not in AUTO_SUBMIT_SOURCES and label not in blockers:
+        if entry["source"] in AUTO_SUBMIT_SOURCES:
+            if len(values) < _MAX_RECORDED_SOURCES:
+                values[label] = entry["value"]
+        elif label not in blockers:
             blockers.append(label)
     payload["answer_sources"] = sources
+    payload["answer_values"] = values
     payload["auto_blockers"] = blockers[:20]
     task.payload = payload
 

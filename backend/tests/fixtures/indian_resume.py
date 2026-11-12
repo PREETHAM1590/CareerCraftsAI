@@ -3,6 +3,17 @@
 
 from __future__ import annotations
 
+from app.core.pii_vault import _VERHOEFF_D, _VERHOEFF_INV, _VERHOEFF_P
+
+
+def verhoeff_check_digit(number: str) -> str:
+    """Check digit that makes ``number`` a valid Aadhaar-style Verhoeff string."""
+    checksum = 0
+    for i, ch in enumerate(reversed(number)):
+        checksum = _VERHOEFF_D[checksum][_VERHOEFF_P[(i + 1) % 8][int(ch)]]
+    return str(_VERHOEFF_INV[checksum])
+
+
 NAME = "Aditi Venkataraman Śrīnivāsan"
 EMAIL = "aditi.srinivasan@example.in"
 PHONE = "+91 98765 43210"

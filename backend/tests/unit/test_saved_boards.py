@@ -138,9 +138,23 @@ def test_save_jobs_skips_duplicates_and_removed_jobs():
 
 def test_save_jobs_does_not_save_the_same_role_twice_in_one_batch():
     db = FakeDb()
-    twin = {**_job("Same", slug="a"), "url": "https://boards.greenhouse.io/acme/jobs/b"}
+    twin = {**_job("Same", slug="a"), "url": "https://jobs.lever.co/acme/b"}
     ids, created = asyncio.run(sb.save_jobs(db, uuid.uuid4(), [_job("Same", slug="a"), twin]))
     assert created == 1 and len(ids) == 1
+
+
+def test_save_jobs_keeps_distinct_openings_on_one_board():
+    db = FakeDb()
+    other = {**_job("Same", slug="a"), "url": "https://boards.greenhouse.io/acme/jobs/b"}
+    ids, created = asyncio.run(sb.save_jobs(db, uuid.uuid4(), [_job("Same", slug="a"), other]))
+    assert created == 2 and len(ids) == 2
+
+
+def test_save_jobs_never_persists_non_https_urls():
+    db = FakeDb()
+    bad = [{**_job("X", slug="x"), "url": u} for u in ("javascript:alert(1)", "data:text/html,x")]
+    ids, created = asyncio.run(sb.save_jobs(db, uuid.uuid4(), bad))
+    assert created == 0 and not db.added
 
 
 def _board(url, label="Acme"):

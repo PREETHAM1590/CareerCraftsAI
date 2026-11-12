@@ -55,13 +55,13 @@ def _stable_id(url: str, title: str, company: str, location: str = "") -> str:
 
 
 def _normalize(raw: dict, platform: str) -> dict:
-    from app.services.job_connectors import url_key
+    from app.services.job_connectors import safe_url
 
     title = str(raw.get("title") or "").strip()
     company = str(raw.get("company") or "").strip()
     raw_url = str(raw.get("job_url") or raw.get("url") or "").strip()
-    # Tracking params stripped; http/odd URLs pass through unchanged.
-    url = url_key(raw_url) if raw_url.lower().startswith("https://") else raw_url
+    # Tracking params stripped; non-https URLs (javascript:, data:, http) are dropped.
+    url = safe_url(raw_url)
     location = str(raw.get("location") or "").strip()
     return {
         "job_id": _stable_id(url, title, company, location),

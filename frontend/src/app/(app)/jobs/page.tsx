@@ -30,6 +30,7 @@ import {
 } from "@phosphor-icons/react";
 import { toast } from "sonner";
 import { setPendingJd } from "@/lib/job-handoff";
+import { safeHttpUrl } from "@/lib/safe-url";
 import { fetchApplications, fetchApplicationJd, type ApplicationFilters, type ApplicationPage } from "@/lib/applications-api";
 import { apiClient, getApiErrorMessage } from "@/lib/api";
 import { JobSearchBasis } from "@/components/jobs/JobSearchBasis";
@@ -314,7 +315,8 @@ function JobActions({
           onClick={(e) => {
             e.stopPropagation();
             // Open the real job posting so the user can apply directly...
-            if (job.job_url) window.open(job.job_url, "_blank", "noopener,noreferrer");
+            const url = safeHttpUrl(job.job_url);
+            if (url) window.open(url, "_blank", "noopener,noreferrer");
             // ...and kick off the human-in-the-loop auto-apply prep.
             onPrepareApply(job);
           }}
@@ -831,11 +833,11 @@ function JobDetailBody({ job, onClose, titleId }: { job: SavedJob; onClose?: () 
         >
           Tailor resume for this job
         </IslandButton>
-        {job.job_url && (
+        {safeHttpUrl(job.job_url) && (
           <IslandButton
             tone="ghost"
             icon={<ArrowSquareOut size={16} weight="light" />}
-            onClick={() => window.open(job.job_url!, "_blank", "noopener,noreferrer")}
+            onClick={() => window.open(safeHttpUrl(job.job_url)!, "_blank", "noopener,noreferrer")}
           >
             Open original posting
           </IslandButton>

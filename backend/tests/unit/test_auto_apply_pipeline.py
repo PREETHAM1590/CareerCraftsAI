@@ -148,3 +148,51 @@ async def test_attach_resume_sets_resume_id_only_for_the_owners_document():
         assert app_row.resume_id is None
         assert await _attach_resume(str(owner), str(uuid.uuid4()), str(own_doc.id))
     assert app_row.resume_id == own_doc.id
+
+
+@pytest.mark.asyncio
+async def test_scoring_runs_off_the_event_loop_thread():
+    import threading
+
+    from app.agents.auto_apply_pipeline import run_auto_apply_pipeline
+    from app.services.job_platforms_service import JobListing
+
+    job = JobListing(
+        title="Engineer",
+        company="Acme",
+        location="Remote",
+        description="Build things",
+        job_url="https://acme.example/jobs/1",
+        platform="linkedin",
+    )
+    loop_thread = threading.get_ident()
+    seen: list[int] = []
+
+    def fake_score(*_args):
+        seen.append(threading.get_ident())
+        return 80
+
+    session = MagicMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=lambda: None))
+
+    with (
+        patch("app.agents.auto_apply_pipeline.scrape_jobs", return_value=[job]),
+        patch("app.agents.auto_apply_pipeline.fetch_user_profile_text", return_value=""),
+        patch("app.agents.auto_apply_pipeline.build_agent_llm", return_value=MagicMock()),
+        patch("app.agents.auto_apply_pipeline._score_job_quick", side_effect=fake_score),
+        patch("app.agents.auto_apply_pipeline._apply_to_job", AsyncMock(return_value={})),
+        patch("app.core.database.AsyncSessionLocal", return_value=session),
+    ):
+        await run_auto_apply_pipeline(
+            user_id=str(uuid.uuid4()),
+            search_query="Engineer",
+            location="Remote",
+            max_applications=1,
+            model_settings=MagicMock(),
+            india_focus=False,
+        )
+
+    assert seen
+    assert seen[0] != loop_thread

@@ -171,7 +171,7 @@ The backend does not drive job sites. Server-side browser execution is retired (
 
 Job postings, emails, and retrieved documents are data, not instructions:
 - Agent prompts wrap this text with the helpers in `backend/app/agents/prompts/__init__.py` (`untrusted()` and `fenced()`), and the shared security rules tell the model to ignore instructions inside fenced data.
-- Retrieved document chunks are wrapped in `<retrieved_context>` by `rag_service.format_context()`.
+- Retrieved document chunks are passed through `untrusted()` (`backend/app/agents/prompts/__init__.py`) before they go into a prompt.
 - Inbound email changes an application's status only when the sender's domain is the company's own or a known job platform (`application_status_service.sender_is_trusted`). Other mail is recorded and the member is asked to check it; nothing moves.
 
 ---

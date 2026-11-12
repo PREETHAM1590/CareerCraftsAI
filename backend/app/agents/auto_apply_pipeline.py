@@ -218,17 +218,17 @@ async def run_auto_apply_pipeline(
 
     # ── Step 2: Score jobs against user profile ─────────────────────
     logger.info("[AutoApply] Step 2: Scoring %d jobs", len(jobs))
-    model_settings = model_settings or fetch_model_settings(user_id)
+    model_settings = model_settings or await asyncio.to_thread(fetch_model_settings, user_id)
     if not model_settings:
         results["errors"].append("No AI model configured — add API key in Settings")
         return results
 
-    user_profile = fetch_user_profile_text(user_id)
+    user_profile = await asyncio.to_thread(fetch_user_profile_text, user_id)
     llm = build_agent_llm(model_settings)
 
     scored_jobs: list[tuple[JobListing, int]] = []
     for job in jobs[: max_applications * 2]:
-        score = _score_job_quick(llm, job, user_profile)
+        score = await asyncio.to_thread(_score_job_quick, llm, job, user_profile)
         scored_jobs.append((job, score))
 
     results["jobs_scored"] = len(scored_jobs)
@@ -383,7 +383,8 @@ async def _apply_to_job(
         # ── Generate cold email ─────────────────────────────────────
         email_content = None
         if recruiter_email:
-            email_content = _generate_cold_email(
+            email_content = await asyncio.to_thread(
+                _generate_cold_email,
                 llm,
                 recruiter_name,
                 recruiter_email,

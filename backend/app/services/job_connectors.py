@@ -306,6 +306,19 @@ def _merge(old: dict, new: dict) -> dict:
     return merged
 
 
+def safe_url(url: str) -> str:
+    """`canonical_url`, or "" for anything that is not a plain https link."""
+    try:
+        return canonical_url((url or "").strip())
+    except ValueError:
+        return ""
+
+
+def same_site(a: str, b: str) -> bool:
+    host = urlsplit(a or "").hostname
+    return bool(host) and host == urlsplit(b or "").hostname
+
+
 def url_key(url: str) -> str:
     """`canonical_url`, or the lowercased URL when it can't be canonicalized
     (live scrapers emit http/blank URLs; those must not crash a merge)."""
@@ -327,12 +340,18 @@ def merge_duplicates(jobs: list[dict]) -> list[dict]:
             loose.append(dict(job))
         else:
             by_url[key] = _merge(by_url[key], job) if key in by_url else dict(job)
-    by_role: dict[str, dict] = {}
+    by_role: dict[str, list[dict]] = {}
     for i, job in enumerate([*by_url.values(), *loose]):
         # Without a company and title there is no role to match on.
         key = role_key(job) if job.get("company") and job.get("title") else f"#{i}"
-        by_role[key] = _merge(by_role[key], job) if key in by_role else job
-    return list(by_role.values())
+        group = by_role.setdefault(key, [])
+        # Two URLs on one site are two requisitions, not one role cross-posted.
+        twin = next((j for j in group if not same_site(j["url"], job["url"])), None)
+        if twin is None:
+            group.append(job)
+        else:
+            group[group.index(twin)] = _merge(twin, job)
+    return [job for group in by_role.values() for job in group]
 
 
 def dedupe(jobs: list[dict], days=30, now=None) -> list[dict]:

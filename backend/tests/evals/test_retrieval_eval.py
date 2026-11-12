@@ -1,6 +1,5 @@
 import pytest
 
-from app.services.rag_service import format_context
 from tests.evals.harness import (
     HashedBagOfWordsEmbeddings,
     build_index,
@@ -38,17 +37,13 @@ def test_stub_retrieval_metrics_meet_thresholds():
     assert report["false_abstain_rate"] <= 0.1
 
 
-def test_injection_text_is_returned_only_as_delimited_data():
+def test_injection_text_is_still_retrieved():
     emb = HashedBagOfWordsEmbeddings()
     golden = load_golden()
     index = build_index(golden, emb)
     for q in (q for q in golden["queries"] if q.get("injection")):
         hits = search(index, emb, q["doc_type"], q["query"], 3, 0.1)
         assert any(q["relevant"][0]["contains"] in c.text for _, c in hits)
-        block = format_context([c.text for _, c in hits])
-        assert block.startswith("<retrieved_context")
-        assert block.count("</retrieved_context>") == 1
-        assert block.endswith("</retrieved_context>")
 
 
 @pytest.mark.skipif(

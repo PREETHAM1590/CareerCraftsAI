@@ -223,3 +223,23 @@ async def test_failed_signal_lets_extension_retry_the_outcome(gate):
         assert retried.status_code == 200
         assert task.submission_reported_at
         assert signal.await_args.args[1]["details"]["submit_attempted"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,refused", [("submitting", True), ("review", False)])
+async def test_cancel_is_refused_while_the_submit_click_may_be_happening(gate, status, refused):
+    from fastapi import HTTPException
+
+    _, task, _, signal = gate
+    task.status = status
+    db = MagicMock()
+    db.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=task)))
+    call = extension.cancel_task(task.id, db=db, current_user=MagicMock(id=task.user_id))
+    if refused:
+        with pytest.raises(HTTPException) as exc:
+            await call
+        assert exc.value.status_code == 409
+        signal.assert_not_awaited()
+    else:
+        assert await call == {"status": "cancelling"}
+        signal.assert_awaited_once()

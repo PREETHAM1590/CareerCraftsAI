@@ -153,13 +153,6 @@ def verhoeff_valid(number: str) -> bool:
     return checksum == 0
 
 
-def verhoeff_check_digit(number: str) -> str:
-    checksum = 0
-    for i, ch in enumerate(reversed(number)):
-        checksum = _VERHOEFF_D[checksum][_VERHOEFF_P[(i + 1) % 8][int(ch)]]
-    return str(_VERHOEFF_INV[checksum])
-
-
 def luhn_valid(number: str) -> bool:
     total = 0
     for i, ch in enumerate(reversed(number)):

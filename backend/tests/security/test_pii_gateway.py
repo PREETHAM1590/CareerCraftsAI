@@ -25,9 +25,10 @@ from langchain_core.messages import AIMessage
 from app.core import llm_gateway as gateway
 from app.core import model_router
 from app.core.config import settings
-from app.core.pii_vault import KnownPii, verhoeff_check_digit
+from app.core.pii_vault import KnownPii
 from app.services import pii_profile
 from app.services.pii_profile import PrivacyPolicy
+from tests.fixtures.indian_resume import verhoeff_check_digit
 
 USER_ID = str(uuid.uuid4())
 NAME = "Preetham Venkatesh"

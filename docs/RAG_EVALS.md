@@ -20,4 +20,4 @@ Stub scores (k=3, min_similarity 0.1): recall@3 1.00, precision@3 0.33, MRR 0.98
 Add a document (`id`, `doc_type`, `paragraphs`) and queries (`id`, `doc_type`, `query`, `relevant: [{doc, contains}]`; empty list for a no-answer query; `"injection": true` for injection checks) to `golden_set.json`. `test_golden_set_is_well_formed` fails if a phrase matches no chunk. Add hard negatives that share vocabulary with the target.
 
 ## Prompt safety
-`rag_service.format_context()` wraps chunks in `<retrieved_context>` with an untrusted-data notice and neutralises embedded closing tags. Agents must use it when inserting retrieved text into prompts.
+Agent prompts insert retrieved chunks through `untrusted()` in `backend/app/agents/prompts/__init__.py`, which neutralises fence-closing lines and tags inside the chunk text. Agents must use it when inserting retrieved text into prompts.

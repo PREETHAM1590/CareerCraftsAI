@@ -11,6 +11,7 @@ import re
 from dataclasses import dataclass
 
 from app.services.india_focus import is_indian_place
+from app.services.job_connectors import safe_url
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +162,7 @@ def scrape_jobs(
                     company=str(row.get("company", "")),
                     location=str(row.get("location", location)),
                     description=str(row.get("description", ""))[:2000],
-                    job_url=str(row.get("job_url", "")),
+                    job_url=safe_url(str(row.get("job_url", ""))),
                     platform=str(row.get("site", "unknown")),
                     date_posted=str(row.get("date_posted", "")) if row.get("date_posted") else None,
                     salary=_salary(row),

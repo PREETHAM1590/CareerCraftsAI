@@ -267,3 +267,43 @@ async def test_account_deletion_removes_approvals_saved_answers_and_boards(maker
             await db.scalar(text("SELECT count(*) FROM users WHERE id = :id"), {"id": owner.id})
             == 0
         )
+
+
+async def test_two_simultaneous_approvals_of_one_task_record_a_single_approval(maker):
+    from app.api.v1 import extension
+    from app.models.db import ApplicationSubmitApproval
+    from app.services.extension_service import pair_device
+
+    factory, created = maker
+    user = await _user(factory, created, policy_accepted_at=datetime.now(UTC))
+    async with factory() as db:
+        device, _ = await pair_device(db, user.id, "Browser")
+    task = await _task_in_review(factory, user, device)
+
+    async def approve():
+        async with factory() as db:
+            try:
+                return await extension.approve_submit.__wrapped__(
+                    request=None,
+                    task_id=task.id,
+                    body=extension.SubmitApproval(
+                        review_hash=task.review_hash, user_confirmed=True, auto_approved=False
+                    ),
+                    device=device,
+                    db=db,
+                )
+            except HTTPException as exc:
+                return exc
+
+    results = await asyncio.gather(approve(), approve())
+    refused = [r for r in results if isinstance(r, HTTPException)]
+    assert len(refused) == 1 and refused[0].status_code == 409
+    assert sum("submission_token" in r for r in results if isinstance(r, dict)) == 1
+
+    async with factory() as db:
+        approvals = await db.scalar(
+            select(func.count())
+            .select_from(ApplicationSubmitApproval)
+            .where(ApplicationSubmitApproval.extension_task_id == task.id)
+        )
+    assert approvals == 1

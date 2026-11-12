@@ -14,9 +14,9 @@ from app.core.pii_vault import (
     PiiVault,
     luhn_valid,
     scrub,
-    verhoeff_check_digit,
     verhoeff_valid,
 )
+from tests.fixtures.indian_resume import verhoeff_check_digit
 
 
 def _aadhaar(prefix: str = "23456789012") -> str:

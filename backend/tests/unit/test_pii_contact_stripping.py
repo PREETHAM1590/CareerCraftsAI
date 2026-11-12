@@ -9,8 +9,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from app.core import pii_vault
-from app.core.pii_vault import strip_contact_details, verhoeff_check_digit
+from app.core.pii_vault import strip_contact_details
 from app.services import rag_service
+from tests.fixtures.indian_resume import verhoeff_check_digit
 
 EMAIL = "preetham.v@gmail.com"
 PHONE = "+91 98765 43210"
