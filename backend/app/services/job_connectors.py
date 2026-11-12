@@ -2330,6 +2330,12 @@ def resolve_careers_url(url: str) -> Source | None:
 
     Returns a Source (id `family:tenant`) or None when the host is not a supported
     portal or the URL lacks the board identifier (e.g. a bare Workday host)."""
+    source = _resolve_careers_url(url)
+    # source_id is stored as varchar(200) for saved boards.
+    return source if source is not None and len(source.id) <= 200 else None
+
+
+def _resolve_careers_url(url: str) -> Source | None:
     try:
         parts = urlsplit(url if "//" in url else "//" + url.strip(), scheme="https")
     except ValueError:
@@ -2340,7 +2346,7 @@ def resolve_careers_url(url: str) -> Source | None:
         return None
     if host == "jobs.eu.lever.co" and segments:
         return Source(
-            id=f"lever:eu-{segments[0]}".lower(), family="lever", tenant=f"eu:{segments[0]}"
+            id=f"lever:eu:{segments[0]}".lower(), family="lever", tenant=f"eu:{segments[0]}"
         )
     if _WORKDAY_HOST.fullmatch(host):
         if segments and _LOCALE.fullmatch(segments[0]):
@@ -2353,8 +2359,11 @@ def resolve_careers_url(url: str) -> Source | None:
             if not segments or segments[0] in {"wday", "job"}:
                 return None
             tenant, site = host.split(".")[0], segments[0]
+        if not (re.fullmatch(_SLUG, tenant) and re.fullmatch(_SLUG, site)):
+            return None
         return Source(
-            id=f"workday:{tenant}-{site}".lower(),
+            # ":" cannot occur in a slug, so distinct boards never share an id.
+            id=f"workday:{tenant}:{site}".lower(),
             family="workday",
             tenant=f"{host}|{tenant}|{site}",
         )
@@ -2362,8 +2371,10 @@ def resolve_careers_url(url: str) -> Source | None:
         if "sites" not in segments or segments.index("sites") + 1 >= len(segments):
             return None
         site = segments[segments.index("sites") + 1]
+        if not re.fullmatch(_SLUG, site):
+            return None
         return Source(
-            id=f"oracle:{host.split('.')[0]}-{site}".lower(),
+            id=f"oracle:{host.split('.')[0]}:{site}".lower(),
             family="oracle",
             tenant=f"{host}|{site}",
         )
@@ -2375,7 +2386,7 @@ def resolve_careers_url(url: str) -> Source | None:
             and _TALEO_SECTION.fullmatch(segments[1])
         ):
             return Source(
-                id=f"taleo:{host.split('.')[0]}-{segments[1]}".lower(),
+                id=f"taleo:{host.split('.')[0]}:{segments[1]}".lower(),
                 family="taleo",
                 tenant=f"{host}|{segments[1]}",
             )
@@ -2386,7 +2397,7 @@ def resolve_careers_url(url: str) -> Source | None:
     if zoho and zoho.group(1).lower() not in _NOT_A_BOARD:
         region = "" if zoho.group(2) == "com" else zoho.group(2) + ":"
         return Source(
-            id=f"zohorecruit:{region.replace(':', '-')}{zoho.group(1)}".lower(),
+            id=f"zohorecruit:{region}{zoho.group(1)}".lower(),
             family="zohorecruit",
             tenant=region + zoho.group(1),
         )

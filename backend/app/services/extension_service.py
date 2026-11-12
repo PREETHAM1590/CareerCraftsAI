@@ -120,26 +120,33 @@ async def pair_device(
     return device, token
 
 
-async def rotate_token(db: AsyncSession, device: ExtensionDevice) -> str:
-    """Replace the device's token; the old one stops working immediately."""
+async def rotate_token(db: AsyncSession, device: ExtensionDevice) -> tuple[str, datetime]:
+    """Issue a replacement token. It takes over (and the old one stops working)
+    on its first use, so an in-flight request or a lost response is harmless.
+    Returns the token and the expiry it gets once used."""
     token = _new_token()
-    device.token_hash = hash_token(token)
-    device.expires_at = datetime.now(UTC) + TOKEN_TTL
+    device.pending_token_hash = hash_token(token)
     await db.commit()
-    return token
+    return token, datetime.now(UTC) + TOKEN_TTL
 
 
 async def authenticate(db: AsyncSession, token: str) -> ExtensionDevice | None:
     if not token.startswith(TOKEN_PREFIX):
         return None
+    digest = hash_token(token)
     device = (
         await db.execute(
             select(ExtensionDevice).where(
-                ExtensionDevice.token_hash == hash_token(token),
                 ExtensionDevice.revoked_at.is_(None),
                 or_(
-                    ExtensionDevice.expires_at.is_(None),
-                    ExtensionDevice.expires_at > datetime.now(UTC),
+                    and_(
+                        ExtensionDevice.token_hash == digest,
+                        or_(
+                            ExtensionDevice.expires_at.is_(None),
+                            ExtensionDevice.expires_at > datetime.now(UTC),
+                        ),
+                    ),
+                    ExtensionDevice.pending_token_hash == digest,
                 ),
             )
         )
@@ -147,6 +154,11 @@ async def authenticate(db: AsyncSession, token: str) -> ExtensionDevice | None:
     if device is not None:
         from app.api.v1.deps import require_eligible_owner
 
+        if device.pending_token_hash == digest:
+            # First use of a rotated token: it replaces the old one.
+            device.token_hash = digest
+            device.pending_token_hash = None
+            device.expires_at = datetime.now(UTC) + TOKEN_TTL
         # Persist activity first: read-only device routes never commit.
         device.last_seen_at = datetime.now(UTC)
         await db.commit()
@@ -244,6 +256,21 @@ def auto_submit_refusal(status: dict, task: ExtensionTask) -> str | None:
     blockers = (task.payload or {}).get("auto_blockers") or []
     if blockers:
         return "Some answers were drafted, not saved by you: " + ", ".join(blockers[:5])
+    # Every answer on the reviewed form must be one CareerCraft planned from
+    # the member's own saved values; anything else (no plan for this step, a
+    # page-prefilled value) needs their click.
+    answers = reviewed_answers(task)
+    if not answers or not (task.payload or {}).get("answer_sources"):
+        return "CareerCraft did not plan this form; approve it yourself."
+    unplanned = [
+        a["label"]
+        for a in answers
+        if a["type"] != "file"
+        and a["value"] not in (None, "", False, [])
+        and a["source"] not in AUTO_SUBMIT_SOURCES
+    ]
+    if unplanned:
+        return "Some answers were not saved by you: " + ", ".join(unplanned[:5])
     return apply_limits.auto_submit_cap_error(status["used_last_24h"], status["daily_cap"])
 
 

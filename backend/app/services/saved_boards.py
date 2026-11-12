@@ -178,6 +178,8 @@ async def list_boards(db, user_id: uuid.UUID) -> list[SavedBoard]:
 
 
 async def add_board(db, user_id: uuid.UUID, source: Source, url: str, label: str) -> SavedBoard:
+    # Serialize one member's adds so concurrent ones cannot all pass the cap.
+    await db.execute(text("SELECT 1 FROM users WHERE id=:u FOR NO KEY UPDATE"), {"u": user_id})
     existing = await db.execute(
         text("SELECT count(*), bool_or(source_id=:s) FROM saved_job_boards WHERE user_id=:u"),
         {"u": user_id, "s": source.id},

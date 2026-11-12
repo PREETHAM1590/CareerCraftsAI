@@ -272,9 +272,10 @@ async def rotate_device_token(
     device: ExtensionDevice = Depends(get_device),
     db: AsyncSession = Depends(get_db),
 ):
-    """Swap this browser's token for a fresh one; the old token stops working."""
-    token = await extension_service.rotate_token(db, device)
-    return {"token": token, "expires_at": device.expires_at.isoformat()}
+    """Issue a fresh token for this browser; the old one stops working once the
+    new one is first used."""
+    token, expires_at = await extension_service.rotate_token(db, device)
+    return {"token": token, "expires_at": expires_at.isoformat()}
 
 
 @router.delete("/device/me")

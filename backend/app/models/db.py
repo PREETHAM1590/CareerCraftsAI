@@ -252,6 +252,9 @@ class ExtensionDevice(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # The token stops working after this; the extension rotates it before then.
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # A rotated token waiting for its first use; the current token keeps
+    # working until then, so a lost rotate response never strands the browser.
+    pending_token_hash: Mapped[str | None] = mapped_column(String(64))
 
 
 class ExtensionTask(Base):

@@ -60,12 +60,6 @@ _BARE = re.compile(
     + "|".join(sorted(TYPES, key=len, reverse=True))
     + r")_(?P<n>\d{1,4})(?![\w\]}>])"
 )
-# Token-shaped text already present in the input (user text, a scraped page)
-# is defused so it cannot be confused with, or rehydrated as, our own tokens.
-_EXISTING = re.compile(
-    r"(?:\[{1,2}|\{{1,2}|<)\s*(" + _TYPE_ALT + r")[\s_\\-]*(\d{1,4})\s*(?:\]{1,2}|\}{1,2}|>)",
-    re.IGNORECASE,
-)
 
 
 # ── detectors ────────────────────────────────────────────────────────────────
@@ -394,7 +388,13 @@ class PiiVault:
     def redact(self, text: str) -> str:
         if not text:
             return text
-        text = _EXISTING.sub(lambda m: f"({m.group(1).upper()} {m.group(2)})", text)
+
+        # Defuse with the same patterns rehydrate() accepts (bare EMAIL_1 too).
+        def defuse(m: re.Match[str]) -> str:
+            kind = re.sub(r"[\s_\\-]", "", m.group("type")).upper()
+            return f"({kind} {m.group('n')})"
+
+        text = _BARE.sub(defuse, _TOLERANT.sub(defuse, text))
         out, last = [], 0
         for span in self._spans(text):
             out.append(text[last : span.start])
@@ -451,60 +451,6 @@ class PiiVault:
         if isinstance(obj, dict):
             return {key: self.rehydrate_obj(value) for key, value in obj.items()}
         return obj
-
-    def stream(self) -> StreamingRehydrator:
-        return StreamingRehydrator(self)
-
-
-_WORD_TAIL = re.compile(r"\w+$")
-_MAX_TOKEN_CHARS = 64
-
-
-class StreamingRehydrator:
-    """Rehydrates a reply that arrives in chunks.
-
-    Holds back only the tail that could still be part of a placeholder (an
-    unclosed bracket, a trailing word, a token that may take one more digit
-    or bracket), so a token split across chunks is still restored.
-    """
-
-    def __init__(self, vault: PiiVault):
-        self._vault = vault
-        self._buffer = ""
-        self._json: bool | None = None
-
-    def _safe_cut(self) -> int:
-        buf = self._buffer
-        cut = len(buf)
-        tail = _WORD_TAIL.search(buf)
-        if tail:
-            cut = tail.start()
-        window = max(0, len(buf) - _MAX_TOKEN_CHARS)
-        opener = max(buf.rfind("[", window), buf.rfind("{", window), buf.rfind("<", window))
-        if opener != -1 and not re.search(r"[\]}>]", buf[opener:]):
-            cut = min(cut, opener)
-            while cut > 0 and buf[cut - 1] in "[{<\\":
-                cut -= 1
-        for pattern in (_TOLERANT, _BARE):
-            for m in pattern.finditer(buf):
-                if m.start() < cut < m.end() or m.end() == len(buf):
-                    cut = min(cut, m.start())
-        return cut
-
-    def _emit(self, text: str) -> str:
-        if self._json is None and text.strip():
-            self._json = _looks_json(text)
-        return self._vault.rehydrate(text, json_mode=bool(self._json))
-
-    def feed(self, chunk: str) -> str:
-        self._buffer += chunk or ""
-        cut = self._safe_cut()
-        ready, self._buffer = self._buffer[:cut], self._buffer[cut:]
-        return self._emit(ready) if ready else ""
-
-    def flush(self) -> str:
-        ready, self._buffer = self._buffer, ""
-        return self._emit(ready) if ready else ""
 
 
 # ── logs ─────────────────────────────────────────────────────────────────────
@@ -595,14 +541,6 @@ class PiiLogFilter(logging.Filter):
         return True
 
 
-def install_pii_log_filter(logger: logging.Logger | None = None) -> None:
-    """Add PiiLogFilter to every handler of ``logger`` (root by default)."""
-    target = logger or logging.getLogger()
-    for handler in target.handlers:
-        if not any(isinstance(f, PiiLogFilter) for f in handler.filters):
-            handler.addFilter(PiiLogFilter())
-
-
 def install_pii_log_scrubbing() -> None:
     """Scrub every log record this process creates, whichever handler (or
     none, or one configured later by uvicorn) ends up emitting it. Idempotent;
@@ -618,4 +556,3 @@ def install_pii_log_scrubbing() -> None:
 
     factory.pii_scrubbing = True  # type: ignore[attr-defined]
     logging.setLogRecordFactory(factory)
-    install_pii_log_filter()

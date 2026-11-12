@@ -5,7 +5,7 @@ import base64
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -127,6 +127,8 @@ async def test_auto_approval_is_recorded_when_the_server_allows_it(gate):
         ({"payload": {"auto_blockers": ["Why Acme?"]}}, "Why Acme?"),
         ({"review_url": "https://www.linkedin.com/jobs/view/1"}, "LinkedIn and Naukri"),
         ({"payload": {"platform": "naukri"}}, "LinkedIn and Naukri"),
+        ({"payload": {"answer_sources": {}}}, "did not plan this form"),
+        ({"payload": {"answer_sources": {"Email": "page"}}}, "not saved by you: Email"),
     ],
 )
 async def test_auto_approval_refused_falls_back_to_the_member(gate, change, detail):
@@ -408,19 +410,31 @@ async def test_pairing_beyond_the_cap_revokes_the_least_recently_used():
 
 @pytest.mark.asyncio
 async def test_rotation_replaces_the_token_and_expired_tokens_are_rejected():
-    device = ExtensionDevice(id=uuid.uuid4(), token_hash="x", expires_at=None)
+    device = ExtensionDevice(id=uuid.uuid4(), user_id=uuid.uuid4(), token_hash="x", expires_at=None)
     db = MagicMock()
     db.commit = AsyncMock()
-    token = await extension_service.rotate_token(db, device)
-    assert token.startswith("ccx_") and device.token_hash == extension_service.hash_token(token)
+    token, expires_at = await extension_service.rotate_token(db, device)
+    # The old token keeps working until the new one is first used.
+    assert token.startswith("ccx_") and device.token_hash == "x"
+    assert device.pending_token_hash == extension_service.hash_token(token)
+    assert expires_at > datetime.now(UTC) + timedelta(days=89)
+
+    found, owner = MagicMock(), MagicMock()
+    found.scalar_one_or_none.return_value = device
+    owner.scalar_one_or_none.return_value = MagicMock()
+    db.execute = AsyncMock(side_effect=[found, owner])
+    with patch("app.api.v1.deps.require_eligible_owner"):
+        assert await extension_service.authenticate(db, token) is device
+    assert device.token_hash == extension_service.hash_token(token)
+    assert device.pending_token_hash is None
     assert device.expires_at > datetime.now(UTC) + timedelta(days=89)
 
     lookup = MagicMock()
     lookup.scalar_one_or_none.return_value = None
     db.execute = AsyncMock(return_value=lookup)
-    assert await extension_service.authenticate(db, token) is None
+    assert await extension_service.authenticate(db, "ccx_old") is None
     sql = str(db.execute.await_args.args[0])
-    assert "expires_at" in sql and "revoked_at IS NULL" in sql
+    assert "expires_at" in sql and "revoked_at IS NULL" in sql and "pending_token_hash" in sql
 
 
 # ── Saved answers API and retired LinkedIn passwords ────────────────────
