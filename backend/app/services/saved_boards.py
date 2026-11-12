@@ -34,7 +34,7 @@ BOARD_CONCURRENCY = 4
 SUPPORTED_PORTALS = (
     "Workday, Greenhouse, Lever, Ashby, SmartRecruiters, Workable, Recruitee, Personio, "
     "BambooHR, Teamtailor, Breezy, Pinpoint, HiBob, Trakstar, JobScore, Gem, Rippling, "
-    "Oracle Recruiting and iCIMS"
+    "Oracle Recruiting, iCIMS, Jobvite, JazzHR, Dover, Paylocity, Taleo and SAP SuccessFactors"
 )
 
 
