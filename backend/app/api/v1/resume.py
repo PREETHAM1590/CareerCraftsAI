@@ -256,7 +256,8 @@ def _tailored_response(
         changes_made=data.get("changes_made") or [],
         # ats_data keeps the model's original warnings; hide the ones the
         # current text has resolved (they come back if the gap reappears).
-        warnings=filter_resolved_warnings(list(data.get("warnings") or []), review),
+        warnings=filter_resolved_warnings(list(data.get("warnings") or []), review)
+        + list((data.get("parse_back") or {}).get("warnings") or []),
         review=review,
         contact_suggestions=suggestions,
         display_name=display_name,
@@ -496,6 +497,16 @@ async def fix_tailored_resume(
     review = review_resume(markdown)
     # data["warnings"] stays the model's original list; it is filtered when read.
     data["template"] = template
+    try:
+        from app.services.resume_parseback import check_pdf
+
+        report = await asyncio.to_thread(
+            check_pdf, pdf_bytes, markdown, current_user.full_name or "", data.get("page_target")
+        )
+        data["parse_back"] = report.to_dict()
+    except Exception:  # noqa: BLE001 — a read-back failure must not block saving
+        logger.warning("Resume parse-back failed for document %s", doc.id)
+        data["parse_back"] = None
     pinned = await _pinned_by_pending_approval(db, doc)
 
     new_path = upload_file(str(current_user.id), "resume.pdf", pdf_bytes, "application/pdf")
@@ -647,6 +658,7 @@ async def download_pdf(
                 current_user.full_name or "",
                 (doc.ats_data or {}).get("template", "modern"),
                 pages or (doc.ats_data or {}).get("page_target", 2),
+                strict=format == "pdf",
             )
             exported = (
                 layout.pdf
@@ -661,6 +673,18 @@ async def download_pdf(
             raise HTTPException(status_code=422, detail=str(exc)) from None
         except ValueError:
             raise HTTPException(status_code=422, detail=_RENDER_ERROR) from None
+        try:
+            from app.services.resume_parseback import check_docx, check_pdf
+
+            readback = await asyncio.to_thread(
+                check_pdf if format == "pdf" else check_docx,
+                exported,
+                layout.markdown,
+                current_user.full_name or "",
+            )
+            ats_warnings = str(len(readback.warnings))
+        except Exception:  # noqa: BLE001 — advisory header only
+            ats_warnings = "unknown"
         media = (
             "application/pdf"
             if format == "pdf"
@@ -672,6 +696,7 @@ async def download_pdf(
             headers={
                 "Content-Disposition": f"attachment; filename=resume_{document_id[:8]}.{format}",
                 "X-Resume-Page-Count": str(layout.page_count),
+                "X-Resume-Parse-Warnings": ats_warnings,
             },
         )
     pdf_bytes = None

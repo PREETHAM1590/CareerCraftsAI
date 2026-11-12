@@ -26,9 +26,13 @@ from app.agents.prompts import fenced, one_line
 from app.agents.state import AgentState
 from app.core.model_router import build_agent_llm
 from app.core.sync_db import _get_sync_factory, fetch_model_settings
-from app.services.rag_service import retrieve
+from app.services.rag_service import retrieval_unavailable, retrieve
 
 logger = logging.getLogger(__name__)
+
+_INTEL_WARNING = (
+    "Company research was unavailable, so these questions are not tailored to company intel."
+)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Constants
@@ -223,9 +227,12 @@ def start_session_node(state: AgentState) -> AgentState:
 
         # Retrieve company intel if available
         company_intel_text = ""
+        intel_warning = None
         if company:
             try:
                 intel_chunks = retrieve(user_id, "company", company, model_settings, k=3)
+                if retrieval_unavailable(intel_chunks):
+                    intel_warning = _INTEL_WARNING
                 if intel_chunks:
                     company_intel_text = "\n".join(c.page_content for c in intel_chunks)
             except Exception as exc:
@@ -234,6 +241,7 @@ def start_session_node(state: AgentState) -> AgentState:
                     company,
                     exc,
                 )
+                intel_warning = _INTEL_WARNING
 
         # Build prompt
         company_intel_section = ""
@@ -318,6 +326,7 @@ def start_session_node(state: AgentState) -> AgentState:
                 "company": company,
                 "questions": questions,
                 "question_count": len(questions),
+                **({"context_warning": intel_warning} if intel_warning else {}),
             },
             "messages": state["messages"]
             + [

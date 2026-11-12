@@ -53,6 +53,13 @@ async function render() {
     $("task").textContent = "No applications waiting.";
   }
 
+  const pendingPair = status.pendingPair;
+  $("pending-pair").hidden = !pendingPair;
+  if (pendingPair) {
+    const target = [pendingPair.email, pendingPair.deviceName && `(${pendingPair.deviceName})`].filter(Boolean).join(" ") || "another account";
+    $("pending-pair-text").textContent = `A page on ${pendingPair.appOrigin} wants to connect this extension to ${target} instead of ${who}. Only switch if you started this.`;
+  }
+
   const host = status.hostPermissionNeeded;
   $("permission").hidden = !host;
   if (host) $("permission-text").textContent = `Allow the extension on ${host} to continue this application.`;
@@ -104,12 +111,24 @@ $("disconnect").addEventListener("click", async () => {
   render();
 });
 
+$("pair-confirm").addEventListener("click", async () => {
+  const result = await send({ type: "CC_CONFIRM_PAIR" });
+  if (!result.ok) showError(result.error || "Could not switch accounts.");
+  render();
+});
+
+$("pair-reject").addEventListener("click", async () => {
+  await send({ type: "CC_REJECT_PAIR" });
+  render();
+});
+
 $("grant").addEventListener("click", async () => {
   const status = await send({ type: "CC_GET_STATUS" });
   const host = status.hostPermissionNeeded;
   if (!host) return;
   const granted = await chrome.permissions.request({ origins: [`https://${host}/*`] });
   if (granted) {
+    await send({ type: "CC_APPROVE_HOST", host });
     await chrome.storage.session.remove("hostPermissionNeeded");
     await send({ type: "CC_CHECK_NOW" });
     render();

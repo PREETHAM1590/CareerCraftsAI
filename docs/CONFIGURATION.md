@@ -53,7 +53,7 @@ All optional — features gracefully degrade if not set.
 | `PROSPEO_API_KEY` / `FINDYMAIL_API_KEY` | [prospeo.io](https://prospeo.io) / [findymail.com](https://findymail.com) | Recruiter outreach | More finders, tried after Hunter and Apollo. Inert without a key. Response shapes follow their documentation and were not run live. |
 | `ZEROBOUNCE_API_KEY` / `NEVERBOUNCE_API_KEY` / `MILLIONVERIFIER_API_KEY` | the provider | Recruiter outreach | Verifies an address before it is emailed. Without one, nothing counts as verified and every email waits for the member's approval. |
 | `APPLY_DAILY_CAP`, `APPLY_MIN_GAP_SECONDS`, `AUTO_APPLY_MIN_SCORE` | none | Applications | Applications per rolling 24 hours (25), seconds between two (120), and the match score an automatic application needs (70). |
-| `PROXYCURL_API_KEY` | [proxycurl.com](https://proxycurl.com) | LinkedInAgent | Fetches LinkedIn profile data without scraping. |
+| `PROXYCURL_API_KEY` | [proxycurl.com](https://proxycurl.com) | LinkedInOutreachAgent | Optional fallback contact lookup, used only when a request supplies no contacts. Without it, members supply contacts. |
 | `EXA_API_KEY` | [exa.ai](https://exa.ai) | CompanyResearchAgent, SalaryAgent, InterviewPrepAgent | Neural web search for research tasks. |
 | `RESEND_API_KEY` | [resend.com](https://resend.com) | ResendService | Sends transactional emails (account notifications, not job emails). |
 | `RESEND_FROM_EMAIL` | — | ResendService | Sender address, e.g. `noreply@careercraftsai.me`. Its domain must be verified in Resend or every send is rejected. Default `noreply@jobagent.ai`. |
@@ -61,58 +61,15 @@ All optional — features gracefully degrade if not set.
 
 ---
 
-## Browser Use (Playwright/Chromium)
+## Browser Use (retired)
 
-Browser Use drives a real Chromium browser for job board automation (Naukri, LinkedIn, etc.).
+Server-side browser automation is retired: no code starts Chromium, and the backend does not drive job sites. The former browser session, debug-screenshot, delay, and anti-detection settings no longer exist. `BROWSER_USE_OLLAMA_MODEL` and `BROWSER_USE_OLLAMA_URL` are still defined in `backend/app/core/config.py`, but nothing reads them.
 
-### Controller LLM
-
-Browser Use needs its own LLM to reason about the page.  Use a local Ollama model for cost-efficient navigation; the user's BYOK model is used as fallback.
+### Ollama allow-list
 
 | Variable | Default | Description |
 |---|---|---|
-| `BROWSER_USE_OLLAMA_MODEL` | `llama3.2` | Ollama model for browser navigation steps (cost-efficient). |
-| `BROWSER_USE_OLLAMA_URL` | *(empty)* | Ollama base URL, e.g. `http://localhost:11434`. Leave empty to use user's BYOK model instead. |
 | `OLLAMA_ALLOWED_HOSTS` | `localhost:11434,127.0.0.1:11434,[::1]:11434` | Comma-separated `host:port` allow-list for the **user-facing** `ollama` BYOK provider's base URL (Settings → AI Models). The server fetches this URL directly, so anything outside this list — including loopback/link-local/metadata addresses reached via a different host string — is rejected at input (CWE-918 hardening). Add your own Ollama host here if it doesn't run on localhost. |
-
-### Session limits
-
-| Variable | Default | Description |
-|---|---|---|
-| `BROWSER_USE_MAX_CONCURRENT_SESSIONS` | `4` | Max simultaneous Chromium sessions. Prevents OOM. Rule of thumb: `floor(VPS_RAM_GB * 1.5)`. 4 GB VPS → 6, 2 GB VPS → 3. |
-| `BROWSER_USE_SESSION_MEM_LIMIT_MB` | `500` | Informational — actual limit set via Docker `mem_limit` in `deploy/oracle-vm/compose.yml`. |
-
-### Debug screenshots
-
-When enabled, a PNG is saved to `BROWSER_DEBUG_DIR` on every browser task failure.  Mount the `browser_debug` Docker volume to persist screenshots across restarts.
-
-| Variable | Default | Description |
-|---|---|---|
-| `BROWSER_DEBUG_SCREENSHOTS` | `false` | Set `true` to save failure screenshots. Disable in production to avoid disk fill. |
-| `BROWSER_DEBUG_DIR` | `/tmp/browser_debug` | Container path for failure screenshots. Maps to the `browser_debug` Docker volume. |
-
-Inspect screenshots: `docker compose exec backend ls /tmp/browser_debug/`
-
-### Human-like delay ranges
-
-All values in milliseconds.  Lowering increases detection risk; raising slows runs.
-
-| Variable | Default | Description |
-|---|---|---|
-| `BROWSER_DELAY_NAVIGATE_MIN_MS` | `1500` | Min pause after page navigation. |
-| `BROWSER_DELAY_NAVIGATE_MAX_MS` | `3500` | Max pause after page navigation. |
-| `BROWSER_DELAY_FILL_MIN_MS` | `300` | Min pause between form field fills. |
-| `BROWSER_DELAY_FILL_MAX_MS` | `800` | Max pause between form field fills. |
-| `BROWSER_DELAY_CLICK_MIN_MS` | `200` | Min pause before/after a button click. |
-| `BROWSER_DELAY_CLICK_MAX_MS` | `600` | Max pause before/after a button click. |
-| `BROWSER_DELAY_EXTRACT_MIN_MS` | `500` | Min wait after page load before extraction. |
-| `BROWSER_DELAY_EXTRACT_MAX_MS` | `1500` | Max wait after page load before extraction. |
-
-### Anti-detection trigger condition
-
-Monitor the `phase: "captcha_detected"` SSE events emitted by `browser_control_service.py`.  If the CAPTCHA block rate exceeds **20% over any rolling 10-run window** for a given platform, route that platform's traffic through a paid proxy (Scrapfly / Browserbase).
-
-Do **not** add proxies preemptively — they add cost and latency and are unnecessary for low-volume use.
 
 ### Docker Compose resource configuration
 
