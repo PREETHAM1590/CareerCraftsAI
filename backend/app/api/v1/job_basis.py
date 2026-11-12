@@ -183,6 +183,17 @@ async def catalog(
         "persona_id": str(persona.id) if persona else None,
         "max_results": 300,
     }
+    if india_focus is None:
+        from sqlalchemy import select
+
+        from app.models.db import UserPreferences
+
+        saved = (
+            await db.execute(
+                select(UserPreferences.india_focus).where(UserPreferences.user_id == user.id)
+            )
+        ).scalar_one_or_none()
+        india_focus = False if saved is False else None
     if india_focus is not None:
         context["india_focus"] = india_focus
     fingerprint = hashlib.sha256(

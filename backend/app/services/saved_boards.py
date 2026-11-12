@@ -6,6 +6,7 @@ fetched, and every request goes through the hardened public HTTP client."""
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
 from dataclasses import dataclass
@@ -22,6 +23,7 @@ from app.services.job_connectors import (
     resolve_careers_url,
     role_key,
     search_board,
+    supported_portal_names,
     url_key,
 )
 
@@ -31,11 +33,10 @@ MAX_SAVED_BOARDS = 20
 PORTAL_TIMEOUT_S = 40
 BOARD_TIMEOUT_S = 25
 BOARD_CONCURRENCY = 4
-SUPPORTED_PORTALS = (
-    "Workday, Greenhouse, Lever, Ashby, SmartRecruiters, Workable, Recruitee, Personio, "
-    "BambooHR, Teamtailor, Breezy, Pinpoint, HiBob, Trakstar, JobScore, Gem, Rippling, "
-    "Oracle Recruiting, iCIMS, Jobvite, JazzHR, Dover, Paylocity, Taleo and SAP SuccessFactors"
-)
+# Saved boards are re-read on every search; a short shared cache keeps a member
+# with 20 boards and 3 roles from making ~60 live requests per search.
+BOARD_CACHE_TTL = 300
+SUPPORTED_PORTALS = supported_portal_names()
 
 
 class PortalError(Exception):
@@ -215,6 +216,25 @@ async def remove_board(db, user_id: uuid.UUID, board_id: uuid.UUID) -> bool:
     return removed
 
 
+async def _cached_board_fetch(source: Source, role: str) -> list[dict]:
+    """One board read, shared across members for BOARD_CACHE_TTL (public postings,
+    so no user id in the key). Locations and the member's query are applied
+    after the cache: the upstream read does not depend on them."""
+    from app.services import search_cache
+
+    async def compute():
+        jobs = await search_board(source, role, 3)
+        return jobs, (json.dumps(jobs, default=str) if jobs else None)
+
+    key = f"{search_cache.PREFIX}:board:" + search_cache.query_hash(
+        {"source": source.id, "role": " ".join(role.lower().split()), "pages": 3}
+    )
+    jobs, _ = await search_cache.get_or_compute_decoded(
+        "board", key, BOARD_CACHE_TTL, compute, search_cache.decode_json_list, wait_s=BOARD_TIMEOUT_S
+    )
+    return jobs
+
+
 async def search_saved_boards(user_id: str, query: dict) -> tuple[list[dict], list[str]]:
     """Jobs from the member's saved boards that fit a normal search; failures become warnings."""
     from app.core.database import AsyncSessionLocal
@@ -240,7 +260,7 @@ async def search_saved_boards(user_id: str, query: dict) -> tuple[list[dict], li
                 # Server-side search families need each role; the rest return everything.
                 roles = titles if source.family in SERVER_SIDE_SEARCH else [""]
                 batches = await asyncio.wait_for(
-                    asyncio.gather(*(search_board(source, t, 3) for t in roles)),
+                    asyncio.gather(*(_cached_board_fetch(source, t) for t in roles)),
                     BOARD_TIMEOUT_S,
                 )
             except Exception as exc:
