@@ -69,6 +69,7 @@ async def _auto_apply_wrapper(state: AgentState) -> AgentState:
         model_settings=state.get("model_settings"),
         live_browser=ctx.get("live_browser", False),
         run_id=state["run_id"],
+        india_focus=ctx.get("india_focus"),
     )
     pending = result if result.get("requires_approval") else None
     return {

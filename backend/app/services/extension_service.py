@@ -509,6 +509,32 @@ async def _attach_custom_answer_keys(
             field.normalized_key = key
 
 
+# Questions whose stored answer (identity, contact, location, EEO/disclosure,
+# work authorisation, pay) is matched to a dropdown option locally, never by
+# the external decision service.
+_LOCAL_MATCH_PREFIXES = (
+    "personal.",
+    "identity.",
+    "address.",
+    "location.",
+    "links.",
+    "disclosure.",
+    "authorization.",
+    "compensation.",
+)
+
+
+def _local_match_only(question_key: str) -> bool:
+    from app.applications.answer_resolver import SENSITIVE_KEY_PREFIXES
+    from app.services.pii_profile import key_type
+
+    key = question_key or ""
+    return (
+        key.startswith(_LOCAL_MATCH_PREFIXES + SENSITIVE_KEY_PREFIXES)
+        or key_type(key) is not None
+    )
+
+
 async def plan_fields(db: AsyncSession, task: ExtensionTask, raw_fields: list[dict]) -> dict:
     """Resolve an answer for each form field the extension found.
 
@@ -595,7 +621,13 @@ async def plan_fields(db: AsyncSession, task: ExtensionTask, raw_fields: list[di
             and field.options
             and entry["value"] not in (None, "")
         ):
-            option, confidence = await match_option(entry["value"], field.options, field.label)
+            option, confidence = await match_option(
+                entry["value"],
+                field.options,
+                field.label,
+                local_only=_local_match_only(field.normalized_key or "")
+                or _local_match_only(key),
+            )
             if option is None:
                 entry.update(
                     value=None,

@@ -182,27 +182,33 @@ def _heuristic(state: Any, question: dict) -> dict:
     }
 
 
-async def match_option(value: Any, options: list[str], label: str = "") -> tuple[str | None, float]:
+async def match_option(
+    value: Any, options: list[str], label: str = "", *, local_only: bool = False
+) -> tuple[str | None, float]:
     """Pick the option of a select/radio group that means `value`.
-    Returns (option, confidence); option is None below the threshold."""
+    Returns (option, confidence); option is None below the threshold.
+
+    ``local_only`` keeps the stored answer on this server (heuristics only):
+    for identity and sensitive questions, whose answer must not reach an
+    external decision service."""
     if not options or value in (None, ""):
         return None, 0.0
     for option in options:  # exact match needs no model
         if str(option).strip().lower() == str(value).strip().lower():
             return option, 1.0
     criteria = {f"o{i}": option for i, option in enumerate(options[:MAX_CHOICE_OPTIONS])}
-    result = await decide(
-        {"question": label, "value": str(value)},
-        {
-            "option": {
-                "type": "choice",
-                "instructions": (
-                    "Which option of the form question `question` has the same meaning as `value`?"
-                ),
-                "criteria": criteria,
-            }
-        },
-    )
+    state = {"question": label, "value": str(value)}
+    question = {
+        "type": "choice",
+        "instructions": (
+            "Which option of the form question `question` has the same meaning as `value`?"
+        ),
+        "criteria": criteria,
+    }
+    if local_only:
+        result = {"answers": {"option": _heuristic(state, question)}}
+    else:
+        result = await decide(state, {"option": question})
     answer = result["answers"].get("option") or {}
     key, confidence = answer.get("choice"), float(answer.get("confidence") or 0.0)
     if key not in criteria or confidence < settings.DECISION_ENGINE_MIN_CONFIDENCE:
