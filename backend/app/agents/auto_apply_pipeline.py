@@ -97,6 +97,29 @@ Keep it under 150 words. Be direct, not generic.
 Format: Subject: <subject>\n\n<body>"""
 
 
+async def _india_focus_preference(user_id: str) -> bool | None:
+    """False when the member turned India focus off; otherwise None, which means
+    India-first unless the searched place is outside India (as in search)."""
+    from sqlalchemy import select
+
+    from app.core.database import AsyncSessionLocal
+    from app.models.db import UserPreferences
+
+    try:
+        async with AsyncSessionLocal() as db:
+            value = (
+                await db.execute(
+                    select(UserPreferences.india_focus).where(
+                        UserPreferences.user_id == uuid.UUID(user_id)
+                    )
+                )
+            ).scalar_one_or_none()
+    except Exception as exc:
+        logger.warning("India focus preference unavailable: %s", type(exc).__name__)
+        return None
+    return False if value is False else None
+
+
 async def run_auto_apply_pipeline(
     user_id: str,
     search_query: str,
@@ -106,6 +129,7 @@ async def run_auto_apply_pipeline(
     live_browser: bool = False,
     run_id: str | None = None,
     model_settings: Any | None = None,
+    india_focus: bool | None = None,
 ) -> dict[str, Any]:
     """Run the fully automated job application pipeline.
 
@@ -160,6 +184,18 @@ async def run_auto_apply_pipeline(
 
     if not jobs:
         results["errors"].append("No jobs found across any platform")
+        return results
+
+    # Same eligibility rule as search: with India focus on, nothing open only
+    # outside India is scored or applied to.
+    from app.services.india_focus import eligible_listings
+
+    if india_focus is None:
+        india_focus = await _india_focus_preference(user_id)
+    jobs, hidden = eligible_listings(jobs, location, india_focus)
+    results["india_hidden"] = hidden
+    if not jobs:
+        results["errors"].append("Every job found is open only outside India")
         return results
 
     # ── Step 2: Score jobs against user profile ─────────────────────

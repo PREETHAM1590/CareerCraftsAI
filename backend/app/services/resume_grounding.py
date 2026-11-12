@@ -240,6 +240,112 @@ def unsupported_claims(markdown: str, source: str, jd_text: str = "") -> list[st
     return found
 
 
+_SENTENCE = re.compile(r"(?<=[.!?])\s+")
+
+
+def remove_unsupported(markdown: str, source: str, jd_text: str = "") -> tuple[str, list[str]]:
+    """Take out of `markdown` what `unsupported_claims` would flag, so it is never
+    rendered: an experience/education entry whose employer, title, degree or dates
+    are not the candidate's (heading and bullets), single Skills items,
+    Certification lines, and any sentence with an unsupported number, name or
+    job-description skill. Returns (markdown, removed claims for the member).
+
+    The name heading and contact block above the first section are left to the
+    contact checks."""
+    source = unicodedata.normalize("NFKC", source)
+    source_norm = _norm(source)
+    removed: list[str] = []
+
+    def claims(section: str, text: str) -> list[str]:
+        return unsupported_claims(f"## {section}\n{text}", source, jd_text)
+
+    def note(items: list[str]) -> None:
+        removed.extend(i for i in items if i.lower() not in {r.lower() for r in removed})
+
+    lines = markdown.splitlines()
+    out: list[str] = []
+    section = ""
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        heading = re.match(r"^##\s+(.*)$", stripped)
+        if heading:
+            section = heading.group(1)
+            out.append(line)
+            i += 1
+            continue
+        if not section or not stripped:
+            out.append(line)
+            i += 1
+            continue
+        title = _norm(section)
+        if stripped.startswith("###"):
+            end = i + 1
+            while end < len(lines) and not lines[end].lstrip().startswith("#"):
+                end += 1
+            block = "\n".join(lines[i:end])
+            bad = _entry_claims(f"## {section}\n{block}", source_norm) + claims(section, line)
+            if bad:
+                note(bad)
+                i = end
+                continue
+            out.append(line)
+            i += 1
+            continue
+        if title.startswith(("skills", "technical skills", "core competencies", "technologies")):
+            prefix = _BULLET_PREFIX.match(line)
+            body = line[prefix.end() :] if prefix else line
+            label, sep, items = body.rpartition(":") if ":" in body else ("", "", body)
+            kept = []
+            for item in re.split(r"[,;|•]", items):
+                plain = _strip_markup(item)
+                if not plain:
+                    continue
+                bad = claims(section, plain)
+                if bad or not _phrase_in(plain, source_norm):
+                    note(bad or [plain])
+                else:
+                    kept.append(item.strip())
+            lead = (prefix.group(0) if prefix else "") + (f"{label}: " if sep else "")
+            if kept:
+                out.append(lead + ", ".join(kept))
+            i += 1
+            continue
+        bad = claims(section, line)
+        if not bad:
+            out.append(line)
+        elif title.startswith(("certification", "licenses", "licences")):
+            note(bad)
+        else:
+            prefix = _BULLET_PREFIX.match(line)
+            body = line[prefix.end() :] if prefix else line
+            kept = []
+            for sentence in _SENTENCE.split(body):
+                found = claims(section, sentence)
+                if found:
+                    note(found)
+                else:
+                    kept.append(sentence)
+            if kept:
+                out.append((prefix.group(0) if prefix else "") + " ".join(kept))
+        i += 1
+    if not removed:
+        return markdown, []
+    if removed:  # a section emptied by the removals goes too
+        kept_lines: list[str] = []
+        for at, line in enumerate(out):
+            if re.match(r"^##\s", line.strip()):
+                rest = out[at + 1 :]
+                body = next((n for n, x in enumerate(rest) if re.match(r"^##\s", x.strip())), None)
+                if not any(x.strip() for x in rest[:body]):
+                    continue
+            kept_lines.append(line)
+        out = kept_lines
+    text = "\n".join(out).rstrip("\n")
+    return (text + "\n" if markdown.endswith("\n") else text), removed
+
+
 def _year_month(value: str) -> tuple[int, int] | None:
     """(year, month) for 'Jan 2021', 'January 2021', '01/2021', '2021'; Present is far future."""
     value = value.strip()

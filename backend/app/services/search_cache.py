@@ -176,3 +176,41 @@ async def get_or_compute(
             # round trip and the worst case is one extra concurrent compute.
             if await _op(r.get(lock)) == token:
                 await _op(r.delete(lock))
+
+
+async def get_or_compute_decoded(
+    kind: str,
+    key: str,
+    ttl: int,
+    compute: Callable[[], Awaitable[tuple[Any, str | None]]],
+    decode: Callable[[str], Any],
+    *,
+    wait_s: float,
+) -> tuple[Any, bool]:
+    """``get_or_compute`` with the hit decoded: ``(value, from_cache)``.
+
+    A cached entry that ``decode`` rejects (truncated write, old format) is
+    evicted and treated as a miss, so one bad entry never fails searches for
+    the rest of its TTL.
+    """
+    for _ in range(2):
+        value, cached = await get_or_compute(kind, key, ttl, compute, wait_s=wait_s)
+        if cached is None:
+            return value, False
+        try:
+            return decode(cached), True
+        except Exception as exc:
+            logger.warning("search cache: evicting unreadable %s entry (%s)", kind, type(exc).__name__)
+            await _count(kind, "corrupt")
+            r = _redis()
+            if r is not None:
+                await _op(r.delete(key))
+    # Rewritten unreadable again between our delete and get: stop using the cache.
+    return (await compute())[0], False
+
+
+def decode_json_list(payload: str) -> list:
+    value = json.loads(payload)
+    if not isinstance(value, list):
+        raise ValueError("cached entry is not a list")
+    return value
