@@ -78,7 +78,14 @@ async def _task_in_review(factory, user, device):
             job_application_id=application.id,
             workflow_id=workflow_id,
             status="review",
-            payload={"attempt_id": str(attempt.id), "job_url": application.job_url},
+            payload={
+                "attempt_id": str(attempt.id),
+                "job_url": application.job_url,
+                "review_fields": [
+                    {"label": "Full name", "type": "text", "value": "Test Candidate"}
+                ],
+                "answer_sources": {"Full name": "profile"},
+            },
             review_hash=uuid.uuid4().hex + uuid.uuid4().hex,
             review_url=application.job_url,
             review_expires_at=datetime.now(UTC) + timedelta(minutes=5),
