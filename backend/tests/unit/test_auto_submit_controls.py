@@ -378,6 +378,20 @@ def test_only_answers_saved_by_the_member_are_recorded_as_planned_values():
     assert task.payload["auto_blockers"] == ["Why Acme?"]
 
 
+def test_a_planned_profile_answer_that_the_page_kept_is_auto_approvable():
+    # The real path: plan records the value, review reports the same field.
+    task = SimpleNamespace(
+        payload={
+            "review_fields": [{"label": "Full name", "type": "text", "value": "Test Candidate"}]
+        },
+        review_url="https://jobs.lever.co/acme/1/apply",
+    )
+    plan = [{"label": "Full name", "field_id": "n", "value": "Test Candidate", "source": "profile"}]
+    extension_service._remember_answer_sources(task, plan)
+    status = {"enabled": True, "daily_cap": 5, "used_last_24h": 0}
+    assert extension_service.auto_submit_refusal(status, task) is None
+
+
 def test_numeric_profile_answers_are_stored_as_json_and_match_the_review():
     import json
     from decimal import Decimal
