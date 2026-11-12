@@ -22,6 +22,7 @@ import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildExtension } from "../scripts/build.mjs";
 
 const require = createRequire(import.meta.url);
 function loadPlaywright() {
@@ -35,7 +36,9 @@ function loadPlaywright() {
 const { chromium } = loadPlaywright();
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const extensionDir = path.resolve(here, "..");
+// The harness pairs with an app on 127.0.0.1, which only the dev build allows.
+const extensionDir = buildExtension({ out: path.join(os.tmpdir(), `cc-e2e-ext-${process.pid}`), dev: true });
+process.on("exit", () => fs.rmSync(extensionDir, { recursive: true, force: true }));
 const fixture = (name) => fs.readFileSync(path.join(here, "fixtures", name), "utf8");
 const HOSTS = ["boards.greenhouse.io", "jobs.lever.co", "careers.indeed.com", "acme.wd5.myworkdayjobs.com", "jobs.smartrecruiters.com", "apply.workable.com", "acme.wd3.myworkdaysite.com"];
 

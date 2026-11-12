@@ -2,10 +2,10 @@
 auto_apply_pipeline.py — Fully automated job application pipeline.
 
 Chains: Multi-platform search → Score → Find recruiter → Tailor resume →
-        Send cold email + LinkedIn connection/message
+        Queue cold email + browser application
 
 Prepares outreach end-to-end, then emits an approval checkpoint before any
-email or LinkedIn action is dispatched.
+email or application is dispatched.
 """
 
 import asyncio
@@ -21,8 +21,8 @@ from app.agents.state import AgentState
 from app.core.event_bus import emit
 from app.core.model_router import build_agent_llm
 from app.core.sync_db import fetch_model_settings, fetch_user_profile_text
-from app.services.recruiter_email import find_recruiter_contact
 from app.services.job_platforms_service import JobListing, scrape_jobs
+from app.services.recruiter_email import find_recruiter_contact
 
 logger = logging.getLogger(__name__)
 
@@ -96,13 +96,6 @@ Mention that my resume is attached.
 Keep it under 150 words. Be direct, not generic.
 Format: Subject: <subject>\n\n<body>"""
 
-LINKEDIN_NOTE_PROMPT = """Write a LinkedIn connection request note (max 280 chars).
-
-I'm reaching out about the {role} role at {company}.
-My background: {profile_snippet}
-
-Be concise, professional, mention the specific role. Max 280 characters."""
-
 
 async def run_auto_apply_pipeline(
     user_id: str,
@@ -110,7 +103,6 @@ async def run_auto_apply_pipeline(
     location: str = "Remote",
     max_applications: int = 5,
     platforms: list[str] | None = None,
-    linkedin_credentials: dict | None = None,
     live_browser: bool = False,
     run_id: str | None = None,
     model_settings: Any | None = None,
@@ -123,7 +115,7 @@ async def run_auto_apply_pipeline(
     3. For top N matches: find recruiter email via Hunter.io
     4. Tailor resume per JD
     5. Prepare cold email to recruiter
-    6. Prepare LinkedIn connection request + message for approval
+    6. Queue the browser application for approval
 
     Args:
         user_id: The authenticated user's ID
@@ -131,7 +123,6 @@ async def run_auto_apply_pipeline(
         location: Location filter
         max_applications: Max jobs to apply to in this run
         platforms: Which platforms to scrape (default: all)
-        linkedin_credentials: deprecated; portal login stays in the browser extension
 
     Returns:
         Pipeline results with stats and per-job outcomes
@@ -210,9 +201,6 @@ async def run_auto_apply_pipeline(
         if user_row:
             auto_mode = user_row.auto_mode or "drafts"
 
-    # Portal login belongs to the user's browser extension.
-    linkedin_ready = False
-
     for job, score in top_jobs:
         app_result = await _apply_to_job(
             user_id=user_id,
@@ -221,7 +209,6 @@ async def run_auto_apply_pipeline(
             llm=llm,
             model_settings=model_settings,
             user_profile=user_profile,
-            linkedin_ready=linkedin_ready,
             auto_mode=auto_mode,
             live_browser=live_browser,
             run_id=run_id,
@@ -262,12 +249,11 @@ async def _apply_to_job(
     llm: Any,
     model_settings: Any,
     user_profile: str,
-    linkedin_ready: bool = False,
     auto_mode: str = "drafts",
     live_browser: bool = False,
     run_id: str | None = None,
 ) -> dict:
-    """Apply to a single job: find recruiter → tailor resume → email + LinkedIn."""
+    """Apply to a single job: find recruiter → tailor resume → email."""
     result = {
         "company": job.company,
         "role": job.title,
@@ -416,18 +402,6 @@ async def _apply_to_job(
                     result["email_draft"] = email_content
                     result["recruiter_email"] = recruiter_email
 
-                if linkedin_ready:
-                    from app.services.proxycurl_service import ProxycurlService
-
-                    proxycurl = ProxycurlService()
-                    contacts = await proxycurl.find_contacts(job.company, "recruiter")
-                    if contacts and contacts[0].get("linkedin_url"):
-                        note = _generate_linkedin_note(llm, job.company, job.title, user_profile)
-                        result["linkedin_draft"] = {
-                            "profile_url": contacts[0]["linkedin_url"],
-                            "note": note,
-                        }
-
                 emit(run_id, "checkpoint", checkpoint_data)
                 result["approval_actions"] = checkpoint_data["actions_pending"]
 
@@ -538,20 +512,3 @@ def _generate_cold_email(
     except Exception as exc:
         logger.warning("Cold email generation failed: %s", exc)
         return None
-
-
-def _generate_linkedin_note(llm: Any, company: str, role: str, profile: str) -> str:
-    """Generate LinkedIn connection note (max 280 chars)."""
-    try:
-        resp = llm.invoke(
-            [
-                HumanMessage(
-                    content=LINKEDIN_NOTE_PROMPT.format(
-                        company=company, role=role, profile_snippet=profile[:200]
-                    )
-                )
-            ]
-        )
-        return resp.content.strip()[:280]
-    except Exception:
-        return f"Hi! I'm interested in the {role} role at {company}. Would love to connect."[:280]
