@@ -88,11 +88,13 @@ def collect_client(monkeypatch, saved=None):
     device = SimpleNamespace(id=uuid.uuid4(), user_id=uuid.uuid4(), revoked_at=None)
     app.dependency_overrides[extension.get_device] = lambda: device
     app.dependency_overrides[get_db] = lambda: AsyncMock()
-    saved_boards = MagicMock()
-    saved_boards.save_jobs = AsyncMock(
-        return_value=saved if saved is not None else ([uuid.uuid4()], 1)
+    from app.services import saved_boards as real_saved_boards
+
+    monkeypatch.setattr(
+        real_saved_boards,
+        "save_jobs",
+        AsyncMock(return_value=saved if saved is not None else ([uuid.uuid4()], 1)),
     )
-    monkeypatch.setitem(__import__("sys").modules, "app.services.saved_boards", saved_boards)
     return TestClient(app)
 
 
