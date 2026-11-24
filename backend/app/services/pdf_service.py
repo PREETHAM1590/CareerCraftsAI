@@ -33,7 +33,7 @@ from typing import Literal
 import reportlab
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
-from reportlab.lib.pagesizes import letter
+from reportlab.lib.pagesizes import A4, letter
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.pdfbase import pdfmetrics
@@ -671,6 +671,13 @@ def _fallback_story(story: list[Flowable], width: float, height: float, style) -
     return out
 
 
+def page_size() -> tuple[float, float]:
+    """(width, height) in points for RESUME_PAGE_SIZE (A4 unless set to LETTER)."""
+    from app.core.config import settings
+
+    return letter if settings.RESUME_PAGE_SIZE == "LETTER" else A4
+
+
 def generate_resume_pdf(
     resume_text: str,
     full_name: str = "",
@@ -719,7 +726,7 @@ def generate_resume_pdf(
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(
             buffer,
-            pagesize=letter,
+            pagesize=page_size(),
             leftMargin=theme.margin_x * inch,
             rightMargin=theme.margin_x * inch,
             topMargin=theme.margin_y * inch,
@@ -807,8 +814,8 @@ def generate_resume_pdf(
     except LayoutError:
         pass
     # Frame = page minus margins minus the frame's 6 pt padding on each side.
-    width = letter[0] - 2 * theme.margin_x * inch - 12
-    height = letter[1] - 2 * theme.margin_y * inch - 12
+    width = page_size()[0] - 2 * theme.margin_x * inch - 12
+    height = page_size()[1] - 2 * theme.margin_y * inch - 12
     try:
         return render(_fallback_story(story, width, height, st.body))
     except LayoutError as exc:

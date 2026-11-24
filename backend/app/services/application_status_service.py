@@ -9,6 +9,10 @@ member's applications and records it. Rules:
 - Mail is matched to an application only when exactly one of the member's
   open applications fits its company; otherwise it is recorded unmatched and
   nothing changes.
+- Mail changes a status on its own only when its sender's domain belongs to
+  the company or to a known job platform. Anyone can write "we are pleased to
+  offer you"; mail from anywhere else is recorded and the member is told to
+  check it, but nothing moves.
 """
 
 from __future__ import annotations
@@ -40,6 +44,48 @@ _COMPANY_SUFFIX = re.compile(
     r"solutions|labs|india)\b\.?",
     re.IGNORECASE,
 )
+
+
+# Registrable domains of applicant-tracking systems and job boards that send
+# status mail on a company's behalf.
+_PLATFORM_DOMAINS = frozenset(
+    {
+        "greenhouse.io", "greenhouse-mail.io", "lever.co", "myworkdayjobs.com",
+        "myworkday.com", "workday.com", "ashbyhq.com", "smartrecruiters.com",
+        "icims.com", "workable.com", "jobvite.com", "taleo.net", "breezy.hr",
+        "recruitee.com", "teamtailor.com", "bamboohr.com", "linkedin.com",
+        "indeed.com", "naukri.com", "glassdoor.com", "wellfound.com", "instahyre.com",
+    }
+)  # fmt: skip
+_SECOND_LEVEL = frozenset({"co", "com", "org", "net", "ac", "gov", "edu"})
+_MAIL_ROLE_WORDS = ("careers", "jobs", "hr", "recruiting", "recruitment", "talent", "hiring")
+_ADDRESS = re.compile(r"[\w.+'-]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
+
+
+def sender_domain(sender: str) -> str:
+    """Registrable domain of the address in a From header, or ""."""
+    found = _ADDRESS.findall(str(sender or ""))
+    if not found:
+        return ""
+    labels = found[-1].lower().strip(".").split(".")
+    keep = 3 if len(labels) >= 3 and len(labels[-1]) == 2 and labels[-2] in _SECOND_LEVEL else 2
+    return ".".join(labels[-keep:])
+
+
+def sender_is_trusted(application: JobApplication, sender: str) -> bool:
+    """The sender's domain is the company's own or a known job platform."""
+    domain = sender_domain(sender)
+    if not domain:
+        return False
+    if domain in _PLATFORM_DOMAINS:
+        return True
+    company = normalize_company(application.company or "").replace(" ", "")
+    if len(company) < 3:
+        return False
+    name = domain.split(".")[0].replace("-", "")
+    return name == company or any(
+        name in (company + word, word + company) for word in _MAIL_ROLE_WORDS
+    )
 
 
 def next_status(current: str, category: str) -> str | None:
@@ -100,6 +146,7 @@ async def apply_inbox_updates(user_id: str, updates: list[dict]) -> list[dict]:
     """
     owner = uuid.UUID(user_id)
     changes: list[dict] = []
+    unverified: list[tuple] = []
     async with AsyncSessionLocal() as db:
         applications = list(
             (
@@ -123,6 +170,9 @@ async def apply_inbox_updates(user_id: str, updates: list[dict]) -> list[dict]:
             application = match_application(applications, update)
             previous = application.status if application else None
             new_status = next_status(previous, update["category"]) if application else None
+            suggested = None
+            if new_status and not sender_is_trusted(application, update.get("sender", "")):
+                suggested, new_status = new_status, None
             inserted = await db.execute(
                 pg_insert(ApplicationStatusEvent)
                 .values(
@@ -141,6 +191,8 @@ async def apply_inbox_updates(user_id: str, updates: list[dict]) -> list[dict]:
             )
             if inserted.scalar() is None:
                 continue  # seen on an earlier scan
+            if suggested:
+                unverified.append((application.company, application.role, suggested))
             if application and new_status:
                 application.status = new_status
                 changes.append(
@@ -154,9 +206,33 @@ async def apply_inbox_updates(user_id: str, updates: list[dict]) -> list[dict]:
                     }
                 )
         await db.commit()
+    for company, role, suggested in unverified:
+        await _suggest_status_check(owner, company, role, suggested)
     if changes:
         logger.info("Inbox moved %d application(s) for user %s", len(changes), user_id)
     return changes
+
+
+async def _suggest_status_check(owner: uuid.UUID, company, role, suggested: str) -> None:
+    """Tell the member about mail that looks like an update but came from a
+    sender we cannot tie to the company. Best effort."""
+    from app.workflows.starters import start_notification
+
+    where = f"{role} at {company}" if company and role else (company or "an application")
+    try:
+        await start_notification(
+            owner,
+            type="application_status_suggestion",
+            title=f"Unverified email about {where}",
+            body=(
+                f"An email suggests this application is now '{suggested}', but it did not "
+                "come from the company or a known job platform, so nothing was changed. "
+                "Check your inbox and update the status yourself if it is genuine."
+            ),
+            link="/applications",
+        )
+    except Exception:
+        logger.warning("Could not start status-suggestion notification", exc_info=True)
 
 
 def inbox_tracking_member_ids():

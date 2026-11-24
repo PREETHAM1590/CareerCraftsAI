@@ -97,3 +97,21 @@ def test_persist_dedup():
     assert n == 1  # in-batch duplicate
     n, added = _persist(existing, [_cand("https://z.com/1", company="Zed", title="PM")])
     assert n == 1 and len(added) == 1
+
+
+def test_same_host_requisitions_survive_but_cross_site_still_merges():
+    a = _j("https://boards.greenhouse.io/acme/jobs/1", title="SWE", location="Pune")
+    b = _j("https://boards.greenhouse.io/acme/jobs/2", title="SWE", location="Pune")
+    c = _j("https://www.linkedin.com/jobs/view/9", title="SWE", location="Pune")
+    assert len(jc.merge_duplicates([a, b])) == 2
+    assert len(jc.merge_duplicates([a, c])) == 1
+
+
+def test_search_normalize_drops_non_https_urls():
+    from app.services.job_search_service import _normalize
+
+    assert _normalize({"title": "T", "url": "javascript:alert(1)"}, "x")["url"] == ""
+    assert (
+        _normalize({"title": "T", "url": "https://a.com/1?utm_x=1"}, "x")["url"]
+        == "https://a.com/1"
+    )
