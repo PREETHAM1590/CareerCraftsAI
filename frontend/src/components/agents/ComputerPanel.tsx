@@ -8,6 +8,7 @@ import { wakeAgent } from "@/lib/extension-bridge";
 import { apiClient, getApiErrorMessage } from "@/lib/api";
 import { CopilotRunCard } from "./CopilotRunCard";
 import { ApplyInbox } from "./ApplyInbox";
+import { TelegramConnect } from "./TelegramConnect";
 import { LiveBrowserSurface, type BrowserSurfaceHandle } from "./LiveBrowserSurface";
 import { Bezel, IslandButton, Input, Select, Textarea, Field } from "@/components/vanguard";
 import { Desktop, Globe, LockKey, CursorClick, Moon, ArrowRight, CaretDown, ArrowsOut, ArrowsIn } from "@phosphor-icons/react";
@@ -260,6 +261,7 @@ export function ComputerPanel() {
       </div>
     </details>
     <ApplyInbox />
+    <TelegramConnect />
     {taskForm}
     <p className="flex items-center gap-2 px-1 text-[11px] leading-5 text-muted-foreground"><LockKey size={14} weight="light" className="shrink-0" />You review browser changes before the assistant acts.</p>
     {runId && <CopilotRunCard runId={runId} />}

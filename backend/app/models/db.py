@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -253,6 +254,17 @@ class ApplyInboxMessage(Base):
     __table_args__ = (
         UniqueConstraint("provider_email_id", "user_id", name="apply_inbox_messages_provider_user"),
     )
+
+
+class TelegramLink(Base):
+    """The member's private Telegram chat for Nova's code requests."""
+
+    __tablename__ = "telegram_links"
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False, unique=True)
+    linked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class CoverLetterVersion(Base):

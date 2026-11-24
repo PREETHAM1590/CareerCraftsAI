@@ -219,6 +219,15 @@ async def plan(run: AgentRun, note="") -> dict:
             await nova_signin.sign_in(run.user_id, action, page_url)
             await _record_step(run, "sign_in", f"Signed in to {origin} with your saved login")
             return await plan(run)
+    if action.operation == "enter_code":
+        from urllib.parse import urlsplit
+
+        from app.services import telegram_codes
+
+        # Best effort: the in-app code box works whether or not this lands.
+        await telegram_codes.ask_for_code(
+            run.user_id, run.id, urlsplit(str(page_url or "")).hostname or "the site"
+        )
     return {
         "status": "awaiting_approval",
         "tokens_used": tokens,

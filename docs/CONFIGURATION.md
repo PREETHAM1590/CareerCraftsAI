@@ -258,6 +258,33 @@ The webhook carries metadata only. The backend fetches the message, keeps it for
 the member, and extracts codes and verification links. Links are never opened
 automatically.
 
+## Code requests on Telegram (Nova)
+
+When Nova waits on a one-time code, it can ask the member on Telegram. Their
+reply goes to the waiting step through the same sealed, read-once path as the
+in-app code box. The bot then deletes the code message from the chat.
+
+| Variable | Description |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` | From @BotFather. |
+| `TELEGRAM_BOT_USERNAME` | The bot's username without `@`, used for the `t.me/<bot>?start=` link. |
+| `TELEGRAM_WEBHOOK_SECRET` | 32+ random characters. Telegram sends it in `X-Telegram-Bot-Api-Secret-Token`. |
+
+Setup, once:
+1. Create the bot with @BotFather and set the three variables.
+2. Run migration `20261124140000_telegram_links.sql`.
+3. Register the webhook (only messages are needed):
+
+```bash
+curl -s "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
+  -d url="https://<api-host>/api/v1/inbound/telegram" \
+  -d secret_token="$TELEGRAM_WEBHOOK_SECRET" \
+  -d allowed_updates='["message"]' -d drop_pending_updates=true
+```
+
+Members connect from the computer panel ("Code requests on Telegram"). They
+can send /stop, or disconnect in the app, at any time.
+
 ## Development vs Production Differences
 
 | Setting | Development | Production |
