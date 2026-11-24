@@ -1,19 +1,21 @@
 "use client";
 
-import { CheckCircle, CircleNotch, Clock, MagnifyingGlass, Warning, type Icon } from "@phosphor-icons/react";
+import { CheckCircle, CircleNotch, Clock, Hourglass, MagnifyingGlass, Warning, XCircle, type Icon } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
 
 export type AgentRunStatus =
   | "queued" | "running" | "succeeded" | "completed" | "failed"
-  | "awaiting_approval" | "needs_verification";
+  | "awaiting_approval" | "needs_verification" | "expired" | "cancelled";
+
+const MUTED = "bg-foreground/[0.04] text-muted-foreground ring-foreground/[0.08] dark:bg-white/[0.05] dark:ring-white/10";
 
 // Medallion + pill tints per status. Semantic tokens only (success / warning /
 // danger / primary) so the card reads identically in light and dark mode.
 const STATUS_STYLES: Record<AgentRunStatus, { medallion: string; pill: string }> = {
-  queued: {
-    medallion: "bg-foreground/[0.04] text-muted-foreground ring-foreground/[0.08] dark:bg-white/[0.05] dark:ring-white/10",
-    pill: "bg-foreground/[0.04] text-muted-foreground ring-foreground/[0.08] dark:bg-white/[0.05] dark:ring-white/10",
-  },
+  queued: { medallion: MUTED, pill: MUTED },
+  // Closed without running to completion: neither success nor an error.
+  expired: { medallion: MUTED, pill: MUTED },
+  cancelled: { medallion: MUTED, pill: MUTED },
   running: { medallion: "bg-primary/10 text-primary ring-primary/20", pill: "bg-primary/10 text-primary ring-primary/20" },
   succeeded: { medallion: "bg-success/10 text-success ring-success/25", pill: "bg-success/10 text-success ring-success/25" },
   completed: { medallion: "bg-success/10 text-success ring-success/25", pill: "bg-success/10 text-success ring-success/25" },
@@ -33,6 +35,8 @@ const STATUS_ICONS: Record<AgentRunStatus, Icon> = {
   failed: Warning,
   awaiting_approval: Clock,
   needs_verification: MagnifyingGlass,
+  expired: Hourglass,
+  cancelled: XCircle,
 };
 
 const AGENT_LABELS: Record<string, string> = {

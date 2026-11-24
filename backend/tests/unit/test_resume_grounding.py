@@ -24,7 +24,7 @@ def test_invented_numbers_and_tools_are_reported():
         "- Cut costs by 60% using Kubernetes and TensorFlow\n- Managed a team of 12 at Google\n"
     )
     assert unsupported_claims(markdown, SOURCE) == [
-        "60",
+        "60%",
         "Kubernetes",
         "TensorFlow",
         "12",
