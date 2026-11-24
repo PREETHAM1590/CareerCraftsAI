@@ -625,6 +625,29 @@ async function handleMessage(msg, sender) {
       return { data: res.data };
     }
 
+    case "CC_COLLECT_JOB": {
+      // Read-only capture from Naukri/Instahyre/LinkedIn: POST the listing
+      // the member is viewing so it is tracked like a search result.
+      const pairing = await getPairing();
+      if (!pairing) return { error: "not_paired" };
+      const job = msg.job || {};
+      const res = await apiFetch(pairing, "/extension/device/collect-job", {
+        method: "POST",
+        json: {
+          url: job.url,
+          title: job.title,
+          company: job.company || "",
+          location: job.location || "",
+          description: job.description || "",
+          salary: job.salary || "",
+          posted_at: job.posted_at || "",
+          skills: Array.isArray(job.skills) ? job.skills : [],
+        },
+      });
+      if (!res.ok) return { error: res.error || `http_${res.status}` };
+      return { data: res.data };
+    }
+
     case "CC_RESUME": {
       const pairing = await getPairing();
       if (!pairing) return { error: "not_paired" };

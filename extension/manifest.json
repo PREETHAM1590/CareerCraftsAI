@@ -75,9 +75,18 @@
         "https://app.careercraftsai.me/*",
         "https://www.careercraftsai.me/*"
       ],
-      "js": [
-        "src/content/bridge.js"
+      "js": ["src/content/bridge.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.naukri.com/*",
+        "https://*.naukri.com/*",
+        "https://www.instahyre.com/*",
+        "https://*.instahyre.com/*",
+        "https://www.linkedin.com/jobs/*"
       ],
+      "js": ["src/content/collect.js"],
       "run_at": "document_idle"
     }
   ]

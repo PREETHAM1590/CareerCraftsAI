@@ -24,7 +24,7 @@ import zipfile
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -914,3 +914,104 @@ def package_extension(root: Path = EXTENSION_DIR) -> tuple[str, bytes]:
                 continue
             archive.write(path, f"{_PACKAGE_ROOT}/{relative.as_posix()}")
     return str(manifest.get("version", "0")), buffer.getvalue()
+
+
+# ── Board capture: Naukri / Instahyre listings collected by the extension ──
+
+# Boards the backend accepts collected listings from. The extension only ever
+# captures what is on screen (read-only); these normalizers map each board's
+# DOM extraction onto the job dict `saved_boards.save_jobs` expects.
+COLLECTABLE_HOSTS = {
+    "naukri.com": "naukri",
+    "www.naukri.com": "naukri",
+    "instahyre.com": "instahyre",
+    "www.instahyre.com": "instahyre",
+    "linkedin.com": "linkedin",
+    "www.linkedin.com": "linkedin",
+}
+
+_COLLECT_MAX_TEXT = 20_000
+
+
+def _strip_tracking(url: str) -> str:
+    """Drop utm_*/ref tracking params the content script may have missed."""
+    parts = urlsplit(url)
+    if not parts.query:
+        return url
+    from urllib.parse import parse_qsl, urlencode
+
+    kept = [(k, v) for k, v in parse_qsl(parts.query) if not re.match(r"^(utm_|ref$|src$)", k, re.I)]
+    return urlunsplit(parts._replace(query=urlencode(kept)))
+
+
+def normalize_collected_job(payload: dict) -> dict:
+    """Map a raw listing the content script scraped onto the job schema used by
+    search/track/auto-apply drafts. Raises ValueError when the capture is not
+    a job listing we can use."""
+    host = (urlsplit(payload.get("url") or "").hostname or "").lower()
+    board = COLLECTABLE_HOSTS.get(host)
+    if board is None:
+        raise ValueError(f"Unsupported job board host: {host or 'unknown'}")
+
+    title = (payload.get("title") or "").strip()
+    company = (payload.get("company") or "").strip()
+    url = (payload.get("url") or "").strip()
+    if not title or not url:
+        raise ValueError("A collected listing needs at least a title and a URL")
+
+    job: dict = {
+        "title": title[:200],
+        "company": company[:150] or "Unknown",
+        "url": _strip_tracking(url),
+        "platform": board,
+        "source": f"{board}-extension",
+    }
+    location = (payload.get("location") or "").strip()
+    if location:
+        job["location"] = location[:150]
+
+    description = (payload.get("description") or "").strip()
+    if description:
+        job["description"] = description[:_COLLECT_MAX_TEXT]
+
+    salary = (payload.get("salary") or "").strip()
+    if salary:
+        job["salary"] = salary[:120]
+
+    posted_raw = (payload.get("posted_at") or "").strip()
+    if posted_raw:
+        parsed = _parse_board_date(posted_raw)
+        if parsed:
+            job["posted_at"] = parsed
+
+    skills = payload.get("skills")
+    if isinstance(skills, list) and skills:
+        job["skills"] = [str(s).strip()[:60] for s in skills[:30] if str(s).strip()]
+    return job
+
+
+def _parse_board_date(raw: str):
+    """Board-specific 'posted' strings ("30 Days Ago", "just now", ISO) to an
+    ISO timestamp; None when unparseable so the field is simply omitted."""
+    from datetime import timedelta
+
+    raw = raw.strip().lower()
+    if not raw:
+        return None
+    iso = raw.replace("z", "+00:00")
+    try:
+        return datetime.fromisoformat(iso).isoformat()
+    except ValueError:
+        pass
+    match = re.search(r"(\d+)\s*(minute|hour|day|week|month)s?\s*ago", raw)
+    if not match:
+        return None
+    amount, unit = int(match.group(1)), match.group(2)
+    delta = {
+        "minute": timedelta(minutes=amount),
+        "hour": timedelta(hours=amount),
+        "day": timedelta(days=amount),
+        "week": timedelta(weeks=amount),
+        "month": timedelta(days=amount * 30),
+    }[unit]
+    return (datetime.now(UTC) - delta).isoformat()
