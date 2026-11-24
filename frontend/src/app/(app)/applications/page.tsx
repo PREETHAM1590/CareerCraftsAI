@@ -47,6 +47,7 @@ import {
 } from "@/components/vanguard";
 import { LocationInput } from "@/components/ui/LocationInput";
 import { apiClient } from "@/lib/api";
+import { isComposing } from "@/lib/ime";
 
 type AgentRun = {
   id: string;
@@ -398,7 +399,7 @@ function ApplicationsView() {
                     value={cityDraft}
                     onChange={setCityDraft}
                     onKeyDown={(event) => {
-                      if (event.key === "Enter" && !event.nativeEvent.isComposing && cityDraft.trim()) {
+                      if (event.key === "Enter" && !isComposing(event) && cityDraft.trim()) {
                         event.preventDefault();
                         addCity(cityDraft);
                       }

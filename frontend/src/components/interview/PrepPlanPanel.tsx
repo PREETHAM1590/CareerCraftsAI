@@ -49,6 +49,7 @@ import {
 } from "@/components/vanguard";
 import { cn } from "@/lib/utils";
 import { ScoreRing } from "./ScoreRing";
+import { isComposing } from "@/lib/ime";
 
 type Category = "All" | "Technical" | "Behavioral" | "Company-Specific";
 type Difficulty = "Easy" | "Medium" | "Hard";
@@ -610,7 +611,7 @@ export function PrepPlanPanel({ onStartMock }: { onStartMock: () => void }) {
                         onChange={(e) => setEditingTitle(e.target.value)}
                         onBlur={() => commitStoryTitle(story.id)}
                         onKeyDown={(e) => {
-                          if (e.key === "Enter" && !e.nativeEvent.isComposing) commitStoryTitle(story.id);
+                          if (e.key === "Enter" && !isComposing(e)) commitStoryTitle(story.id);
                           if (e.key === "Escape") setEditingStoryId(null);
                         }}
                         className="h-9 text-[13px] font-medium"
