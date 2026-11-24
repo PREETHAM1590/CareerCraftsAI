@@ -104,6 +104,10 @@ class Settings(BaseSettings):
     # this subdomain) and delivered to /api/v1/inbound/resend. Blank disables it.
     APPLY_EMAIL_DOMAIN: str = ""
     RESEND_WEBHOOK_SECRET: str = ""
+    # Telegram bot for one-time code requests from Nova. All three or off.
+    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_BOT_USERNAME: str = ""
+    TELEGRAM_WEBHOOK_SECRET: str = ""
     YOUTUBE_API_KEY: str = ""
     FIRECRAWL_API_KEY: str | None = None
     SEARXNG_URL: str | None = None

@@ -16,7 +16,7 @@ from app.api.v1.deps import get_current_user, get_db
 from app.core.config import settings
 from app.core.rate_limit import limiter
 from app.core.security import decrypt_api_key, encrypt_api_key
-from app.models.db import AgentRun, PortalCredential, User
+from app.models.db import AgentRun, PortalAccountConsent, PortalCredential, User
 from app.services import computer_service as service
 from app.services import nova_signin
 
@@ -124,6 +124,7 @@ def metadata(row):
         "origin": row.origin,
         "label": row.label,
         "auto_signin": bool(getattr(row, "auto_signin", False)),
+        "created_by_nova": bool(getattr(row, "created_by_nova", False)),
     }
 
 
@@ -324,3 +325,72 @@ async def enter_code(
     return await decide_run(
         str(run_id), ApproveRequest(approved=True, action_type="computer_action"), db, user
     )
+
+
+class AccountSite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    origin: str
+
+    @field_validator("origin")
+    @classmethod
+    def origin_only(cls, value):
+        return service.credential_origin(value)
+
+
+@router.get("/account-sites")
+async def account_sites(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    rows = (
+        (
+            await db.execute(
+                select(PortalAccountConsent).where(PortalAccountConsent.user_id == user.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        {"origin": row.origin, "consent_at": row.consent_at.isoformat() if row.consent_at else None}
+        for row in rows
+    ]
+
+
+@router.post("/account-sites")
+@limiter.limit("30/minute")
+async def allow_account_site(
+    request: Request,
+    payload: AccountSite,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Consent for Nova to create an account on this exact site (accepting its terms)."""
+    row = await db.get(PortalAccountConsent, (user.id, payload.origin))
+    if row is None:
+        db.add(
+            PortalAccountConsent(
+                user_id=user.id,
+                origin=payload.origin,
+                consent_at=datetime.now(UTC),
+                consent_version=nova_signin.CONSENT_VERSION,
+            )
+        )
+        await db.commit()
+        await service.audit(user.id, "account_site_allowed")
+    return {"origin": payload.origin, "allowed": True}
+
+
+@router.delete("/account-sites")
+async def remove_account_site(
+    origin: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    try:
+        origin = service.credential_origin(origin)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    row = await db.get(PortalAccountConsent, (user.id, origin))
+    if row is not None:
+        await db.delete(row)
+        await db.commit()
+        await service.audit(user.id, "account_site_removed")
+    return {"origin": origin, "allowed": False}
