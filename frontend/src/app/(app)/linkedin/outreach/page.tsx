@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion } from "motion/react";
 import { toast } from "sonner";
@@ -56,15 +56,16 @@ interface OutreachRun {
 
 /* ───────────────────────────── helpers ───────────────────────────── */
 
-// A batch older than this was interrupted (the server's lock TTL): its
-// "sending" flag is stale, as linkedin_sender.sending_stale decides.
-const SENDING_STALE_MS = 30 * 60 * 1000;
+// A batch older than this was interrupted: its "sending" flag is stale, as
+// linkedin_sender.sending_stale decides. The server sends the value with
+// /linkedin/account; 30 minutes only until that loads.
+let sendingStaleMs = 30 * 60 * 1000;
 
 function isSending(run: OutreachRun): boolean {
   const output = run.output;
   if (!output?.sending) return false;
   const started = Date.parse(output.sending_started_at ?? "");
-  return Number.isFinite(started) && Date.now() - started <= SENDING_STALE_MS;
+  return Number.isFinite(started) && Date.now() - started <= sendingStaleMs;
 }
 
 // Drafts not sent and not possibly sent: the ones Resend would try again.
@@ -405,6 +406,10 @@ export default function LinkedInOutreachPage() {
   };
 
   const linkedin = useLinkedInAccount();
+  const staleSeconds = linkedin.data?.sending_stale_seconds;
+  useEffect(() => {
+    if (staleSeconds) sendingStaleMs = staleSeconds * 1000;
+  }, [staleSeconds]);
   const awaitingCount = queue.filter((r) => r.status === "awaiting_approval").length;
   const inFlightCount = queue.filter((r) => r.status === "running" || r.status === "pending").length;
   const completedCount = queue.filter((r) => displayStatus(r) === "completed").length;

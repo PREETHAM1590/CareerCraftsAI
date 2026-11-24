@@ -9,6 +9,7 @@ export type LinkedInAccountStatus = {
   ready: boolean;
   invites_per_day?: number;
   messages_per_day?: number;
+  sending_stale_seconds?: number;
 };
 
 export function useLinkedInAccount() {

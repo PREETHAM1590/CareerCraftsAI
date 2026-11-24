@@ -84,7 +84,8 @@ function waitForLoad(tabId) {
       if (id !== tabId) return;
       // The new tab's own about:blank load can still be reporting: only a
       // linkedin.com page counts (a login or authwall redirect included).
-      const onLinkedIn = /^https:\/\/www\.linkedin\.com\//.test((tab && tab.url) || "");
+      // www or a country subdomain (uk.linkedin.com) after a LinkedIn redirect.
+      const onLinkedIn = /^https:\/\/(?:www\.|[a-z]{2}\.)?linkedin\.com\//.test((tab && tab.url) || "");
       if (info.status === "loading" && onLinkedIn) started = true;
       // "complete" only counts after this navigation began loading.
       if (started && onLinkedIn && info.status === "complete") {

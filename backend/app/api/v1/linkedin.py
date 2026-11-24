@@ -279,6 +279,8 @@ async def linkedin_sending_status(current_user: User = Depends(get_current_user)
         "ready": await linkedin_sender.device_for(current_user.id) is not None,
         "invites_per_day": linkedin_sender.settings.LINKEDIN_INVITES_PER_DAY,
         "messages_per_day": linkedin_sender.settings.LINKEDIN_MESSAGES_PER_DAY,
+        # The page's "still sending" window comes from here, not a copy.
+        "sending_stale_seconds": int(linkedin_sender.STALE_AFTER.total_seconds()),
     }
 
 
