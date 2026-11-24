@@ -234,6 +234,7 @@ async def plan(run: AgentRun, note="") -> dict:
             # The member turned on automatic sign-in for this exact origin.
             await nova_signin.sign_in(run.user_id, action, page_url)
             await _record_step(run, "sign_in", f"Signed in to {origin} with your saved login")
+            run.tokens_used = tokens  # this proposal's tokens carry into the next plan
             return await plan(run)
     if action.operation == "create_account":
         try:
@@ -257,12 +258,46 @@ async def plan(run: AgentRun, note="") -> dict:
             result = await nova_signin.create_account(run.user_id, action, page_url)
         except ValueError as exc:  # already has a login, or today's tries are used up
             return {"status": "completed", "result": {"message": str(exc)}, "tokens_used": tokens}
+        except HTTPException as exc:
+            # The computer refused the step (409: retry from a fresh page) or its
+            # outcome is unknown; either way Nova does not sign in to it.
+            if exc.status_code == 409 and exc.detail != nova_signin.CLOUD_ONLY:
+                run.tokens_used = tokens
+                return await plan(
+                    run,
+                    f"{exc.detail} The account was not created; review a fresh proposal.",
+                )
+            return {
+                "status": "completed",
+                "tokens_used": tokens,
+                "result": {
+                    "message": f"Nova couldn't confirm the account was created: {exc.detail}"
+                },
+            }
+        if not result["submitted"]:
+            # The site kept the form (a validation error, an email already in
+            # use): no account yet, so stop rather than plan as if there were one.
+            await _record_step(
+                run,
+                "create_account",
+                f"Started an account on {origin} with {result['email']}; the site did not "
+                "accept the sign-up form",
+            )
+            return {
+                "status": "completed",
+                "tokens_used": tokens,
+                "result": {
+                    "input_required": "signup",
+                    "message": (
+                        f"{origin} didn't accept the sign-up form. Take control of the computer "
+                        "to finish it; the password Nova typed is in your saved logins."
+                    ),
+                },
+            }
         await _record_step(
-            run,
-            "create_account",
-            f"Created an account on {origin} with {result['email']}"
-            + ("" if result["submitted"] else " (the sign-up form needs your attention)"),
+            run, "create_account", f"Created an account on {origin} with {result['email']}"
         )
+        run.tokens_used = tokens  # this proposal's tokens carry into the next plan
         return await plan(run)
     if action.operation == "enter_code":
         from urllib.parse import urlsplit
@@ -316,7 +351,9 @@ async def continue_step(run: AgentRun, pending: dict) -> dict:
         elif action.operation == "enter_code":
             await nova_signin.enter_code(run.user_id, run.id, action, pending.get("page_url"))
         elif action.operation == "create_account":
-            await nova_signin.create_account(run.user_id, action, pending.get("page_url"))
+            # plan() runs account creation itself and never leaves it pending;
+            # an old stored payload gets a fresh proposal, never a blind replay.
+            return await plan(run, "Account creation runs only from a fresh proposal.")
         else:
             await act(run.user_id, action, actor="agent")
     except HTTPException as exc:

@@ -63,6 +63,12 @@ class Recorder:
         db.__aexit__ = AsyncMock(return_value=False)
         db.add = lambda row: (self.saved.append(row), self.events.append("vault"))
         db.commit = AsyncMock()
+        db.rollback = AsyncMock()
+
+        async def execute(statement):
+            self.events.append("sign_in_on")
+
+        db.execute = execute
         self.db = db
 
     async def dispatch(self, user_id, body, audit):
@@ -85,6 +91,11 @@ def recorder():
         patch.object(nova_signin, "saved_login", AsyncMock(return_value=None)),
         patch.object(nova_signin, "account_consent", AsyncMock(return_value=CONSENT)),
         patch.object(nova_signin, "encrypt_api_key", side_effect=lambda v, _: f"sealed({v})"),
+        patch.object(
+            nova_signin.computer_service,
+            "computer_backend",
+            AsyncMock(return_value={"backend": "cloud"}),
+        ),
     ):
         yield rec
 
@@ -92,10 +103,11 @@ def recorder():
 @pytest.mark.asyncio
 async def test_password_is_saved_to_the_vault_before_it_is_typed(recorder):
     result = await nova_signin.create_account(USER, signup(confirmRef="e3"), PAGE)
-    assert recorder.events == ["vault", "type"]
+    # Saved first with sign-in off; turned on only once the site took the form.
+    assert recorder.events == ["vault", "type", "sign_in_on"]
     [row] = recorder.saved
     assert row.origin == ORIGIN
-    assert row.created_by_nova is True and row.auto_signin is True
+    assert row.created_by_nova is True and row.auto_signin is False
     assert row.username_enc == "sealed(priya.k7f2m@apply.ex)"
     params = recorder.body["parameters"]
     assert recorder.body["actor"] == "nova"
@@ -325,3 +337,231 @@ def test_removing_a_site():
         )
     assert response.json() == {"origin": "https://jobs.example.com", "allowed": False}
     db.delete.assert_awaited_once()
+
+
+# ── Review fixes ────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [403, 409, 422])
+async def test_refusal_before_typing_forgets_the_login_so_retries_work(recorder, status):
+    from fastapi import HTTPException
+
+    async def refuse(user_id, body, audit):
+        recorder.events.append("type")
+        raise HTTPException(status, "refused before typing")
+
+    with (
+        patch.object(nova_signin, "_dispatch", refuse),
+        patch.object(nova_signin, "_forget_login", AsyncMock()) as forget,
+    ):
+        with pytest.raises(HTTPException):
+            await nova_signin.create_account(USER, signup(), PAGE)
+    forget.assert_awaited_once_with(uuid.UUID(USER), ORIGIN)
+    assert "sign_in_on" not in recorder.events
+
+
+@pytest.mark.asyncio
+async def test_unknown_outcome_keeps_the_password_with_sign_in_off(recorder):
+    from fastapi import HTTPException
+
+    async def lost(user_id, body, audit):
+        raise HTTPException(502, "Private credential entry failed")
+
+    with (
+        patch.object(nova_signin, "_dispatch", lost),
+        patch.object(nova_signin, "_forget_login", AsyncMock()) as forget,
+    ):
+        with pytest.raises(HTTPException):
+            await nova_signin.create_account(USER, signup(), PAGE)
+    forget.assert_not_called()
+    [row] = recorder.saved
+    assert row.auto_signin is False
+    assert "sign_in_on" not in recorder.events
+
+
+@pytest.mark.asyncio
+async def test_unsubmitted_form_keeps_the_login_with_sign_in_off(recorder):
+    async def filled_not_sent(user_id, body, audit):
+        return {"filled": True, "submitted": False}
+
+    with patch.object(nova_signin, "_dispatch", filled_not_sent):
+        result = await nova_signin.create_account(USER, signup(), PAGE)
+    assert result["submitted"] is False
+    assert "sign_in_on" not in recorder.events
+
+
+@pytest.mark.asyncio
+async def test_a_login_saved_concurrently_is_a_clear_refusal(recorder):
+    from sqlalchemy.exc import IntegrityError
+
+    recorder.db.commit = AsyncMock(side_effect=IntegrityError("insert", {}, Exception("dup")))
+    with pytest.raises(ValueError, match="already have a saved login"):
+        await nova_signin.create_account(USER, signup(), PAGE)
+    recorder.db.rollback.assert_awaited_once()
+    assert "type" not in recorder.events
+
+
+@pytest.mark.asyncio
+async def test_browser_mode_is_refused_before_using_a_try(recorder):
+    with (
+        patch.object(
+            nova_signin.computer_service,
+            "computer_backend",
+            AsyncMock(return_value={"backend": "browser"}),
+        ),
+        patch.object(nova_signin, "claim_signup", AsyncMock(return_value=True)) as claim,
+    ):
+        with pytest.raises(ValueError, match="cloud computer"):
+            await nova_signin.create_account(USER, signup(), PAGE)
+    claim.assert_not_called()
+    assert recorder.events == []
+
+
+@pytest.mark.asyncio
+async def test_email_problems_do_not_use_up_a_daily_try(recorder):
+    with (
+        patch.object(nova_signin, "signup_email", AsyncMock(side_effect=ValueError("no email"))),
+        patch.object(nova_signin, "claim_signup", AsyncMock(return_value=True)) as claim,
+    ):
+        with pytest.raises(ValueError, match="no email"):
+            await nova_signin.create_account(USER, signup(), PAGE)
+    claim.assert_not_called()
+
+
+def alias_session():
+    db = MagicMock()
+    db.__aenter__ = AsyncMock(return_value=db)
+    db.__aexit__ = AsyncMock(return_value=False)
+    db.get = AsyncMock(return_value=SimpleNamespace(id=USER, email="m@x.co"))
+    return db
+
+
+@pytest.mark.asyncio
+async def test_alias_allocation_failure_becomes_a_message():
+    with (
+        patch("app.core.database.AsyncSessionLocal", return_value=alias_session()),
+        patch("app.services.apply_inbox.alias_for", AsyncMock(return_value=None)),
+        patch("app.services.apply_inbox.configured", return_value=True),
+        patch(
+            "app.services.apply_inbox.get_or_create_alias",
+            AsyncMock(side_effect=RuntimeError("Could not allocate")),
+        ),
+    ):
+        with pytest.raises(ValueError, match="application email"):
+            await nova_signin.signup_email(USER)
+
+
+@pytest.mark.asyncio
+async def test_never_signs_up_with_the_personal_account_email():
+    with (
+        patch("app.core.database.AsyncSessionLocal", return_value=alias_session()),
+        patch("app.services.apply_inbox.alias_for", AsyncMock(return_value=None)),
+        patch("app.services.apply_inbox.configured", return_value=False),
+    ):
+        with pytest.raises(ValueError, match="application email"):
+            await nova_signin.signup_email(USER)
+
+
+async def plan_with_create_account_result(outcome):
+    """Run plan() once with create_account returning or raising `outcome`."""
+    from contextlib import ExitStack
+
+    from app.agents import computer_agent as agent
+
+    run = SimpleNamespace(
+        user_id=uuid.uuid4(), id=uuid.uuid4(), input={"context": {"task": "Apply"}}, tokens_used=5
+    )
+    llm, db = planner(PROPOSAL)
+    llm.bind_tools.return_value.ainvoke.return_value.usage_metadata = {"total_tokens": 100}
+    original = agent.plan
+    with ExitStack() as stack:
+        for p in planner_patches(agent, llm, db):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch.object(agent.nova_signin, "account_consent", AsyncMock(return_value=CONSENT))
+        )
+        mock = (
+            AsyncMock(side_effect=outcome)
+            if isinstance(outcome, Exception)
+            else AsyncMock(return_value=outcome)
+        )
+        stack.enter_context(patch.object(agent.nova_signin, "create_account", mock))
+        stack.enter_context(patch.object(agent, "_record_step", AsyncMock()))
+        replan = stack.enter_context(
+            patch.object(agent, "plan", AsyncMock(return_value={"status": "completed"}))
+        )
+        result = await original(run)
+    return run, result, replan
+
+
+@pytest.mark.asyncio
+async def test_cloud_only_refusal_is_reported_not_retried():
+    from fastapi import HTTPException
+
+    run, result, replan = await plan_with_create_account_result(
+        HTTPException(409, nova_signin.CLOUD_ONLY)
+    )
+    replan.assert_not_called()
+    assert result["status"] == "completed"
+    assert nova_signin.CLOUD_ONLY in result["result"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_busy_computer_replans_with_a_note():
+    from fastapi import HTTPException
+
+    detail = "Browser state changed or human control is active; refresh before continuing"
+    run, result, replan = await plan_with_create_account_result(HTTPException(409, detail))
+    assert result == {"status": "completed"}
+    assert detail in replan.await_args.args[1]
+    assert run.tokens_used == 105
+
+
+@pytest.mark.asyncio
+async def test_other_computer_errors_end_with_a_message():
+    from fastapi import HTTPException
+
+    _, result, replan = await plan_with_create_account_result(
+        HTTPException(422, "Confirm field must be a password input on this site")
+    )
+    replan.assert_not_called()
+    assert "Confirm field" in result["result"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_tokens_of_the_proposal_carry_into_the_next_plan():
+    run, _, replan = await plan_with_create_account_result(
+        {"submitted": True, "origin": ORIGIN, "email": "a@b.co"}
+    )
+    replan.assert_awaited_once()
+    assert run.tokens_used == 105
+
+
+@pytest.mark.asyncio
+async def test_unaccepted_sign_up_form_stops_instead_of_replanning():
+    run, result, replan = await plan_with_create_account_result(
+        {"submitted": False, "origin": ORIGIN, "email": "a@b.co"}
+    )
+    replan.assert_not_called()
+    assert result["status"] == "completed"
+    assert result["result"]["input_required"] == "signup"
+    assert "didn't accept" in result["result"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_stored_create_account_payload_is_re_proposed_not_replayed():
+    from app.agents import computer_agent as agent
+
+    run = SimpleNamespace(
+        agent_type="computer_task", user_id=uuid.uuid4(), id=uuid.uuid4(), input={}, tokens_used=0
+    )
+    pending = {"action": signup().model_dump(), "page_url": PAGE, "summary": "Create account"}
+    with (
+        patch.object(agent.nova_signin, "create_account", AsyncMock()) as create,
+        patch.object(agent, "plan", AsyncMock(return_value={"status": "awaiting_approval"})) as replan,
+    ):
+        result = await agent.continue_step(run, pending)
+    create.assert_not_called()
+    assert result == {"status": "awaiting_approval"}
+    assert "fresh proposal" in replan.await_args.args[1]

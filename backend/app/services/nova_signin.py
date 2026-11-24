@@ -11,7 +11,8 @@ Account creation runs only on sites the member listed (PortalAccountConsent),
 at most SIGNUP_DAILY_LIMIT tries per site a day. The server generates the
 password and saves the login in the vault *before* typing it, signs up with
 the member's application email (phase 4) so verification mail is handled,
-and marks the login created_by_nova with automatic sign-in on.
+and marks the login created_by_nova. Automatic sign-in turns on only once the
+site accepted the form; a refusal before typing removes the saved login.
 """
 
 import hashlib
@@ -22,7 +23,8 @@ from datetime import UTC, datetime
 from urllib.parse import urlsplit
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
+from sqlalchemy.exc import IntegrityError
 
 from app.core import redis_client
 from app.core.config import settings
@@ -234,7 +236,8 @@ async def claim_signup(user_id, origin: str) -> bool:
 
 
 async def signup_email(user_id) -> str:
-    """The application address when configured, else the account email."""
+    """The member's application address. Nova never signs up with the
+    personal account email: verification mail must reach the apply inbox."""
     from app.core.database import AsyncSessionLocal
     from app.models.db import User
     from app.services import apply_inbox
@@ -243,18 +246,29 @@ async def signup_email(user_id) -> str:
     if not alias and apply_inbox.configured():
         async with AsyncSessionLocal() as db:
             user = await db.get(User, uuid.UUID(str(user_id)))
-            alias = await apply_inbox.get_or_create_alias(db, user)
-    if alias:
-        return alias
-    async with AsyncSessionLocal() as db:
-        user = await db.get(User, uuid.UUID(str(user_id)))
-    if not user or not user.email:
-        raise ValueError("Your account has no email address to sign up with")
-    return user.email
+            if user is not None:
+                try:
+                    alias = await apply_inbox.get_or_create_alias(db, user)
+                except RuntimeError as exc:
+                    raise ValueError("Could not set up your application email; try again.") from exc
+    if not alias:
+        raise ValueError(
+            "Nova signs up only with your application email, and it isn't set up yet. "
+            "Take control and sign up yourself."
+        )
+    return alias
+
+
+# Refusals from the computer before anything was typed: safe to forget the login.
+NOTHING_TYPED = {403, 409, 422}
 
 
 async def create_account(user_id, action, page_url: str | None) -> dict:
-    """Create a portal account on an allowed site: vault first, then type."""
+    """Create a portal account on an allowed site: vault first, then type.
+
+    The login is saved with automatic sign-in off and turned on only once the
+    site took the form, so a failed sign-up never leaves Nova signing in to an
+    account that doesn't exist."""
     from app.core.database import AsyncSessionLocal
     from app.models.db import PortalCredential
 
@@ -264,26 +278,38 @@ async def create_account(user_id, action, page_url: str | None) -> dict:
         raise ValueError(f"Allow Nova to create accounts on {origin} first.")
     if await saved_login(user_id, origin) is not None:
         raise ValueError(f"You already have a saved login for {origin}; Nova signs in instead.")
+    # Before spending a try or saving anything: Nova types secrets only in the cloud.
+    if (await computer_service.computer_backend(user_id))["backend"] != "cloud":
+        raise ValueError(CLOUD_ONLY)
+    email = await signup_email(user_id)
+    # Counted only once nothing local can fail before the site sees a try.
     if not await claim_signup(user_id, origin):
         raise ValueError(f"Nova already tried to create an account on {origin} today.")
-    email = await signup_email(user_id)
     password = new_password()
     host = urlsplit(origin).hostname or origin
+    owner = uuid.UUID(str(user_id))
     async with AsyncSessionLocal() as db:
         db.add(
             PortalCredential(
-                user_id=uuid.UUID(str(user_id)),
+                user_id=owner,
                 origin=origin,
                 label=f"{host} (created by Nova)"[:100],
                 username_enc=encrypt_api_key(email, settings.APP_SECRET_KEY),
                 password_enc=encrypt_api_key(password, settings.APP_SECRET_KEY),
-                auto_signin=True,
+                auto_signin=False,
                 consent_at=consent.consent_at,
                 consent_version=consent.consent_version,
                 created_by_nova=True,
             )
         )
-        await db.commit()
+        try:
+            await db.commit()
+        except IntegrityError:
+            # Another run saved a login for this site first.
+            await db.rollback()
+            raise ValueError(
+                f"You already have a saved login for {origin}; Nova signs in instead."
+            ) from None
     params = action.parameters
     body = {
         "operation": "credentials/fill",
@@ -300,5 +326,35 @@ async def create_account(user_id, action, page_url: str | None) -> dict:
             "submit": True,
         },
     }
-    result = await _dispatch(user_id, body, "nova_create_account")
-    return {"submitted": bool(result.get("submitted")), "origin": origin, "email": email}
+    try:
+        result = await _dispatch(user_id, body, "nova_create_account")
+    except HTTPException as exc:
+        if exc.status_code in NOTHING_TYPED:
+            await _forget_login(owner, origin)
+        # Otherwise the outcome is unknown: keep the password, sign-in stays off.
+        raise
+    submitted = bool(result.get("submitted"))
+    if submitted:
+        async with AsyncSessionLocal() as db:
+            await db.execute(
+                update(PortalCredential)
+                .where(PortalCredential.user_id == owner, PortalCredential.origin == origin)
+                .values(auto_signin=True)
+            )
+            await db.commit()
+    return {"submitted": submitted, "origin": origin, "email": email}
+
+
+async def _forget_login(owner: uuid.UUID, origin: str) -> None:
+    from app.core.database import AsyncSessionLocal
+    from app.models.db import PortalCredential
+
+    async with AsyncSessionLocal() as db:
+        await db.execute(
+            delete(PortalCredential).where(
+                PortalCredential.user_id == owner,
+                PortalCredential.origin == origin,
+                PortalCredential.created_by_nova.is_(True),
+            )
+        )
+        await db.commit()
