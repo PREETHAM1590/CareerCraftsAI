@@ -1,13 +1,22 @@
-"""Nova's private browser steps: sign in with a saved login, enter a one-time code.
+"""Nova's private browser steps: sign in with a saved login, enter a one-time
+code, and create a portal account where the member allowed it.
 
 The model may *propose* these steps by element ref; it never sees, chooses or
 receives a secret. The server resolves the saved login by the page's exact
 origin, and the computer refuses to type it anywhere else. A one-time code
 lives only in Redis, encrypted, for CODE_TTL seconds and is read exactly once:
 it never enters the database, the workflow history or a model prompt.
+
+Account creation runs only on sites the member listed (PortalAccountConsent),
+at most SIGNUP_DAILY_LIMIT tries per site a day. The server generates the
+password and saves the login in the vault *before* typing it, signs up with
+the member's application email (phase 4) so verification mail is handled,
+and marks the login created_by_nova with automatic sign-in on.
 """
 
 import hashlib
+import secrets
+import string
 import uuid
 from datetime import UTC, datetime
 from urllib.parse import urlsplit
@@ -23,7 +32,8 @@ from app.services import computer_service
 CONSENT_VERSION = "2026-11-24"
 AUTO_SIGNIN_DAILY_LIMIT = 3
 CODE_TTL = 600
-NOVA_STEPS = {"sign_in", "enter_code"}
+SIGNUP_DAILY_LIMIT = 3
+NOVA_STEPS = {"sign_in", "enter_code", "create_account"}
 CLOUD_ONLY = "Nova signs in and enters codes only in the cloud computer. Switch to Cloud."
 
 
@@ -170,3 +180,125 @@ async def enter_code(user_id, run_id, action, page_url: str | None) -> dict:
     }
     result = await _dispatch(user_id, body, "nova_enter_code")
     return {"entered": bool(result.get("submitted")), "origin": origin}
+
+
+# ── Accounts Nova creates ───────────────────────────────────────
+
+
+def new_password(length: int = 20) -> str:
+    """Random, with each character class most sign-up forms demand."""
+    symbols = "!@#$%^&*-_+="
+    alphabet = string.ascii_letters + string.digits + symbols
+    while True:
+        value = "".join(secrets.choice(alphabet) for _ in range(length))
+        if (
+            any(c.islower() for c in value)
+            and any(c.isupper() for c in value)
+            and any(c.isdigit() for c in value)
+            and any(c in symbols for c in value)
+        ):
+            return value
+
+
+async def account_consent(user_id, origin: str):
+    from app.core.database import AsyncSessionLocal
+    from app.models.db import PortalAccountConsent
+
+    async with AsyncSessionLocal() as db:
+        return await db.get(PortalAccountConsent, (uuid.UUID(str(user_id)), origin))
+
+
+async def account_sites(user_id) -> list[str]:
+    """Origins where Nova may create an account, for the model's context."""
+    from app.core.database import AsyncSessionLocal
+    from app.models.db import PortalAccountConsent
+
+    async with AsyncSessionLocal() as db:
+        rows = await db.execute(
+            select(PortalAccountConsent.origin).where(
+                PortalAccountConsent.user_id == uuid.UUID(str(user_id))
+            )
+        )
+    return list(rows.scalars().all())
+
+
+async def claim_signup(user_id, origin: str) -> bool:
+    redis = redis_client.get_redis()
+    day = datetime.now(UTC).strftime("%Y%m%d")
+    site = hashlib.sha256(origin.encode()).hexdigest()[:16]
+    key = f"nova:signup:{uuid.UUID(str(user_id))}:{site}:{day}"
+    used = await redis.incr(key)
+    if used == 1:
+        await redis.expire(key, 2 * 86400)
+    return used <= SIGNUP_DAILY_LIMIT
+
+
+async def signup_email(user_id) -> str:
+    """The application address when configured, else the account email."""
+    from app.core.database import AsyncSessionLocal
+    from app.models.db import User
+    from app.services import apply_inbox
+
+    alias = await apply_inbox.alias_for(user_id)
+    if not alias and apply_inbox.configured():
+        async with AsyncSessionLocal() as db:
+            user = await db.get(User, uuid.UUID(str(user_id)))
+            alias = await apply_inbox.get_or_create_alias(db, user)
+    if alias:
+        return alias
+    async with AsyncSessionLocal() as db:
+        user = await db.get(User, uuid.UUID(str(user_id)))
+    if not user or not user.email:
+        raise ValueError("Your account has no email address to sign up with")
+    return user.email
+
+
+async def create_account(user_id, action, page_url: str | None) -> dict:
+    """Create a portal account on an allowed site: vault first, then type."""
+    from app.core.database import AsyncSessionLocal
+    from app.models.db import PortalCredential
+
+    origin = page_origin(page_url)
+    consent = await account_consent(user_id, origin)
+    if consent is None:
+        raise ValueError(f"Allow Nova to create accounts on {origin} first.")
+    if await saved_login(user_id, origin) is not None:
+        raise ValueError(f"You already have a saved login for {origin}; Nova signs in instead.")
+    if not await claim_signup(user_id, origin):
+        raise ValueError(f"Nova already tried to create an account on {origin} today.")
+    email = await signup_email(user_id)
+    password = new_password()
+    host = urlsplit(origin).hostname or origin
+    async with AsyncSessionLocal() as db:
+        db.add(
+            PortalCredential(
+                user_id=uuid.UUID(str(user_id)),
+                origin=origin,
+                label=f"{host} (created by Nova)"[:100],
+                username_enc=encrypt_api_key(email, settings.APP_SECRET_KEY),
+                password_enc=encrypt_api_key(password, settings.APP_SECRET_KEY),
+                auto_signin=True,
+                consent_at=consent.consent_at,
+                consent_version=consent.consent_version,
+                created_by_nova=True,
+            )
+        )
+        await db.commit()
+    params = action.parameters
+    body = {
+        "operation": "credentials/fill",
+        "computer_run": action.computer_run,
+        "actor": "nova",
+        "parameters": {
+            "origin": origin,
+            "usernameRef": params["emailRef"],
+            "passwordRef": params["passwordRef"],
+            **({"confirmRef": params["confirmRef"]} if params.get("confirmRef") else {}),
+            "snapshotId": params["snapshotId"],
+            "username": email,
+            "password": password,
+            "submit": True,
+        },
+    }
+    result = await _dispatch(user_id, body, "nova_create_account")
+    return {"submitted": bool(result.get("submitted")), "origin": origin, "email": email}

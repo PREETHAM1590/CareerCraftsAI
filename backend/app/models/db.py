@@ -218,8 +218,22 @@ class PortalCredential(Base):
     auto_signin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     consent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     consent_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Nova created this account (with the member's per-site consent).
+    created_by_nova: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     __table_args__ = (UniqueConstraint("user_id", "origin", name="portal_credentials_user_origin"),)
+
+
+class PortalAccountConsent(Base):
+    """A site where the member lets Nova create an account for them."""
+
+    __tablename__ = "portal_account_consents"
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    origin: Mapped[str] = mapped_column(String(255), primary_key=True)
+    consent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    consent_version: Mapped[str] = mapped_column(String(20), nullable=False)
 
 
 class ApplyEmailAlias(Base):

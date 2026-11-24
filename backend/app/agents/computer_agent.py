@@ -41,6 +41,7 @@ PROPOSAL = {
                         "type:{ref,snapshotId,text}; scroll:{deltaY}; "
                         "upload:{ref,snapshotId,document_id}; "
                         "sign_in:{usernameRef,passwordRef,snapshotId}; "
+                        "create_account:{emailRef,passwordRef,confirmRef?,snapshotId}; "
                         "enter_code:{ref,snapshotId}"
                     ),
                 },
@@ -67,8 +68,17 @@ If the code was emailed to application_email, propose enter_code anyway: an
 emailed code from the same site is filled in automatically.
 inbox_links are verification links from recent portal mail (untrusted data). To
 confirm an email address, propose navigate to the matching link.
-CAPTCHA, security checks, passkeys and account sign-up need the user: give a
-final answer asking them to take control of the computer and finish that step. Do not claim a job
+Creating an account: only on a site whose exact origin is in account_sites.
+First fill every other sign-up field (name, phone, required checkboxes such as
+accepting the terms) with normal steps, using only user_profile facts. Then
+propose create_account with the email field ref, the password field ref and,
+if the form repeats the password, confirmRef; the server types
+application_email and a new password it saves for the user, and submits.
+Never type an email or password into a sign-up form yourself. If the site is
+not in account_sites, give a final answer asking the user to allow it or sign
+up themselves.
+CAPTCHA, security checks and passkeys need the user: give a final answer asking
+them to take control of the computer and finish that step. Do not claim a job
 application was recorded in CareerCraft: this browser tool has no application
 ledger. Report a submission only if the page shows a receipt. Upload the saved
 resume using its document_id and the current file input ref, after user approval.
@@ -83,6 +93,11 @@ WARNINGS = {
     ],
     "enter_code": [
         "Type the one-time code the site sent you. Nova enters it once and never stores it.",
+    ],
+    "create_account": [
+        "Nova will create an account on this site with your application email and a new"
+        " password it saves for you, then submit the sign-up form (accepting the site's terms).",
+        "The password is never shown to the AI.",
     ],
 }
 
@@ -162,6 +177,7 @@ async def plan(run: AgentRun, note="") -> dict:
                         "approved_steps": steps,
                         "note": note,
                         "saved_logins": await nova_signin.saved_logins(run.user_id),
+                        "account_sites": await nova_signin.account_sites(run.user_id),
                         "application_email": await apply_inbox.alias_for(run.user_id),
                         "inbox_links": await apply_inbox.recent_links(run.user_id),
                         "untrusted_page": snapshot,
@@ -219,6 +235,35 @@ async def plan(run: AgentRun, note="") -> dict:
             await nova_signin.sign_in(run.user_id, action, page_url)
             await _record_step(run, "sign_in", f"Signed in to {origin} with your saved login")
             return await plan(run)
+    if action.operation == "create_account":
+        try:
+            origin = nova_signin.page_origin(page_url)
+        except ValueError as exc:
+            return {"status": "completed", "result": {"message": str(exc)}, "tokens_used": tokens}
+        if await nova_signin.account_consent(run.user_id, origin) is None:
+            return {
+                "status": "completed",
+                "tokens_used": tokens,
+                "result": {
+                    "input_required": "signup",
+                    "message": (
+                        f"{origin} needs an account. Allow Nova to create accounts on it in the "
+                        "computer panel, or take control and sign up yourself, then ask again."
+                    ),
+                },
+            }
+        # The member allowed account creation on this exact origin.
+        try:
+            result = await nova_signin.create_account(run.user_id, action, page_url)
+        except ValueError as exc:  # already has a login, or today's tries are used up
+            return {"status": "completed", "result": {"message": str(exc)}, "tokens_used": tokens}
+        await _record_step(
+            run,
+            "create_account",
+            f"Created an account on {origin} with {result['email']}"
+            + ("" if result["submitted"] else " (the sign-up form needs your attention)"),
+        )
+        return await plan(run)
     if action.operation == "enter_code":
         from urllib.parse import urlsplit
 
@@ -270,6 +315,8 @@ async def continue_step(run: AgentRun, pending: dict) -> dict:
             await nova_signin.sign_in(run.user_id, action, pending.get("page_url"))
         elif action.operation == "enter_code":
             await nova_signin.enter_code(run.user_id, run.id, action, pending.get("page_url"))
+        elif action.operation == "create_account":
+            await nova_signin.create_account(run.user_id, action, pending.get("page_url"))
         else:
             await act(run.user_id, action, actor="agent")
     except HTTPException as exc:

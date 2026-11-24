@@ -61,8 +61,11 @@ PARAMETERS = {
     # Nova's private steps (see nova_signin): refs only, never a secret.
     "sign_in": {"usernameRef", "passwordRef", "snapshotId"},
     "enter_code": {"ref", "snapshotId"},
+    # confirmRef is optional: not every signup form repeats the password.
+    "create_account": {"emailRef", "passwordRef", "confirmRef", "snapshotId"},
 }
-NOVA_STEPS = {"sign_in", "enter_code"}
+NOVA_STEPS = {"sign_in", "enter_code", "create_account"}
+OPTIONAL = {"files/list": {"path"}, "create_account": {"confirmRef"}}
 # The extension drives one agent tab; anything else stays cloud-only.
 BROWSER_OPERATIONS = {
     "navigate",
@@ -106,9 +109,7 @@ class ComputerAction(BaseModel):
             raise ValueError("This operation is not available")
         if set(self.parameters) - PARAMETERS[self.operation]:
             raise ValueError("Unexpected computer action parameters")
-        required = PARAMETERS[self.operation] - (
-            {"path"} if self.operation == "files/list" else set()
-        )
+        required = PARAMETERS[self.operation] - OPTIONAL.get(self.operation, set())
         if not required.issubset(self.parameters):
             raise ValueError("Required computer action parameters are missing")
         if self.operation in {"click", "type", "upload"}:
@@ -119,11 +120,13 @@ class ComputerAction(BaseModel):
             ):
                 raise ValueError("Use the current computer run, snapshotId and element ref")
         if self.operation in NOVA_STEPS:
-            refs = (
-                [self.parameters.get("usernameRef"), self.parameters.get("passwordRef")]
-                if self.operation == "sign_in"
-                else [self.parameters.get("ref")]
-            )
+            names = {
+                "sign_in": ["usernameRef", "passwordRef"],
+                "enter_code": ["ref"],
+                "create_account": ["emailRef", "passwordRef"]
+                + (["confirmRef"] if "confirmRef" in self.parameters else []),
+            }[self.operation]
+            refs = [self.parameters.get(name) for name in names]
             if (
                 not self.computer_run
                 or not isinstance(self.parameters.get("snapshotId"), int)
