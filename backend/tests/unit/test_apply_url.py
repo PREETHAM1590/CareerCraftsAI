@@ -41,6 +41,7 @@ def test_ats_pages_and_login_boards_are_never_fetched():
         "https://boards.greenhouse.io/acme/jobs/1",
         "https://www.linkedin.com/jobs/view/1",
         "https://www.naukri.com/job-listings-x",
+        "https://internshala.com/internship/detail/python-internship-at-acme123",
     ):
         assert asyncio.run(resolve_original_apply_url(url, boom)) == url
 
@@ -59,3 +60,6 @@ def test_more_ats_platforms_are_recognised():
     assert detect_platform("https://jobs.smartrecruiters.com/Acme/1") == "smartrecruiters"
     assert detect_platform("https://apply.workable.com/acme/j/1") == "workable"
     assert detect_platform("https://acme.myworkdayjobs.com/en/x") == "workday"
+    assert detect_platform("https://internshala.com/job/detail/python-developer-job-at-acme1") == (
+        "internshala"
+    )

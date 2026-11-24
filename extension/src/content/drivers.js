@@ -795,6 +795,46 @@
   const darwinboxCfg = formPortalCfg("Darwinbox", 'a[href*="apply"], button[class*="apply"]');
   const kekaCfg = formPortalCfg("Keka", 'a[href*="apply"], button[class*="apply"]');
 
+  // Internshala: job page "Apply now" → an in-between page ("Proceed to
+  // application") → one form with a cover letter, availability and the
+  // employer's own questions. It applies with the student's Internshala
+  // profile, so the form has no email field and the generic detector would
+  // miss it. Signed-out pages (login page or modal, "Continue with Google")
+  // go to the member; CareerCraft never signs in for them.
+  const INTERNSHALA_SUCCESS_RE =
+    /application (has been |was )?(successfully )?submitted|applied successfully|you have (successfully )?applied/i;
+  const INTERNSHALA_PROCEED_RE = /^(proceed( to application)?|continue to application|apply now)$/i;
+  const internshalaCfg = {
+    label: "Internshala",
+    success: INTERNSHALA_SUCCESS_RE,
+    stepDelay: [900, 1300],
+    loginMessage: "Sign in to Internshala in this tab (or use Continue with Google there), then press Continue. CareerCraft never sees your password.",
+    signedOut() {
+      if (/^\/(login|registration|student\/login)/i.test(location.pathname)) return true;
+      if (visibleOne("#login-modal, #modal_login, .login-modal")) return true;
+      const cta = visibleOne(".top_apply_now_cta");
+      return !!cta && /continue with google/i.test(dom.textOf(cta)) && !internshalaCfg.findRoot();
+    },
+    findRoot() {
+      if (!/\/(application|interstitial)\b/i.test(location.pathname)) return null;
+      return (
+        Array.from(document.forms).find((f) => {
+          if (!dom.isVisible(f)) return false;
+          if (/search|login|signin|newsletter/.test((f.getAttribute("action") || "").toLowerCase())) return false;
+          return dom.deepQueryAll(f, "textarea, input[type=radio]").some((e) => dom.isVisible(e));
+        }) || null
+      );
+    },
+    findPrimary: (root) => primaryFrom(dom.deepQueryAll(root, ANY_BUTTON)),
+    async enter(ctx) {
+      const proceed = Array.from(document.querySelectorAll("button, a[href], [role=button]")).find(
+        (b) => dom.isVisible(b) && !b.disabled && INTERNSHALA_PROCEED_RE.test(buttonLabel(b))
+      );
+      const apply = visibleOne("a.apply_now_button, button.apply_now_btn") || proceed || findApplyControl();
+      return apply ? clickThrough(ctx, apply, () => internshalaCfg.findRoot() || internshalaCfg.signedOut()) : null;
+    },
+  };
+
   async function ensureSignedIn(ctx, cfg) {
     for (let attempt = 0; attempt < 5 && cfg.signedOut(); attempt++) {
       await ctx.api.event("login_required", { message: cfg.loginMessage });
@@ -926,6 +966,7 @@
   const successFactorsDriver = makeAtsDriver(successFactorsCfg);
   const darwinboxDriver = makeAtsDriver(darwinboxCfg);
   const kekaDriver = makeAtsDriver(kekaCfg);
+  const internshalaDriver = makeAtsDriver(internshalaCfg);
 
   // ── Selection ────────────────────────────────────────────────────────────
 
@@ -943,6 +984,7 @@
     if (/(^|\.)successfactors\.(com|eu)$/.test(host) || platform === "successfactors") return "successfactors";
     if (/(^|\.)darwinbox\.(in|com)$/.test(host) || platform === "darwinbox") return "darwinbox";
     if (/(^|\.)keka\.com$/.test(host) || platform === "keka") return "keka";
+    if (/(^|\.)internshala\.com$/.test(host) || platform === "internshala") return "internshala";
     return null;
   }
 
@@ -955,6 +997,7 @@
     successfactors: successFactorsDriver,
     darwinbox: darwinboxDriver,
     keka: kekaDriver,
+    internshala: internshalaDriver,
   };
 
   function select(task) {
@@ -969,10 +1012,18 @@
   async function confirmAfterNavigation(ctx) {
     const platform = (ctx.task && ctx.task.platform) || "";
     const regex =
-      platform === "linkedin" ? LINKEDIN_CONFIRM_RE : platform === "naukri" ? NAUKRI_SUCCESS_RE : atsKey(ctx.task) ? ATS_SUCCESS_RE : GENERIC_SUCCESS_RE;
+      platform === "linkedin"
+        ? LINKEDIN_CONFIRM_RE
+        : platform === "naukri"
+          ? NAUKRI_SUCCESS_RE
+          : atsKey(ctx.task) === "internshala"
+            ? INTERNSHALA_SUCCESS_RE
+            : atsKey(ctx.task)
+              ? ATS_SUCCESS_RE
+              : GENERIC_SUCCESS_RE;
     const result = await waitForConfirmation(ctx, regex, 15000);
     await reportConfirmationResult(ctx, result, "The page after submitting does not show a confirmation.");
   }
 
-  window.CareerCraftDrivers = { select, confirmAfterNavigation, genericDriver, linkedinDriver, naukriDriver, workdayDriver, smartRecruitersDriver, workableDriver, icimsDriver, taleoDriver, successFactorsDriver, darwinboxDriver, kekaDriver, NAVIGATING };
+  window.CareerCraftDrivers = { select, confirmAfterNavigation, genericDriver, linkedinDriver, naukriDriver, workdayDriver, smartRecruitersDriver, workableDriver, icimsDriver, taleoDriver, successFactorsDriver, darwinboxDriver, kekaDriver, internshalaDriver, NAVIGATING };
 })();
