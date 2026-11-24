@@ -12,6 +12,8 @@ from app.api.v1 import extension
 from app.api.v1.deps import get_db
 from app.models.db import ApplicationAttempt, ExtensionDevice, ExtensionTask
 
+MANUAL_APPROVAL = {"review_hash": "a" * 64, "user_confirmed": True, "auto_approved": False}
+
 
 @pytest.fixture
 def gate(monkeypatch):
@@ -53,16 +55,12 @@ async def test_approval_once_and_capability_required(gate):
         )
         assert bypass.status_code == 409
         signal.assert_not_awaited()
-        approved = await client.post(
-            prefix + "/approve-submit", json={"review_hash": "a" * 64, "user_confirmed": True}
-        )
+        approved = await client.post(prefix + "/approve-submit", json=MANUAL_APPROVAL)
         assert approved.status_code == 200
         token = approved.json()["submission_token"]
         assert task.submission_token_hash != token
         assert attempt.state == "submitting"
-        repeated = await client.post(
-            prefix + "/approve-submit", json={"review_hash": "a" * 64, "user_confirmed": True}
-        )
+        repeated = await client.post(prefix + "/approve-submit", json=MANUAL_APPROVAL)
         assert repeated.status_code == 409
         bad_token = await client.post(
             prefix + "/events",
@@ -104,7 +102,7 @@ async def test_expired_review_cannot_approve(gate):
     ) as client:
         response = await client.post(
             f"/extension/device/tasks/{task.id}/approve-submit",
-            json={"review_hash": "a" * 64, "user_confirmed": True},
+            json=MANUAL_APPROVAL,
         )
     assert response.status_code == 409
     assert attempt.state == "awaiting_approval"
@@ -210,9 +208,7 @@ async def test_failed_signal_lets_extension_retry_the_outcome(gate):
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
-        approved = await client.post(
-            prefix + "/approve-submit", json={"review_hash": "a" * 64, "user_confirmed": True}
-        )
+        approved = await client.post(prefix + "/approve-submit", json=MANUAL_APPROVAL)
         event = {
             "stage": "submitted",
             "submission_token": approved.json()["submission_token"],
@@ -227,3 +223,23 @@ async def test_failed_signal_lets_extension_retry_the_outcome(gate):
         assert retried.status_code == 200
         assert task.submission_reported_at
         assert signal.await_args.args[1]["details"]["submit_attempted"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,refused", [("submitting", True), ("review", False)])
+async def test_cancel_is_refused_while_the_submit_click_may_be_happening(gate, status, refused):
+    from fastapi import HTTPException
+
+    _, task, _, signal = gate
+    task.status = status
+    db = MagicMock()
+    db.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=task)))
+    call = extension.cancel_task(task.id, db=db, current_user=MagicMock(id=task.user_id))
+    if refused:
+        with pytest.raises(HTTPException) as exc:
+            await call
+        assert exc.value.status_code == 409
+        signal.assert_not_awaited()
+    else:
+        assert await call == {"status": "cancelling"}
+        signal.assert_awaited_once()

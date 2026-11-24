@@ -10,390 +10,7 @@ from app.core.sync_db import run_coro_sync
 from app.services.job_search_service import search_all_platforms
 
 logger = logging.getLogger(__name__)
-# Per-source timeout: 20s is enough for HTTP APIs; JobSpy / browser-use sources
-# have their own per-call timeout in their respective wrappers.  Reduced from
-# 45s on 2026-06-05 — the agent now has 5+ new fast sources (Himalayas, The
-# Muse, Ashby, etc.) so any single slow source can fail fast and we move on.
 REMOTEOK_API_URL = "https://remoteok.com/api"
-GREENHOUSE_BOARDS = (
-    "airbnb",
-    "stripe",
-    "databricks",
-    "doordashusa",
-    "figma",
-    "gitlab",
-    "grammarly",
-    "notion",
-    "ramp",
-    "rippling",
-    "robinhood",
-    "scaleai",
-)
-LEVER_COMPANIES = (
-    "ashby",
-    "benchling",
-    "chime",
-    "coursera",
-    "netflix",
-    "reddit",
-    "shopify",
-    "zapier",
-)
-
-# --- New ATS public-API client lists (added 2026-06-05) --------------------
-# These are real, public, keyless endpoints — every company on these lists has
-# a public job board that returns JSON. We expand from 20 to 350+ companies
-# so the ATS source alone returns thousands of real jobs.
-GREENHOUSE_BOARDS = (
-    # Tech / SaaS
-    "airbnb",
-    "stripe",
-    "databricks",
-    "doordashusa",
-    "figma",
-    "gitlab",
-    "grammarly",
-    "notion",
-    "ramp",
-    "rippling",
-    "robinhood",
-    "scaleai",
-    "anthropic",
-    "openai",
-    "vercel",
-    "supabase",
-    "linear",
-    "retool",
-    "segment",
-    "mux",
-    "cloudflare",
-    "fastly",
-    "hashicorp",
-    "snowflake",
-    "cockroachdb",
-    "planetscale",
-    "mongodb",
-    "elastic",
-    "confluent",
-    "materialize",
-    "timescale",
-    "neon",
-    "turso",
-    "railway",
-    "fly",
-    "render",
-    "deno",
-    "convex",
-    "inngest",
-    "trigger",
-    "temporal",
-    "sentry",
-    "datadog",
-    "newrelic",
-    "grafana",
-    "pagerduty",
-    "launchdarkly",
-    "statsig",
-    "split",
-    "optimizely",
-    "pendo",
-    "appcues",
-    # Consumer
-    "duolingo",
-    "coinbase",
-    "robinhood",
-    "gemini",
-    "kraken",
-    "ramp",
-    "mercury",
-    "brex",
-    "affirm",
-    "klarna",
-    "wise",
-    "revolut",
-    "instacart",
-    "doordash",
-    "ubereats",
-    "grubhub",
-    "wayfair",
-    "etsy",
-    "pinterest",
-    "snap",
-    "bytedance",
-    "discord",
-    "twitch",
-    "roblox",
-    # Fintech / B2B
-    "plaid",
-    "moderntreasury",
-    "ramp",
-    "wisedragon",
-    "checkr",
-    "personio",
-    "deel",
-    "remote",
-    "gusto",
-    "justworks",
-    "rippling",
-    "greenhouse",
-    "lever",
-    "ashbyhq",
-    "workable",
-    "bamboohr",
-    # Dev tools
-    "github",
-    "gitlab",
-    "bitbucket",
-    "snyk",
-    "sonatype",
-    "jfrog",
-    "circleci",
-    "buildkite",
-    "githubactions",
-    "semaphore",
-    "drone",
-    # Health / Bio
-    "ro",
-    "hims",
-    "modernhealth",
-    "springhealth",
-    "headway",
-    "talkspace",
-    # Mobility
-    "uber",
-    "lyft",
-    "waymo",
-    "cruise",
-    "nuro",
-    "zoox",
-    "motional",
-    "bird",
-    "lime",
-    "spin",
-    "helbiz",
-    # Enterprise
-    "salesforce",
-    "hubspot",
-    "zendesk",
-    "intercom",
-    "freshworks",
-    "atlassian",
-    "slack",
-    "dropbox",
-    "box",
-    "docusign",
-    "okta",
-    "auth0",
-    "twilio",
-    "sendgrid",
-    "mailgun",
-    "postmark",
-    "klaviyo",
-    # AI / ML
-    "anthropic",
-    "openai",
-    "cohere",
-    "huggingface",
-    "replicate",
-    "stability",
-    "midjourney",
-    "runway",
-    "jasper",
-    "character",
-    "perplexity",
-    "mistral",
-    "anyscale",
-    "together",
-    "fireworks",
-    "weightsandbiases",
-    "labelbox",
-    "scale",
-    "surge",
-    "defined",
-    # Indian tech
-    "razorpay",
-    "phonepe",
-    "cred",
-    "zerodha",
-    "groww",
-    "meesho",
-    "swiggy",
-    "zomato",
-    "flipkart",
-    "paytm",
-    "ola",
-    "rapido",
-    "byjus",
-    "unacademy",
-    "vedantu",
-    "upgrad",
-    "simplilearn",
-    "freshworks",
-    "zoho",
-    "infosys",
-    "tcs",
-    "wipro",
-    "hcl",
-)
-
-LEVER_COMPANIES = (
-    "ashby",
-    "benchling",
-    "chime",
-    "coursera",
-    "netflix",
-    "reddit",
-    "shopify",
-    "zapier",
-    "atlassian",
-    "canva",
-    "doximity",
-    "duolingo",
-    "eventbrite",
-    "faire",
-    "flexport",
-    "gusto",
-    "handshake",
-    "hopin",
-    "kwai",
-    "lattice",
-    "loom",
-    "maven",
-    "miro",
-    "mongodb",
-    "mural",
-    "nextdoor",
-    "olacabs",
-    "olx",
-    "opendoor",
-    "outschool",
-    "pagerduty",
-    "peloton",
-    "plaid",
-    "postman",
-    "quora",
-    "retool",
-    "riverside",
-    "segment",
-    "sentry",
-    "tiktok",
-    "triplebyte",
-    "truecaller",
-    "udemy",
-    "vimeo",
-    "wealthfront",
-    "yelp",
-    "zola",
-    "zylo",
-)
-
-# Ashby — public job board JSON endpoint (no auth).
-ASHBY_COMPANIES = (
-    "linear",
-    "notion",
-    "ramp",
-    "retool",
-    "vanta",
-    "drata",
-    "linear",
-    "mercury",
-    "brex",
-    "ramp",
-    "gusto",
-    "rippling",
-    "checkr",
-    "deel",
-    "remote",
-    "personio",
-    "kandji",
-    "jumpcloud",
-    "1password",
-    "bitwarden",
-    "okta",
-    "auth0",
-    "snyk",
-    "sonatype",
-    "hashicorp",
-    "spacelift",
-    "env0",
-    "atlantis",
-    "firefly",
-    "anaconda",
-    "weightsandbiases",
-    "neptune",
-    "arize",
-    "why labs",
-    "quivr",
-    "dust",
-    "glean",
-    "chrono24",
-    "tessian",
-    "perplexity",
-    "character",
-    "replit",
-    "cursor",
-    "codeium",
-    "continue",
-    "aider",
-    "sweep",
-    "dust",
-    "factory",
-    "resend",
-    "postmark",
-    "mailgun",
-    "frontapp",
-    "helpscout",
-    "tars",
-    "voiceflow",
-    "typeform",
-    "fillout",
-    "tally",
-)
-
-# SmartRecruiters — public job board JSON endpoint (no auth).
-SMARTRECRUITERS_COMPANIES = (
-    "visa",
-    "mastercard",
-    "uber",
-    "bosch",
-    "siemens",
-    "sap",
-    "ikea",
-    "ikea-sweden",
-    "spotify",
-    "skyscanner",
-    "klarna",
-    "king",
-    "mcdonalds",
-    "pizza-hut",
-    "burger-king",
-    "wendys",
-    "marriott",
-    "hilton",
-    "hyatt",
-    "airbnb-inc",
-    "expedia",
-    "salesforce",
-    "redhat",
-    "vmware",
-    "citrix",
-    "nutanix",
-    "deloitte",
-    "pwc",
-    "kpmg",
-    "ey",
-    "accenture",
-    "unilever",
-    "pg",
-    "nestle",
-    "cocacola",
-    "pepsi",
-    "abbvie",
-    "amgen",
-    "gilead",
-    "regeneron",
-    "vertex",
-)
 
 SCORE_PROMPT = """Rate how well this job matches the candidate profile. Return ONLY a number 0-100.
 
@@ -424,7 +41,7 @@ def _domain_of(url: str) -> str:
     try:
         from urllib.parse import urlparse
 
-        host = urlparse(url).netloc.lower().lstrip("www.")
+        host = urlparse(url).netloc.lower().removeprefix("www.")
         return host.split(":")[0] or "Unknown"
     except Exception:
         return "Unknown"
@@ -538,26 +155,6 @@ def _matches_query(job: dict, query: str) -> bool:
     return any(term in haystack for term in terms)
 
 
-def _matches_work_mode(job: dict, work_mode: str, location: str) -> bool:
-    modes = [item.strip().lower() for item in (work_mode or "").split(",") if item.strip()]
-    if len(modes) > 1:
-        return any(_matches_work_mode(job, mode, location) for mode in modes)
-    mode = modes[0] if modes else ""
-    loc = (job.get("location") or "").lower()
-    desired_location = (location or "").lower()
-    if mode == "remote":
-        return "remote" in loc or desired_location == "remote"
-    if mode == "hybrid":
-        return "hybrid" in loc or (
-            desired_location not in {"", "any", "remote"} and desired_location in loc
-        )
-    if mode == "onsite":
-        return "remote" not in loc and (desired_location in {"", "any"} or desired_location in loc)
-    if desired_location not in {"", "any", "remote"}:
-        return desired_location in loc or "remote" in loc
-    return True
-
-
 def _dedupe_jobs(jobs: list[dict], max_results: int) -> list[dict]:
     seen: set[str] = set()
     unique: list[dict] = []
@@ -570,75 +167,6 @@ def _dedupe_jobs(jobs: list[dict], max_results: int) -> list[dict]:
         if len(unique) >= max_results:
             break
     return unique
-
-
-def _search_public_ats_jobs(
-    query: str,
-    location: str,
-    max_results: int,
-    work_mode: str = "",
-) -> list[dict]:
-    """Tier-2: parallelized fan-out across 400+ public ATS boards.
-
-    Sources: Greenhouse (180), Lever (48), Ashby (59), SmartRecruiters (41),
-    Workday (60), BambooHR (40). 20-worker ThreadPoolExecutor with 30s overall
-    timeout. Per-board timeout of 8s inside the httpx client. Bad boards
-    (404 / rate limit) are silently skipped; a single dead company never
-    blocks the others.
-
-    iCIMS and Taleo are HTML-only, so they are covered by the Google-dork
-    strategy in ``_search_via_google_dorks`` (``site:jobs.icims.com``,
-    ``site:taleo.net`` dorks) — see ``search_presets.GOOGLE_DORKS``.
-    """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    jobs: list[dict] = []
-    with httpx.Client(headers={"User-Agent": "CareerCraftAI/1.0"}, timeout=8) as client:
-
-        def _gh(b):
-            return _search_greenhouse_board(client, b)
-
-        def _lv(c):
-            return _search_lever_company(client, c)
-
-        def _ab(c):
-            return _search_ashby_jobs(client, c)
-
-        def _sr(c):
-            return _search_smartrecruiters_jobs(client, c)
-
-        def _wd(t):
-            return _search_workday_company(client, t)
-
-        def _bh(t):
-            return _search_bamboohr_company(client, t)
-
-        with ThreadPoolExecutor(max_workers=20) as pool:
-            futures = []
-            for board in GREENHOUSE_BOARDS:
-                futures.append(pool.submit(_gh, board))
-            for company in LEVER_COMPANIES:
-                futures.append(pool.submit(_lv, company))
-            for company in ASHBY_COMPANIES:
-                futures.append(pool.submit(_ab, company))
-            for company in SMARTRECRUITERS_COMPANIES:
-                futures.append(pool.submit(_sr, company))
-            for tenant in WORKDAY_TENANTS:
-                futures.append(pool.submit(_wd, tenant))
-            for tenant in BAMBOOHR_TENACTS:
-                futures.append(pool.submit(_bh, tenant))
-            for fut in as_completed(futures, timeout=30):
-                try:
-                    jobs.extend(fut.result() or [])
-                except Exception as exc:
-                    logger.debug("ATS future failed: %s", exc)
-
-    filtered = [
-        job
-        for job in jobs
-        if _matches_query(job, query) and _matches_work_mode(job, work_mode, location)
-    ]
-    return _dedupe_jobs(filtered, max_results)
 
 
 def _strip_html(text: str) -> str:
@@ -867,342 +395,6 @@ def _search_4dayweek_jobs(client: httpx.Client, query: str, max_results: int) ->
 
 
 # ---------------------------------------------------------------------------
-# Tier-2 expanded ATS public-API clients (added 2026-06-05)
-# Greenhouse / Lever / Ashby / SmartRecruiters all have keyless JSON endpoints.
-# ---------------------------------------------------------------------------
-
-
-def _search_greenhouse_board(client: httpx.Client, board: str) -> list[dict]:
-    """Public Greenhouse board — https://boards-api.greenhouse.io/v1/boards/{board}/jobs"""
-    r = client.get(
-        f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs", params={"content": "true"}
-    )
-    r.raise_for_status()
-    out: list[dict] = []
-    for j in (r.json() or {}).get("jobs", []) or []:
-        out.append(
-            {
-                "title": j.get("title", ""),
-                "company": board,
-                "location": (j.get("location") or {}).get("name", ""),
-                "description": _strip_html(j.get("content", ""))[:600],
-                "job_url": j.get("absolute_url", ""),
-                "platform": "greenhouse",
-            }
-        )
-    return out
-
-
-def _search_lever_company(client: httpx.Client, company: str) -> list[dict]:
-    """Public Lever postings — https://api.lever.co/v0/postings/{company}?mode=json"""
-    r = client.get(f"https://api.lever.co/v0/postings/{company}", params={"mode": "json"})
-    r.raise_for_status()
-    out: list[dict] = []
-    for j in r.json() or []:
-        out.append(
-            {
-                "title": j.get("text", ""),
-                "company": company,
-                "location": (j.get("categories") or {}).get("location", ""),
-                "description": _strip_html(
-                    (j.get("description") or "") + " " + (j.get("lists") or [{}])[0].get("text", "")
-                )[:600],
-                "job_url": j.get("hostedUrl", "") or j.get("applyUrl", ""),
-                "platform": "lever",
-            }
-        )
-    return out
-
-
-def _search_ashby_jobs(client: httpx.Client, company: str) -> list[dict]:
-    """Public Ashby job board — GraphQL endpoint at jobs.ashbyhq.com (no auth)."""
-    try:
-        r = client.post(
-            "https://jobs.ashbyhq.com/api/non-user-graphql",
-            json={
-                "query": """query JobBoard($hostname: String!) {
-                  jobBoard(hostname: $hostname) {
-                    jobs { id title locationName departmentName
-                           descriptionHtml applyUrl }
-                  }
-                }""",
-                "variables": {"hostname": f"{company}.jobs.ashbyhq.com"},
-                "operationName": "JobBoard",
-            },
-            timeout=10,
-        )
-        r.raise_for_status()
-        board = ((r.json() or {}).get("data") or {}).get("jobBoard") or {}
-        jobs_raw = board.get("jobs") or []
-    except Exception as exc:
-        logger.debug("Ashby %s failed: %s", company, exc)
-        return []
-    out: list[dict] = []
-    for j in jobs_raw:
-        out.append(
-            {
-                "title": j.get("title", ""),
-                "company": company,
-                "location": j.get("locationName", ""),
-                "description": _strip_html(j.get("descriptionHtml", ""))[:600],
-                "job_url": j.get("applyUrl", ""),
-                "platform": "ashby",
-            }
-        )
-    return out
-
-
-def _search_smartrecruiters_jobs(client: httpx.Client, company: str) -> list[dict]:
-    """Public SmartRecruiters postings — https://api.smartrecruiters.com/v1/companies/{company}/postings"""
-    try:
-        r = client.get(
-            f"https://api.smartrecruiters.com/v1/companies/{company}/postings", params={"limit": 50}
-        )
-        r.raise_for_status()
-        items = (r.json() or {}).get("content", []) or []
-    except Exception as exc:
-        logger.debug("SmartRecruiters %s failed: %s", company, exc)
-        return []
-    out: list[dict] = []
-    for j in items:
-        loc_obj = j.get("location") or {}
-        loc = ", ".join(
-            p for p in (loc_obj.get("city"), loc_obj.get("region"), loc_obj.get("country")) if p
-        )
-        out.append(
-            {
-                "title": j.get("name", ""),
-                "company": company,
-                "location": loc or "—",
-                "description": _strip_html(
-                    j.get("jobAd", {}).get("sections", {}).get("companyDescription", "")
-                )[:600],
-                "job_url": j.get("ref", "")
-                and f"https://jobs.smartrecruiters.com/{company}/{j['ref']}",
-                "platform": "smartrecruiters",
-            }
-        )
-    return out
-
-
-# ---------------------------------------------------------------------------
-# Tier-2 expanded ATS public-API clients — Part 2 (added 2026-06-05)
-# Workday, BambooHR — both have keyless public JSON endpoints. iCIMS and
-# Taleo are HTML-only, so they're handled by the dork strategy in
-# ``_search_via_google_dorks`` via ``site:jobs.icims.com`` / ``site:taleo.net``.
-# ---------------------------------------------------------------------------
-
-# Common Workday tenants (major companies using Workday for hiring).
-# Pattern: https://{tenant}.wd{N}.myworkdaysite.com/en-US/external/search
-WORKDAY_TENANTS = (
-    "nvidia",
-    "salesforce",
-    "apple",
-    "walmart",
-    "target",
-    "disney",
-    "pepsico",
-    "visa",
-    "mastercard",
-    "jpmorgan",
-    "goldmansachs",
-    "morganstanley",
-    "citi",
-    "wellsfargo",
-    "bankofamerica",
-    "amex",
-    "capitalone",
-    "accenture",
-    "deloitte",
-    "pwc",
-    "kpmg",
-    "ey",
-    "mckinsey",
-    "bain",
-    "lockheedmartin",
-    "boeing",
-    "raytheon",
-    "northropgrumman",
-    "generalelectric",
-    "3m",
-    "honeywell",
-    "caterpillar",
-    "johndeere",
-    "dow",
-    "dupont",
-    "jnj",
-    "pfizer",
-    "merck",
-    "abbvie",
-    "bristolmyers",
-    "lilly",
-    "gsk",
-    "abbott",
-    "medtronic",
-    "bostonscientific",
-    "stryker",
-    "exxonmobil",
-    "conocophillips",
-    "chevron",
-    "valero",
-    "phillips66",
-    "fedex",
-    "ups",
-    "dhl",
-    "amazon",
-    "alphabet",
-    "microsoft",
-    "meta",
-    "netflix",
-    "spotify",
-    "uber",
-    "lyft",
-    "airbnb",
-    "doordash",
-    "instacart",
-)
-
-# Common BambooHR tenants (public JSON at /jobs/list.json).
-BAMBOOHR_TENACTS = (
-    "taxfix",
-    "primer-io",
-    "babylonhealth",
-    "glovo",
-    "wefox",
-    "tessian",
-    "solarwinds",
-    "mongodb",
-    "skyscanner",
-    "trustpilot",
-    "asos",
-    "olx",
-    "luno",
-    "yoco",
-    "revolut",
-    "wise",
-    "monzo",
-    "starling",
-    "bunq",
-    "n26",
-    "fig",
-    "grafana",
-    "snyk",
-    "sonarqube",
-    "youtrack",
-    "jetbrains-careers",
-    "kotlin",
-    "scala",
-    "warnerbros",
-    "paramount",
-    "sony",
-    "ea",
-    "activision",
-    "zynga",
-    "riot",
-    "epicgames",
-)
-
-
-def _search_workday_company(client: httpx.Client, tenant: str) -> list[dict]:
-    """Public Workday job board — most companies expose JSON via the
-    ``/en-US/external/search`` POST endpoint with a ``searchRequest`` payload.
-
-    Endpoint varies between wd1/wd2/wd3/wd4/wd5 — we try wd5 first (most
-    common in 2026) and walk back. Returns [] for tenants that don't expose
-    JSON (HTML-only tenants require browser-use; the dork strategy covers them).
-    """
-    out: list[dict] = []
-    for wd_idx in (5, 1, 2, 3, 4):
-        url = f"https://{tenant}.wd{wd_idx}.myworkdaysite.com/en-US/external/search"
-        try:
-            r = client.post(
-                url,
-                json={
-                    "appliedFacets": {},
-                    "limit": 20,
-                    "offset": 0,
-                    "searchText": "",
-                },
-                timeout=10,
-            )
-        except Exception as exc:
-            logger.debug("Workday %s wd%d connection failed: %s", tenant, wd_idx, exc)
-            continue
-        if r.status_code != 200:
-            continue
-        try:
-            data = r.json() or {}
-        except Exception:
-            continue
-        # Workday's response shape: {"jobPostings": [{"title":..., "externalPath":..., "locationsText":...}]}
-        for j in data.get("jobPostings") or []:
-            title = j.get("title") or j.get("bulletFields", [""])[0]
-            ext = j.get("externalPath") or ""
-            loc = j.get("locationsText") or j.get("location", "")
-            full_url = (
-                f"https://{tenant}.wd{wd_idx}.myworkdaysite.com/en-US{ext}"
-                if ext.startswith("/")
-                else ext
-            )
-            if not title:
-                continue
-            out.append(
-                {
-                    "title": title,
-                    "company": tenant,
-                    "location": loc,
-                    "description": (j.get("shortDescription") or "")[:600],
-                    "job_url": full_url,
-                    "platform": "workday",
-                }
-            )
-        if out:
-            return out  # one wd_N is enough
-    return out
-
-
-def _search_bamboohr_company(client: httpx.Client, tenant: str) -> list[dict]:
-    """Public BambooHR JSON endpoint — https://{tenant}.bamboohr.com/jobs/list.json
-
-    Returns the full list of public job postings. No auth required.
-    """
-    try:
-        r = client.get(
-            f"https://{tenant}.bamboohr.com/jobs/list.json",
-            timeout=10,
-        )
-    except Exception as exc:
-        logger.debug("BambooHR %s connection failed: %s", tenant, exc)
-        return []
-    if r.status_code != 200:
-        return []
-    try:
-        items = (r.json() or {}).get("result") or []
-    except Exception:
-        return []
-    out: list[dict] = []
-    for j in items:
-        loc_obj = j.get("location") or {}
-        loc = loc_obj.get("city", "")
-        if loc_obj.get("state"):
-            loc = f"{loc}, {loc_obj['state']}" if loc else loc_obj["state"]
-        if loc_obj.get("country"):
-            loc = f"{loc}, {loc_obj['country']}" if loc else loc_obj["country"]
-        out.append(
-            {
-                "title": j.get("title", ""),
-                "company": tenant,
-                "location": loc or "—",
-                "description": (j.get("description", "") or "")[:600],
-                "job_url": j.get("absolute_url", "")
-                or f"https://{tenant}.bamboohr.com/jobs/view.php?id={j.get('id', '')}",
-                "platform": "bamboohr",
-            }
-        )
-    return out
-
-
-# ---------------------------------------------------------------------------
 # Tier-3 general web search — Google/Bing/DDG via 5 providers (added 2026-06-05)
 # Falls back across providers; whichever works first wins.  No key required for
 # DuckDuckGo, Firecrawl; Tavily/Brave/SerpAPI are gated on keys.
@@ -1222,10 +414,9 @@ def _search_via_search_presets(query: str, location: str, max_results: int) -> l
     """Build ready-to-fetch URLs from ``search_presets.SEARCH_PRESETS``.
 
     For each preset whose method is ``fetch`` (RemoteOK, WeWorkRemotely,
-    AI-Jobs.net, Turing, Hugging Face), we issue an HTTP GET. For
-    ``browser_use`` presets we just return the URL as a lead (the caller
-    can choose to scrape it with browser-use). For ``jobspy`` presets we
-    return the URL as a lead (JobSpy scrapes it natively).
+    AI-Jobs.net, Turing, Hugging Face), we issue an HTTP GET and return the
+    postings found. ``browser_use``/``jobspy`` presets are board search pages
+    and are skipped.
     """
     from app.services.search_presets import SEARCH_PRESETS, build_url
 
@@ -1273,18 +464,8 @@ def _search_via_search_presets(query: str, location: str, max_results: int) -> l
                             break
             except Exception as exc:
                 logger.debug("Preset %s failed: %s", preset["name"], exc)
-        else:
-            # browser_use / jobspy: return the URL as a lead.
-            out.append(
-                {
-                    "title": preset["name"],
-                    "company": preset["name"].split(" — ")[0],
-                    "location": location or preset.get("region", ""),
-                    "description": preset.get("notes", ""),
-                    "job_url": url,
-                    "platform": preset.get("method", "preset"),
-                }
-            )
+        # browser_use / jobspy presets are search pages, not postings: a page URL
+        # titled with the board's name is not a job, so it is never returned as one.
     return out
 
 
@@ -1403,7 +584,7 @@ def _search_open_job_apis(
             for j in r.json().get("data") or []:
                 title = j.get("title", "")
                 tags = " ".join(j.get("tags") or [])
-                if not _relevant(f"{title} {tags} {j.get('description','')[:300]}"):
+                if not _relevant(f"{title} {tags} {j.get('description', '')[:300]}"):
                     continue
                 jobs.append(
                     {
@@ -1650,6 +831,30 @@ LEGACY_PLATFORM_MAP = {
     "naukri": "jobspy",
     "shine": "open_apis",
     "freshersworld": "open_apis",
+    # The retired multi-ATS fan-out now reads the same catalog sources.
+    "ats": (
+        "greenhouse",
+        "lever",
+        "ashby",
+        "smartrecruiters",
+        "workday",
+        "bamboohr",
+        "jobvite",
+        "jazzhr",
+        "dover",
+        "paylocity",
+        "successfactors",
+        "taleo",
+        "keka",
+        "freshteam",
+        "zohorecruit",
+        "kula",
+    ),
+    # Indian boards without a public API map onto the sources that do cover
+    # Indian employers; the search notes say the board itself was not read.
+    "foundit": "jobspy",
+    "instahyre": "jobspy",
+    "cutshort": "jobspy",
 }
 
 
@@ -1661,7 +866,8 @@ def _normalize_platforms(platforms: list[str] | None) -> list[str] | None:
         key = (name or "").strip().lower()
         if not key:
             continue
-        mapped.append(LEGACY_PLATFORM_MAP.get(key, key))
+        target = LEGACY_PLATFORM_MAP.get(key, key)
+        mapped.extend(target if isinstance(target, tuple) else (target,))
     seen = list(dict.fromkeys(mapped))
     return seen or None
 
@@ -1738,6 +944,23 @@ def _persist_saved_jobs(user_id: str, scored: list[dict]) -> int:
     return saved
 
 
+def _with_saved_boards(
+    user_id: str, query: dict, jobs: list[dict], warnings: list[str]
+) -> list[dict]:
+    """Add jobs from the member's saved company boards; a failure only adds a warning."""
+    from app.services.job_connectors import merge_duplicates
+    from app.services.saved_boards import search_saved_boards
+
+    try:
+        board_jobs, board_warnings = run_coro_sync(search_saved_boards(user_id, query))
+    except Exception as exc:
+        logger.warning("saved_boards_failed: %s", type(exc).__name__)
+        warnings.append("Saved company boards are unavailable")
+        return jobs
+    warnings.extend(board_warnings)
+    return merge_duplicates(jobs + board_jobs) if board_jobs else jobs
+
+
 def job_search_agent_node(state: AgentState) -> AgentState:
     """Public discovery and selected-resume matching, logged by the existing harness."""
     from app.services.job_matching import rank_jobs
@@ -1754,9 +977,16 @@ def job_search_agent_node(state: AgentState) -> AgentState:
     }
     try:
         emit(run_id, "thinking", {"step": "search", "message": "Searching public job sources"})
-        jobs, warnings = run_coro_sync(
-            search_all_platforms(query, _normalize_platforms(ctx.get("platforms")))
-        )
+        platforms = _normalize_platforms(ctx.get("platforms"))
+        jobs, warnings = run_coro_sync(search_all_platforms(query, platforms))
+        from app.services.indian_platforms_service import INDIAN_PLATFORMS, unavailable_notice
+
+        asked = [str(p).strip().lower() for p in ctx.get("platforms") or []]
+        if unread := [p for p in asked if p in INDIAN_PLATFORMS]:
+            warnings.append(unavailable_notice(unread))
+        if not platforms:
+            # A source the member picked explicitly is searched alone.
+            jobs = _with_saved_boards(user_id, query, jobs, warnings)
         matches, ranking_warnings = run_coro_sync(rank_jobs(user_id, query, jobs))
         warnings.extend(ranking_warnings)
         try:

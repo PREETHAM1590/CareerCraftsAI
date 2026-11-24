@@ -87,11 +87,13 @@ def test_model_router_raises_on_unknown_provider():
     ):
         mock_app_settings.APP_SECRET_KEY = "secret"
         from fastapi.exceptions import HTTPException
+
         with pytest.raises((ValueError, KeyError, AttributeError, HTTPException)):
             _build_llm(s)
 
 
 # ── Regression test: get_llm returns CachingLLM ─────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_get_llm_returns_caching_llm():
@@ -116,17 +118,16 @@ async def test_get_llm_returns_caching_llm():
     mock_db = MagicMock()
     mock_db.execute = AsyncMock(return_value=mock_result)
 
+    session = {"token": "gw-session", "gateway_url": "http://gw/v1", "model": "gpt-4o-mini"}
     # check_budget is imported inside get_llm, so patch at the source module
     with (
         patch("app.services.token_budget_service.check_budget", new=AsyncMock(return_value=10_000)),
-        patch("app.core.model_router.decrypt_api_key", return_value="plaintext-key"),
-        patch("app.core.model_router.settings") as mock_app_settings,
+        patch("app.core.model_router.decrypt_api_key", return_value="plaintext-key") as decrypt,
+        patch("app.core.llm_gateway.create_gateway_session", new=AsyncMock(return_value=session)),
         patch("langchain_openai.ChatOpenAI") as mock_openai_cls,
         patch("app.core.model_router._get_llm_cache") as mock_cache_factory,
         patch("app.core.model_router.get_redaction_callback", return_value=MagicMock()),
     ):
-        mock_app_settings.APP_SECRET_KEY = "secret"
-        mock_app_settings.AGENT_THINKING_BUDGET_TOKENS = 8000
         mock_openai_cls.return_value = MagicMock()
         mock_cache_factory.return_value = MagicMock()
 
@@ -138,6 +139,10 @@ async def test_get_llm_returns_caching_llm():
     )
     assert result._task_type == "resume"
     assert result._user_id == user_id
+    # Through the PII-redacting gateway with a session token, never the key.
+    decrypt.assert_not_called()
+    kwargs = mock_openai_cls.call_args.kwargs
+    assert kwargs["base_url"] == "http://gw/v1" and kwargs["api_key"] == "gw-session"
 
 
 @pytest.mark.asyncio
@@ -160,17 +165,15 @@ async def test_get_llm_default_task_type_is_empty_string():
     mock_db = MagicMock()
     mock_db.execute = AsyncMock(return_value=mock_result)
 
+    session = {"token": "gw-session", "gateway_url": "http://gw/v1", "model": "gpt-4o-mini"}
     # check_budget is imported inside get_llm, so patch at the source module
     with (
         patch("app.services.token_budget_service.check_budget", new=AsyncMock(return_value=10_000)),
-        patch("app.core.model_router.decrypt_api_key", return_value="plaintext-key"),
-        patch("app.core.model_router.settings") as mock_app_settings,
+        patch("app.core.llm_gateway.create_gateway_session", new=AsyncMock(return_value=session)),
         patch("langchain_openai.ChatOpenAI") as mock_openai_cls,
         patch("app.core.model_router._get_llm_cache") as mock_cache_factory,
         patch("app.core.model_router.get_redaction_callback", return_value=MagicMock()),
     ):
-        mock_app_settings.APP_SECRET_KEY = "secret"
-        mock_app_settings.AGENT_THINKING_BUDGET_TOKENS = 8000
         mock_openai_cls.return_value = MagicMock()
         mock_cache_factory.return_value = MagicMock()
 
