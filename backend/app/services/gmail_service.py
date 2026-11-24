@@ -6,8 +6,13 @@ import base64
 from email.message import EmailMessage
 from urllib.parse import quote, urlencode
 
-from app.integrations.exceptions import IntegrationActionError
+from app.integrations.exceptions import ConnectionNotFoundError, IntegrationActionError
 from app.services.integration_proxy_service import proxy_request
+
+# Sending tries the full Gmail connection, then the send-only one. Only a
+# missing or unconfigured connection falls through; a rejection or an
+# unavailable provider never retries on the other (no double sends).
+SEND_PROVIDERS = ("gmail", "gmail_send")
 
 
 class GmailSendError(RuntimeError):
@@ -140,18 +145,25 @@ class GmailMCPClient:
                 content, maintype="application", subtype="pdf", filename=filename
             )
         raw = base64.urlsafe_b64encode(message.as_bytes()).decode().rstrip("=")
-        try:
-            result = proxy_request(
-                user_id=self.user_id,
-                provider="gmail",
-                method="POST",
-                path="gmail/v1/users/me/messages/send",
-                json_data={"raw": raw},
-            )
-        except IntegrationActionError as exc:
-            raise GmailSendError("Gmail rejected the approved message") from exc
-        except Exception as exc:
-            raise GmailSendError("Gmail is not connected through Nango") from exc
+        result = None
+        for provider in SEND_PROVIDERS:
+            try:
+                result = proxy_request(
+                    user_id=self.user_id,
+                    provider=provider,
+                    method="POST",
+                    path="gmail/v1/users/me/messages/send",
+                    json_data={"raw": raw},
+                )
+                break
+            except IntegrationActionError as exc:
+                raise GmailSendError("Gmail rejected the approved message") from exc
+            except (ConnectionNotFoundError, ValueError):
+                continue  # not connected / not configured: try the next one
+            except Exception as exc:
+                raise GmailSendError("Gmail is not connected through Nango") from exc
+        if result is None:
+            raise GmailSendError("Gmail is not connected through Nango")
         if not isinstance(result.data, dict):
             raise GmailSendError("Gmail returned an invalid response")
         return result.data

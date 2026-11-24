@@ -96,20 +96,31 @@ async def _sync_gmail_account_email(
     gateway: IntegrationGateway,
     login_email: str | None,
 ) -> None:
-    if connection.provider != "gmail" or connection.status != "connected":
+    if connection.provider not in {"gmail", "gmail_send"} or connection.status != "connected":
         return
     email = _account_email(connection)
     if not email:
+        # gmail.send cannot read the Gmail profile; the send-only integration
+        # also grants "email", which Google's userinfo endpoint answers.
+        send_only = connection.provider == "gmail_send"
         try:
             profile = await gateway.proxy_request(
                 user_id=current_user.id,
-                provider="gmail",
+                provider=connection.provider,
                 method="GET",
-                path="gmail/v1/users/me/profile",
+                **(
+                    {
+                        "path": "oauth2/v3/userinfo",
+                        "headers": {"Base-Url-Override": "https://www.googleapis.com"},
+                    }
+                    if send_only
+                    else {"path": "gmail/v1/users/me/profile"}
+                ),
             )
         except (ConnectionNotFoundError, IntegrationActionError, ProviderUnavailableError):
             return
-        email = profile.data.get("emailAddress") if isinstance(profile.data, dict) else None
+        field = "email" if send_only else "emailAddress"
+        email = profile.data.get(field) if isinstance(profile.data, dict) else None
         if isinstance(email, str) and email:
             connection.provider_metadata_enc = encrypt_api_key(
                 json.dumps({"account_email": email}), settings.APP_SECRET_KEY
@@ -122,10 +133,10 @@ async def _sync_gmail_account_email(
         and email.casefold() != login_email.casefold()
     ):
         try:
-            await gateway.revoke_connection(user_id=current_user.id, provider="gmail")
+            await gateway.revoke_connection(user_id=current_user.id, provider=connection.provider)
         except ConnectionNotFoundError:
             pass  # Nango has already removed the mismatched connection.
-        await mark_revoked(db, user_id=current_user.id, provider="gmail")
+        await mark_revoked(db, user_id=current_user.id, provider=connection.provider)
 
 
 def _api_error(exc: Exception) -> HTTPException:
@@ -186,7 +197,7 @@ async def list_connections(
     try:
         remote_connections = await gateway.list_connections(user_id=current_user.id)
         login_email = None
-        if any(result.provider == "gmail" for result in remote_connections):
+        if any(result.provider in {"gmail", "gmail_send"} for result in remote_connections):
             login_email = await get_verified_primary_email(current_user.clerk_user_id)
         connections = [
             await sync_connection(db, user_id=current_user.id, result=result)

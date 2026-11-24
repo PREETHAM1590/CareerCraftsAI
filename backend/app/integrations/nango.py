@@ -89,6 +89,7 @@ class NangoIntegrationGateway(IntegrationGateway):
         result: list[IntegrationConnectionResult] = []
         for provider in (
             "gmail",
+            "gmail_send",
             "google_drive",
             "google_calendar",
             "outlook_mail",
