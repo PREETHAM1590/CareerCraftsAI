@@ -108,6 +108,9 @@ def test_internship_mode_keeps_only_internships():
         ("India", ""),
         ("", ""),
         ("Navi Mumbai", "navi-mumbai"),
+        ("Remote, Bangalore", "remote"),
+        ("Mangalore, Karnataka", "mangalore"),
+        ("Guwahati", "guwahati"),
         ("Berlin", None),
         ("San Jose, CA", None),
         ("London, UK", None),
@@ -142,8 +145,8 @@ def test_listing_urls_never_carry_a_query_string():
     ("final", "ok"),
     [
         ("https://internshala.com/jobs/keywords-python/jobs-in-pune/", True),
-        # Its own alias redirect keeps a city filter.
-        ("https://internshala.com/jobs/keywords-python/jobs-in-gurgaon/", True),
+        # A different city is not this search.
+        ("https://internshala.com/jobs/keywords-python/jobs-in-gurgaon/", False),
         # Unknown city: generic keyword page, no city.
         ("https://internshala.com/jobs/keywords-python/", False),
         # Unknown keyword: generic city page.
@@ -223,3 +226,52 @@ def test_search_without_a_location_makes_no_request():
     with patch.object(internshala, "fetch") as fetch:
         assert internshala.search("python developer", "Remote", 20) == []
     fetch.assert_not_called()
+
+
+def test_alias_spelling_of_the_same_city_is_accepted():
+    requested = "https://internshala.com/jobs/keywords-python/jobs-in-bangalore/"
+    final = "https://internshala.com/jobs/keywords-python/jobs-in-bengaluru/"
+    assert internshala._same_search(requested, final, "bangalore")
+
+
+def test_today_is_india_date():
+    late_utc = datetime(2026, 11, 24, 20, tzinfo=UTC)  # already the 25th in India
+    assert internshala.posted_at("Today", late_utc) == "2026-11-25"
+
+
+def _client_with(handler):
+    import functools
+
+    import httpx
+
+    return functools.partial(httpx.Client, transport=httpx.MockTransport(handler))
+
+
+def test_fetch_follows_redirects_only_within_internshala(monkeypatch):
+    import httpx
+
+    def handler(request):
+        if request.url.path == "/a/":
+            return httpx.Response(302, headers={"location": "/b/"})
+        if request.url.path == "/b/":
+            return httpx.Response(200, text="<html>ok</html>")
+        return httpx.Response(302, headers={"location": "https://evil.example/x"})
+
+    monkeypatch.setattr(internshala.httpx, "Client", _client_with(handler))
+    assert internshala.fetch("https://internshala.com/a/") == (
+        "https://internshala.com/b/",
+        "<html>ok</html>",
+    )
+    with pytest.raises(ValueError, match="off its own site"):
+        internshala.fetch("https://internshala.com/c/")
+
+
+def test_fetch_caps_the_page_size(monkeypatch):
+    import httpx
+
+    monkeypatch.setattr(internshala, "MAX_HTML", 10)
+    monkeypatch.setattr(
+        internshala.httpx, "Client", _client_with(lambda r: httpx.Response(200, text="x" * 50))
+    )
+    with pytest.raises(ValueError, match="too large"):
+        internshala.fetch("https://internshala.com/a/")

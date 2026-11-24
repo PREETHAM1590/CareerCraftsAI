@@ -18,8 +18,10 @@ results are dropped rather than shown as matches.
 
 import logging
 import re
+import time
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urljoin, urlsplit
+from zoneinfo import ZoneInfo
 
 import httpx
 from bs4 import BeautifulSoup
@@ -30,6 +32,9 @@ BASE = "https://internshala.com"
 USER_AGENT = "CareerCraftBot/1.0 (+https://careercraftsai.me)"
 TIMEOUT = 15
 MAX_HTML = 3_000_000
+DEADLINE = 25  # seconds for the whole fetch, however slowly bytes arrive
+MAX_REDIRECTS = 3
+IST = ZoneInfo("Asia/Kolkata")  # Internshala's "today" is India's date
 
 # Internshala's own city slugs for names members commonly type.
 CITY_ALIASES = {
@@ -63,13 +68,19 @@ def place(location: str | None) -> str | None:
     text = (location or "").strip().lower()
     if not text or text in {"india", "anywhere in india"}:
         return ""
+    from app.services.india_focus import is_indian_place
+
     parts = {part.strip() for part in text.split(",")}
     if text in REMOTE_WORDS or "work from home" in text:
         return "remote"
     if parts & {"remote", "anywhere"}:
-        return "remote" if "india" in parts else None
+        # "Remote, Bangalore" or "Remote, India": remote roles in India.
+        rest = ", ".join(sorted(parts - {"remote", "anywhere"}))
+        return "remote" if rest and is_indian_place(rest) else None
     city = CITY_ALIASES.get(text.split(",")[0].strip(), text.split(",")[0].strip())
-    if city in INDIA_CITIES or "india" in parts:
+    if city in INDIA_CITIES or "india" in parts or is_indian_place(text):
+        # A city Internshala doesn't know redirects to a generic page, which
+        # _same_search then drops.
         return "" if city == "india" else slug(city)
     return None
 
@@ -93,14 +104,18 @@ def _same_search(requested: str, final: str, where: str) -> bool:
     if where == "remote":
         return "work-from-home" in got
     if where:
-        # Allow its own alias redirects (gurugram -> gurgaon) as long as a
-        # city filter survives.
-        return bool(re.search(r"/(jobs|internship)-in-[a-z0-9-]+/?$", got))
+        # Only the requested city, or Internshala's own spelling of it.
+        match = re.search(r"/(?:jobs|internship)-in-([a-z0-9-]+)/?$", got)
+        if not match:
+            return False
+        same = {where, slug(CITY_ALIASES.get(where.replace("-", " "), where))}
+        same |= {slug(alias) for alias, name in CITY_ALIASES.items() if slug(name) == where}
+        return match.group(1) in same
     return True
 
 
 def posted_at(label: str, now: datetime | None = None) -> str | None:
-    now = now or datetime.now(UTC)
+    now = (now or datetime.now(UTC)).astimezone(IST)
     text = (label or "").strip().lower()
     if text in {"just now", "today"} or "hour" in text or "minute" in text:
         return now.date().isoformat()
@@ -156,16 +171,33 @@ def parse_listing(html: str, internships: bool = False, now: datetime | None = N
 
 
 def fetch(url: str) -> tuple[str, str]:
+    """GET an Internshala page. Redirects are followed only within
+    https://internshala.com, the body is capped while it streams, and the
+    whole fetch has a deadline so a slow server can't hold the thread."""
+    deadline = time.monotonic() + DEADLINE
     with httpx.Client(
         timeout=TIMEOUT,
-        follow_redirects=True,
+        follow_redirects=False,
         headers={"User-Agent": USER_AGENT, "Accept": "text/html"},
     ) as client:
-        response = client.get(url)
-    response.raise_for_status()
-    if len(response.content) > MAX_HTML:
-        raise ValueError("Internshala page too large")
-    return str(response.url), response.text
+        for _ in range(MAX_REDIRECTS + 1):
+            parts = urlsplit(url)
+            if parts.scheme != "https" or parts.hostname != "internshala.com":
+                raise ValueError("Internshala redirected off its own site")
+            with client.stream("GET", url) as response:
+                if response.is_redirect:
+                    url = urljoin(url, response.headers.get("location", ""))
+                    continue
+                response.raise_for_status()
+                body = bytearray()
+                for chunk in response.iter_bytes():
+                    body.extend(chunk)
+                    if len(body) > MAX_HTML:
+                        raise ValueError("Internshala page too large")
+                    if time.monotonic() > deadline:
+                        raise TimeoutError("Internshala page took too long")
+                return url, body.decode(response.encoding or "utf-8", errors="replace")
+    raise ValueError("Internshala redirected too many times")
 
 
 def search(query: str, location: str, max_results: int) -> list[dict]:
