@@ -4,16 +4,20 @@ import time
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import get_current_user, get_db
 from app.api.v1.run_utils import queue_agent_run
+from app.core.rate_limit import limiter
 from app.models.db import AgentRun, LinkedInOutreachQueue, User
+from app.services import linkedin_sender
 
 router = APIRouter(prefix="/linkedin", tags=["linkedin"])
+# Public: Unipile's hosted-login callback, matched by a single-use state token.
+inbound_router = APIRouter(prefix="/inbound", tags=["inbound"], include_in_schema=False)
 logger = logging.getLogger(__name__)
 
 
@@ -190,13 +194,24 @@ async def approve_outreach(
         raise HTTPException(status_code=400, detail="Run is not awaiting approval")
 
     if body.approved:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "Automatic LinkedIn sends are unavailable. "
-                "Copy the draft and send it on LinkedIn yourself."
-            ),
-        )
+        if not linkedin_sender.enabled() or not await linkedin_sender.account_for(current_user.id):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Copy the draft and send it on LinkedIn yourself, or connect LinkedIn "
+                    "(beta) to send approved drafts from here."
+                ),
+            )
+        # The member approved these drafts: send each at most once, within
+        # today's caps. The run row stays locked, so a double click waits.
+        output = run.output or {}
+        deliveries = {}
+        for queue_id in output.get("queue_ids") or []:
+            deliveries[queue_id] = await linkedin_sender.send_item(
+                current_user.id, uuid.UUID(queue_id)
+            )
+        run.status = "completed"
+        run.output = {**output, "deliveries": deliveries}
     else:
         output = run.output or {}
         for queue_id in output.get("queue_ids") or []:
@@ -214,4 +229,59 @@ async def approve_outreach(
 
     run.completed_at = datetime.now(UTC)
     await db.flush()
-    return {"status": run.status, "run_id": str(run_id)}
+    deliveries = (run.output or {}).get("deliveries") if body.approved else None
+    return {"status": run.status, "run_id": str(run_id), "deliveries": deliveries}
+
+
+# ── LinkedIn sending (beta) ─────────────────────────────────────
+
+
+@router.get("/account")
+async def linkedin_account(current_user: User = Depends(get_current_user)):
+    if not linkedin_sender.enabled():
+        return {"enabled": False, "connected": False}
+    return {
+        "enabled": True,
+        "connected": await linkedin_sender.account_for(current_user.id) is not None,
+        "invites_per_day": linkedin_sender.settings.LINKEDIN_INVITES_PER_DAY,
+        "messages_per_day": linkedin_sender.settings.LINKEDIN_MESSAGES_PER_DAY,
+    }
+
+
+@router.post("/account/link")
+@limiter.limit("10/minute")
+async def linkedin_account_link(request: Request, current_user: User = Depends(get_current_user)):
+    try:
+        return {"url": await linkedin_sender.link_url(current_user.id)}
+    except linkedin_sender.LinkedInUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+    except Exception as exc:
+        logger.warning("unipile_link_failed", extra={"error_type": type(exc).__name__})
+        raise HTTPException(
+            status_code=502, detail="Could not start the LinkedIn connection"
+        ) from None
+
+
+@router.delete("/account")
+async def linkedin_account_disconnect(current_user: User = Depends(get_current_user)):
+    await linkedin_sender.disconnect(current_user.id)
+    return {"connected": False}
+
+
+@inbound_router.post("/unipile")
+@limiter.limit("60/minute")
+async def unipile_notify(request: Request, state: str = "") -> dict:
+    if not linkedin_sender.enabled():
+        raise HTTPException(status_code=503, detail="LinkedIn sending is not enabled")
+    body = await request.body()
+    if len(body) > 16_000:
+        raise HTTPException(status_code=413, detail="Callback too large")
+    try:
+        import json
+
+        payload = json.loads(body)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid callback") from None
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid callback")
+    return await linkedin_sender.handle_notify(state, payload)

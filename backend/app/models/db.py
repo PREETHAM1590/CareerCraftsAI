@@ -671,7 +671,23 @@ class LinkedInOutreachQueue(Base):
     status: Mapped[str] = mapped_column(String(20), default="pending_approval")
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # LinkedIn sending (behind LINKEDIN_OUTREACH_ENABLED): sending, invited,
+    # messaged, failed, limit_reached or outcome_unknown. Never retried
+    # automatically, so a message is never sent twice.
+    delivery: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    delivery_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class LinkedInAccount(Base):
+    """The member's LinkedIn as connected through Unipile: an account id only."""
+
+    __tablename__ = "linkedin_accounts"
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    unipile_account_id: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    connected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class AtsScore(Base):

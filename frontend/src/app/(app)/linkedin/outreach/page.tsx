@@ -14,7 +14,8 @@ import {
   UsersThree,
   X,
 } from "@phosphor-icons/react";
-import { apiClient } from "@/lib/api";
+import { apiClient, getApiErrorMessage } from "@/lib/api";
+import { LinkedInSending, useLinkedInAccount } from "@/components/agents/LinkedInSending";
 import { cn } from "@/lib/utils";
 import {
   Bezel,
@@ -93,9 +94,10 @@ interface QueueCardProps {
   featured: boolean;
   deciding: boolean;
   onDecide: (approved: boolean) => void;
+  canSend?: boolean;
 }
 
-function QueueCard({ run, featured, deciding, onDecide }: QueueCardProps) {
+function QueueCard({ run, featured, deciding, onDecide, canSend }: QueueCardProps) {
   const [expanded, setExpanded] = useState(false);
   const contacts = run.output?.contacts ?? [];
   const messages = run.output?.messages ?? [];
@@ -237,8 +239,22 @@ function QueueCard({ run, featured, deciding, onDecide }: QueueCardProps) {
       {/* HITL decision */}
       {run.status === "awaiting_approval" && (
         <footer className="mt-auto flex flex-wrap gap-2 pt-6">
+          {canSend && (
+            <IslandButton
+              tone="primary"
+              size="sm"
+              disabled={deciding || !messages.length}
+              trailing={deciding ? <CircleNotch size={14} weight="light" className="animate-spin" /> : <PaperPlaneTilt size={14} weight="light" />}
+              onClick={() => {
+                const count = messages.length;
+                if (window.confirm(`Send ${count} ${count === 1 ? "draft" : "drafts"} from your LinkedIn now? Each person gets exactly the text shown.`)) onDecide(true);
+              }}
+            >
+              Send on LinkedIn
+            </IslandButton>
+          )}
           <IslandButton
-            tone="primary"
+            tone={canSend ? "ghost" : "primary"}
             size="sm"
             disabled={deciding}
             trailing={deciding ? <CircleNotch size={14} weight="light" className="animate-spin" /> : <Check size={14} weight="light" />}
@@ -291,10 +307,19 @@ export default function LinkedInOutreachPage() {
   const approveMutation = useMutation({
     mutationFn: ({ runId, approved }: { runId: string; approved: boolean }) =>
       apiClient.post(`/linkedin/outreach/${runId}/approve`, { approved }),
-    onSuccess: (_, { approved }) => {
-      toast.success(approved ? "Message approved for sending" : "Message discarded");
+    onSuccess: (response, { approved }) => {
+      if (!approved) {
+        toast.success("Message discarded");
+      } else {
+        const results = Object.values((response.data?.deliveries ?? {}) as Record<string, string>);
+        const sent = results.filter((r) => r === "invited" || r === "messaged").length;
+        const waiting = results.filter((r) => r === "limit_reached").length;
+        const other = results.length - sent - waiting;
+        toast.success(`Sent ${sent} on LinkedIn${waiting ? `, ${waiting} waiting for tomorrow's limit` : ""}${other ? `, ${other} not sent` : ""}.`);
+      }
       qc.invalidateQueries({ queryKey: ["outreach-queue"] });
     },
+    onError: (error) => toast.error(getApiErrorMessage(error, "Could not process that decision.")),
   });
 
   const canSearch = company.trim().length > 0 && !identifyMutation.isPending;
@@ -304,6 +329,7 @@ export default function LinkedInOutreachPage() {
     identifyMutation.mutate();
   };
 
+  const linkedin = useLinkedInAccount();
   const awaitingCount = queue.filter((r) => r.status === "awaiting_approval").length;
   const inFlightCount = queue.filter((r) => r.status === "running" || r.status === "pending").length;
   const completedCount = queue.filter((r) => r.status === "completed").length;
@@ -366,6 +392,7 @@ export default function LinkedInOutreachPage() {
       />
 
       <Section aria-label="Outreach Queue">
+        <div className="mb-6"><LinkedInSending /></div>
         <Reveal>
           <SectionHeading
             eyebrow="Queue"
@@ -422,6 +449,7 @@ export default function LinkedInOutreachPage() {
                   featured={index === 0}
                   deciding={approveMutation.isPending && approveMutation.variables?.runId === run.id}
                   onDecide={(approved) => approveMutation.mutate({ runId: run.id, approved })}
+                  canSend={Boolean(linkedin.data?.enabled && linkedin.data?.connected)}
                 />
               </motion.div>
             ))}

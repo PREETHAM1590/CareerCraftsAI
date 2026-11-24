@@ -68,6 +68,17 @@ class Settings(BaseSettings):
     # tracking adds its pixel only when this is set to a public https URL.
     PUBLIC_API_URL: str | None = None
 
+    # ── LinkedIn sending (beta, off by default) ────────────────────────
+    # Sends approved outreach from the member's own LinkedIn through Unipile.
+    # LinkedIn's User Agreement prohibits automation; accounts can be
+    # restricted. Members connect through Unipile's hosted login (UniLogin),
+    # so CareerCraft never handles a LinkedIn password or session cookie.
+    LINKEDIN_OUTREACH_ENABLED: bool = False
+    UNIPILE_DSN: str = ""  # e.g. https://api8.unipile.com:13851
+    UNIPILE_API_KEY: str = ""
+    LINKEDIN_INVITES_PER_DAY: int = 10
+    LINKEDIN_MESSAGES_PER_DAY: int = 25
+
     # ── Redis ──────────────────────────────────────────────────────────
     REDIS_PASSWORD: str | None = None
 
