@@ -319,12 +319,8 @@ async def enter_code(
     ):
         raise HTTPException(409, "Nova isn't waiting for a code on this task")
     await nova_signin.store_code(run_id, payload.code.get_secret_value())
-    from app.api.v1.agents import ApproveRequest, approve_or_cancel
+    from app.api.v1.agents import ApproveRequest, decide_run
 
-    return await approve_or_cancel(
-        run_id=str(run_id),
-        payload=ApproveRequest(approved=True, action_type="computer_action"),
-        request=request,
-        db=db,
-        current_user=user,
+    return await decide_run(
+        str(run_id), ApproveRequest(approved=True, action_type="computer_action"), db, user
     )

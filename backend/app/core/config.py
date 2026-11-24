@@ -100,6 +100,10 @@ class Settings(BaseSettings):
     RESEND_API_KEY: str = ""
     # Must be on a domain verified in the Resend account, or every send is rejected.
     RESEND_FROM_EMAIL: str = "noreply@jobagent.ai"
+    # Application email: <alias>@APPLY_EMAIL_DOMAIN, received by Resend (MX on
+    # this subdomain) and delivered to /api/v1/inbound/resend. Blank disables it.
+    APPLY_EMAIL_DOMAIN: str = ""
+    RESEND_WEBHOOK_SECRET: str = ""
     YOUTUBE_API_KEY: str = ""
     FIRECRAWL_API_KEY: str | None = None
     SEARXNG_URL: str | None = None

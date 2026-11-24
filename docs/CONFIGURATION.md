@@ -235,6 +235,29 @@ provider credentials; CareerCraft does not store provider OAuth tokens.
 
 ---
 
+## Application email (Nova)
+
+Each member gets an address such as `priya.k7f2m@apply.careercraftsai.me`. Job
+portals send sign-up codes and confirmations there. Nova fills an emailed code
+in by itself when it is waiting on a code step for the same site.
+
+| Variable | Description |
+|---|---|
+| `APPLY_EMAIL_DOMAIN` | Receiving subdomain, e.g. `apply.careercraftsai.me`. Blank turns the feature off. |
+| `RESEND_API_KEY` | Also used to fetch received messages (`GET /emails/receiving/{id}`). |
+| `RESEND_WEBHOOK_SECRET` | The `whsec_...` signing secret of the receiving webhook. |
+
+Setup, once:
+1. In Resend, add the receiving domain `apply.careercraftsai.me`.
+2. Add the MX record Resend shows to DNS. Use a subdomain, so your main domain's mail is untouched.
+3. In Resend, create a webhook for `email.received` pointing at `https://<api-host>/api/v1/inbound/resend`.
+4. Put its signing secret in `RESEND_WEBHOOK_SECRET`.
+5. Run migration `20261124130000_apply_email.sql`.
+
+The webhook carries metadata only. The backend fetches the message, keeps it for
+the member, and extracts codes and verification links. Links are never opened
+automatically.
+
 ## Development vs Production Differences
 
 | Setting | Development | Production |

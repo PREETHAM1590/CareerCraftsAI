@@ -38,6 +38,8 @@ PUBLIC_PATHS = {
     "/redoc",
     "/openapi.json",
     "/api/v1/integrations/webhooks/nango",
+    # Resend inbound mail; verified by its Svix signature (app/api/v1/apply_email.py).
+    "/api/v1/inbound/resend",
     # Public marketing-site demo: intentionally unauthenticated, gated
     # instead by a per-IP lifetime search cap (see app/api/v1/demo.py).
     "/api/v1/demo/job-search",

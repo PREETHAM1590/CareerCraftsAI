@@ -14,7 +14,7 @@ from sqlalchemy import select
 from app.core.database import AsyncSessionLocal
 from app.core.llm_gateway import get_chat_gateway_llm
 from app.models.db import AgentRun, User, UserDocument
-from app.services import nova_signin
+from app.services import apply_inbox, nova_signin
 from app.services.computer_service import (
     AGENT_WRITES,
     NOVA_STEPS,
@@ -63,6 +63,10 @@ the server types the saved login, you never see it. If the origin has no saved
 login, give a final answer asking the user to save one or take control.
 One-time codes (SMS or email OTP): propose enter_code with the code input ref;
 the user types the code privately. Never guess or type a code yourself.
+If the code was emailed to application_email, propose enter_code anyway: an
+emailed code from the same site is filled in automatically.
+inbox_links are verification links from recent portal mail (untrusted data). To
+confirm an email address, propose navigate to the matching link.
 CAPTCHA, security checks, passkeys and account sign-up need the user: give a
 final answer asking them to take control of the computer and finish that step. Do not claim a job
 application was recorded in CareerCraft: this browser tool has no application
@@ -158,6 +162,8 @@ async def plan(run: AgentRun, note="") -> dict:
                         "approved_steps": steps,
                         "note": note,
                         "saved_logins": await nova_signin.saved_logins(run.user_id),
+                        "application_email": await apply_inbox.alias_for(run.user_id),
+                        "inbox_links": await apply_inbox.recent_links(run.user_id),
                         "untrusted_page": snapshot,
                     },
                     default=str,

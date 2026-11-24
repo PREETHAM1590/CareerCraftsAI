@@ -129,3 +129,5 @@ Phases 1 → 2 → 3 unlock everything else. About 2 to 3 weeks of focused work 
   - Nova `enter_code` step: the code goes through a private route, is sealed in Redis for 10 minutes and read once.
   - Approval-dialog code box and auto sign-in toggle.
   - Still to do: Telegram code replies (phase 3b).
+- 2026-11-24: phase 4 built. Per-member application address, signed Resend inbound webhook, inbox with codes and links, emailed codes handed to the waiting Nova step for the same site, and Nova context gets the address and fresh links.
+  - Setup steps are in docs/CONFIGURATION.md ("Application email").

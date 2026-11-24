@@ -393,7 +393,7 @@ def test_code_route_seals_code_then_approves_without_it():
     with (
         patch.object(nova_signin, "store_code", AsyncMock()) as store,
         patch(
-            "app.api.v1.agents.approve_or_cancel", AsyncMock(return_value={"status": "queued"})
+            "app.api.v1.agents.decide_run", AsyncMock(return_value={"status": "queued"})
         ) as approve,
     ):
         response = code_client(waiting_run()).post(
@@ -401,6 +401,6 @@ def test_code_route_seals_code_then_approves_without_it():
         )
     assert response.status_code == 200
     assert store.await_args.args == (run_id, "482913")
-    payload = approve.await_args.kwargs["payload"]
+    payload = approve.await_args.args[1]
     assert payload.approved is True
     assert "482913" not in payload.model_dump_json()
