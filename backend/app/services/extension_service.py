@@ -703,6 +703,18 @@ async def plan_fields(db: AsyncSession, task: ExtensionTask, raw_fields: list[di
     unresolved_required = [
         p["field_id"] for p in plan if p["required"] and p["value"] in (None, "")
     ]
+    # Identity/sensitive/consent questions never go to the LLM: their
+    # answers must stay on this server.
+    llm_eligible = [
+        fid
+        for fid in unresolved_required
+        if not _local_match_only(
+            normalize_question(next(p["label"] for p in plan if p["field_id"] == fid)) or ""
+        )
+        and next(p["input_type"] for p in plan if p["field_id"] == fid) != "checkbox"
+    ]
+    if llm_eligible:
+        await _llm_fallback(task, plan, llm_eligible)
     _remember_open_questions(task, plan)
     _remember_answer_sources(task, plan)
     return {
@@ -1015,3 +1027,78 @@ def _parse_board_date(raw: str):
         "month": timedelta(days=amount * 30),
     }[unit]
     return (datetime.now(UTC) - delta).isoformat()
+
+
+# ── Generic form fallback: LLM mapping for questions no template answered ──
+
+_LLM_FALLBACK_MAX = 8  # questions per plan; the rest stay with the member
+
+
+async def _llm_fallback(task: ExtensionTask, plan: list[dict], field_ids: list[str]) -> None:
+    """For required questions no template or saved answer resolved, ask the
+    gateway LLM to map one of the member's saved answers / resume facts onto
+    the question. Everything it proposes keeps ``requires_review`` and an
+    ``ai_draft`` source, so auto-submit never fires without a person."""
+    todo = [p for p in plan if p["field_id"] in set(field_ids)][:_LLM_FALLBACK_MAX]
+    if not todo:
+        return
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    from app.core.model_router import get_llm
+
+    saved = getattr(task, "saved_answers", None)
+    if saved is None:
+        from app.applications import saved_answers as _sa
+
+        try:
+            saved = {
+                a["question_key"]: a.get("value")
+                for a in await _sa.list_answers(db, task.user_id)
+                if a.get("question_key")
+            }
+        except Exception as exc:  # noqa: BLE001 — fallback is best effort
+            logger.info("Saved answers unavailable: %s", type(exc).__name__)
+            saved = {}
+    try:
+        llm = await get_llm(str(task.user_id), None, task_type="auto_apply")
+    except Exception as exc:  # noqa: BLE001 — fallback is best effort
+        logger.info(
+            "LLM fallback unavailable: %s", type(exc).__name__
+        )
+        return
+    task_id = getattr(task, "id", "?")
+    by_id = {p["field_id"]: p for p in plan}
+    for field in todo:
+        try:
+            messages = [
+                SystemMessage(
+                    content=(
+                        "Map the candidate's saved answers onto one application form "
+                        "question. Use only the saved answers given; if none fits, "
+                        "reply NO_ANSWER. Output only the answer text, first person."
+                    )
+                ),
+                HumanMessage(
+                    content=(
+                        f"Question ({field.get('input_type', 'text')}): {field.get('label', '')}\n"
+                        f"Options: {json.dumps(field.get('options') or [])}\n"
+                        f"Saved answers: {json.dumps(saved, default=str)[:4000]}"
+                    )
+                ),
+            ]
+            result = await asyncio.to_thread(llm.invoke, messages)
+            text = (getattr(result, "content", "") or "").strip()
+            if not text or text.upper().startswith("NO_ANSWER") or len(text) > 2000:
+                continue
+            entry = by_id.get(field["field_id"])
+            if entry is None or entry["value"] in (None, ""):
+                entry.update(
+                    value=text[:2000],
+                    source="ai_draft",
+                    requires_review=True,
+                    missing_reason=None,
+                    confidence=0.0,
+                )
+        except Exception as exc:  # noqa: BLE001 — one bad question must not stop the plan
+            logger.info("LLM fallback failed: %s", type(exc).__name__)
+            continue
