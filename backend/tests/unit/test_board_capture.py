@@ -82,14 +82,16 @@ def test_normalize_truncates_oversized_description():
 # ── Endpoint ────────────────────────────────────────────────────────────
 
 
-def collect_client(monkeypatch, saved=(["id-1"], 1)):
+def collect_client(monkeypatch, saved=None):
     app = FastAPI()
     app.include_router(extension.router)
     device = SimpleNamespace(id=uuid.uuid4(), user_id=uuid.uuid4(), revoked_at=None)
     app.dependency_overrides[extension.get_device] = lambda: device
     app.dependency_overrides[get_db] = lambda: AsyncMock()
     saved_boards = MagicMock()
-    saved_boards.save_jobs = AsyncMock(return_value=saved)
+    saved_boards.save_jobs = AsyncMock(
+        return_value=saved if saved is not None else ([uuid.uuid4()], 1)
+    )
     monkeypatch.setitem(__import__("sys").modules, "app.services.saved_boards", saved_boards)
     return TestClient(app)
 
