@@ -7,6 +7,7 @@ Requirements before running:
     - playwright install chromium
     - Environment variables set: TEST_EMAIL, TEST_PASSWORD, TEST_JWT, TEST_JOB_URL
 """
+
 from __future__ import annotations
 
 import os
@@ -45,12 +46,14 @@ def _missing_live_vars() -> list[str]:
 
 # ── Environment Validation ──────────────────────────────────────────────────
 
+
 def _check_env_vars() -> list[str]:
     missing = []
     for var in ("TEST_EMAIL", "TEST_PASSWORD", "TEST_JWT"):
         if not os.getenv(var):
             missing.append(var)
     return missing
+
 
 def _check_backend_health() -> tuple[bool, str]:
     api_url = os.getenv("API_URL", "http://localhost:8000/api/v1")
@@ -68,6 +71,7 @@ def _check_backend_health() -> tuple[bool, str]:
     except Exception as e:
         return False, str(e)
 
+
 def pytest_configure(config):
     E2E_DIR.mkdir(parents=True, exist_ok=True)
     SCREENSHOT_DIR.mkdir(exist_ok=True)
@@ -81,7 +85,9 @@ def pytest_collection_modifyitems(config, items):
     run_e2e = os.getenv("RUN_E2E", "").lower() in ("1", "true", "yes")
     if not run_e2e:
         missing = _check_env_vars()
-        health_ok, health_msg = (False, "Prerequisites missing") if missing else _check_backend_health()
+        health_ok, health_msg = (
+            (False, "Prerequisites missing") if missing else _check_backend_health()
+        )
 
         if missing or not health_ok:
             reasons = []
@@ -100,14 +106,18 @@ def pytest_collection_modifyitems(config, items):
                 # without live credentials or a running backend/browser.
                 if "test_harness_contract" in str(item.fspath):
                     continue
+                # test_hermetic_* run the real routes against stubs and a local
+                # throwaway PostgreSQL: no credentials, no running stack.
+                if "test_hermetic_" in str(item.fspath):
+                    continue
                 if "e2e" in str(item.fspath) or any(
-                    marker.name in ("e2e", "browser", "integration")
-                    for marker in item.own_markers
+                    marker.name in ("e2e", "browser", "integration") for marker in item.own_markers
                 ):
                     item.add_marker(pytest.mark.skip(reason=skip_msg))
 
 
 # ── API Client ──────────────────────────────────────────────────────────────
+
 
 @pytest.fixture(scope="session")
 def api_client():
@@ -130,6 +140,7 @@ def api_client():
 # recruiter, or submit a job application must check `live_safety` first and
 # skip/no-op the destructive step unless the operator opted in explicitly.
 
+
 @dataclass(frozen=True)
 class LiveSafety:
     allow_external_writes: bool
@@ -141,6 +152,7 @@ def live_safety() -> LiveSafety:
 
 
 # ── Agent Run Polling ────────────────────────────────────────────────────────
+
 
 def _wait_for_terminal(client: httpx.Client, run_id: str, timeout_s: int = 120) -> dict:
     deadline = time.monotonic() + timeout_s
@@ -162,6 +174,7 @@ def wait_for_run():
 
 # ── Artifact Directory ───────────────────────────────────────────────────────
 
+
 @pytest.fixture
 def artifact_dir(request) -> Path:
     """Per-test directory (gitignored) for screenshots/videos/traces to land in."""
@@ -172,6 +185,7 @@ def artifact_dir(request) -> Path:
 
 
 # ── Playwright Browser ──────────────────────────────────────────────────────
+
 
 @pytest.fixture(scope="session")
 def browser_context(playwright):
@@ -204,6 +218,7 @@ def page(browser_context, request) -> Page:
 # Signs in once per test session through the real Clerk UI (see
 # scripts/e2e_browser_login.py for the interactive reference script) and
 # persists the storage state so later tests reuse it instead of re-logging in.
+
 
 def _clerk_login(page: Page, web_url: str, email: str, password: str, otp_code: str) -> None:
     page.goto(f"{web_url}/login", wait_until="domcontentloaded", timeout=60000)
@@ -249,7 +264,9 @@ def _auth_state(playwright) -> Path:
     context = browser.new_context(viewport={"width": 1920, "height": 1080})
     login_page = context.new_page()
     try:
-        _clerk_login(login_page, web_url, os.environ["TEST_EMAIL"], os.environ["TEST_PASSWORD"], otp_code)
+        _clerk_login(
+            login_page, web_url, os.environ["TEST_EMAIL"], os.environ["TEST_PASSWORD"], otp_code
+        )
         context.storage_state(path=str(AUTH_STATE_PATH))
     finally:
         context.close()
@@ -296,6 +313,7 @@ def authenticated_mobile_page(_authenticated_context) -> Page:
 
 # ── Screenshot Helper ──────────────────────────────────────────────────────
 
+
 def screenshot(page: Page, test_name: str, step: str) -> None:
     path = SCREENSHOT_DIR / test_name
     path.mkdir(exist_ok=True)
@@ -305,6 +323,7 @@ def screenshot(page: Page, test_name: str, step: str) -> None:
 
 
 # ── SSE Stream Helper ──────────────────────────────────────────────────────
+
 
 def wait_for_sse_complete(
     api_client: httpx.Client,
@@ -319,9 +338,7 @@ def wait_for_sse_complete(
     with api_client.stream("GET", f"/agents/{run_id}/stream") as response:
         for line in response.iter_lines():
             if time.time() - start > timeout_s:
-                raise TimeoutError(
-                    f"Agent run {run_id} did not complete within {timeout_s}s"
-                )
+                raise TimeoutError(f"Agent run {run_id} did not complete within {timeout_s}s")
 
             if line.startswith("event: "):
                 event_type = line.split(":", 1)[1].strip()
@@ -342,8 +359,6 @@ def wait_for_sse_complete(
                     result = {"checkpoint": payload, "run_id": run_id}
                     break
                 if event_type == "error":
-                    raise RuntimeError(
-                        f"Agent error: {payload.get('message', 'Unknown error')}"
-                    )
+                    raise RuntimeError(f"Agent error: {payload.get('message', 'Unknown error')}")
 
     return {"result": result, "events": events, "checkpoint_seen": checkpoint_seen}

@@ -78,5 +78,8 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    from app.core.pii_vault import install_pii_log_scrubbing
+
     logging.basicConfig(level=settings.LOG_LEVEL)
+    install_pii_log_scrubbing()
     asyncio.run(main())

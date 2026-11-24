@@ -72,3 +72,15 @@ def test_docx_uses_exact_pdf_spacing_and_plain_heading_mapping():
     bullet = next(p for p in doc.paragraphs if "Reduced latency" in p.text)
     assert bullet.text.startswith("• ")
     assert bullet.paragraph_format.space_after.pt == pytest.approx(1.2)
+
+
+@pytest.mark.parametrize("size, dimensions", [("A4", (595.28, 841.89)), ("LETTER", (612, 792))])
+def test_pdf_and_docx_share_configured_paper_size(monkeypatch, size, dimensions):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "RESUME_PAGE_SIZE", size)
+    layout = fit_resume(TEXT, template="modern", page_target=1)
+    with fitz.open(stream=layout.pdf, filetype="pdf") as pdf:
+        assert (pdf[0].rect.width, pdf[0].rect.height) == pytest.approx(dimensions, abs=0.1)
+    section = Document(io.BytesIO(generate_resume_docx(layout))).sections[0]
+    assert (section.page_width.pt, section.page_height.pt) == pytest.approx(dimensions, abs=0.1)
