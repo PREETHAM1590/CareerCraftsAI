@@ -16,6 +16,7 @@ from uuid import UUID
 
 import redis
 
+from app.agents.prompts import fenced, looks_like_instructions
 from app.core.config import settings
 from app.core.security import decrypt_api_key
 from memory.embedder import MemoryEmbedder
@@ -172,7 +173,7 @@ class SemanticMemoryBridge:
                         self._extractor.extract_from_agent_output(
                             user_id=uid,
                             agent_type=agent_type,
-                            output_text=output_summary,
+                            output_text=fenced("AGENT_OUTPUT", output_summary),
                             llm=llm,
                         ),
                         timeout=20,
@@ -180,6 +181,15 @@ class SemanticMemoryBridge:
                     memories.extend(extracted[:8])
                 except Exception as exc:
                     logger.debug("Semantic memory extraction skipped: %s", exc)
+            # Memories are replayed into later prompts; drop any that read as
+            # instructions (memory poisoning from injected job or email text).
+            kept = [m for m in memories if not looks_like_instructions(m.content)]
+            if len(kept) != len(memories):
+                logger.warning(
+                    "Semantic memory: dropped %d instruction-like memories",
+                    len(memories) - len(kept),
+                )
+            memories = kept
             embeddings = await self._prepare_embeddings(
                 resolved, [episode.summary] + [memory.content for memory in memories]
             )

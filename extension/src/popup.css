@@ -77,3 +77,9 @@ button:disabled { opacity: 0.6; cursor: default; }
   width: 100%;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
 }
+
+#autofill { width: 100%; }
+#autofill-result:empty { display: none; }
+.toggle { display: flex; align-items: center; gap: 8px; margin: 0; }
+.toggle input { width: auto; margin: 0; }
+button.link { background: none; border: none; padding: 10px 0 0; color: var(--primary); font-weight: 600; }

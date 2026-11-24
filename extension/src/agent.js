@@ -3,7 +3,7 @@
 // long-polls them, runs each one in ONE dedicated agent tab, and posts the
 // result back. Every check that guards a page write lives here; the page-side
 // function below only does what it is told on refs from the latest snapshot.
-import { getPairing, jobUrl, SESSION_KEYS } from "./common.js";
+import { getPairing, jobUrl, hostApproved, SESSION_KEYS } from "./common.js";
 
 const AGENT_KEY = "agentTab";
 const AGENT_PERMISSION_KEY = "agentPermissionNeeded";
@@ -214,6 +214,7 @@ function pageAllowed(url, appOrigin) {
 
 async function hasPermission(url) {
   try {
+    if (!(await hostApproved(url))) return false;
     return await chrome.permissions.contains({ origins: [new URL(url).origin + "/*"] });
   } catch (e) {
     return false;

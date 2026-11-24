@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     # Shared Redis cache for job-search catalog/live results
     # (app/services/search_cache.py). Off = every search computes fresh.
     SEARCH_CACHE_ENABLED: bool = True
+    # Paper size of generated resume PDF/DOCX files. A4 is what Indian
+    # recruiters print on; LETTER for US-style output.
+    RESUME_PAGE_SIZE: Literal["A4", "LETTER"] = "A4"
 
     DB_POOL_SIZE: int = Field(default=10, ge=1, le=100)
     DB_MAX_OVERFLOW: int = Field(default=5, ge=0, le=100)
@@ -73,6 +76,19 @@ class Settings(BaseSettings):
 
     # ── LLM gateway ────────────────────────────────────────────────────
     LLM_GATEWAY_URL: str = "http://localhost:8000/llm-gateway/v1"
+    # Personal details are swapped for placeholders before a chat request
+    # leaves the gateway and restored in the reply (app/core/pii_vault.py).
+    # Members can opt out in their preferences. STRICT refuses the model call
+    # when redaction cannot run instead of sending the text unredacted.
+    PII_REDACTION_ENABLED: bool = True
+    PII_REDACTION_STRICT: bool = True
+    PII_REDACT_NAMES: bool = True
+    # Ignore a member's "hide personal info" opt-out (contact details and IDs
+    # are always hidden). Their name setting still applies.
+    PII_REDACTION_FORCED: bool = False
+    # Pattern detection of emails/phones/IDs that are not in the profile,
+    # including other people's in job descriptions and inbound mail.
+    PII_PATTERN_DETECTION: bool = True
 
     # Private OpenBot relay, reached over a deployment network or SSH tunnel.
     SANDBOX_RELAY_URL: str = ""

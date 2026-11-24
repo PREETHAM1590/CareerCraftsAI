@@ -65,7 +65,7 @@ youtube-search-python>=1.6.0
 pymupdf>=1.24.0
 python-docx>=1.1.0
 reportlab>=4.2.0
-pypdf>=6.20.1  # CVE-2026-57204, -113792..113795 + PYSEC-2026-3910/3911/3913 — parses user-uploaded PDFs
+pypdf>=6.21.4,<7  # CVE-2026-57204, -113792..113795, -119203..119209 + PYSEC-2026-3910/3911/3913 — parses user-uploaded PDFs
 # JobSpy is installed without its vulnerable markdownify upper pin;
 # see provider-tools.txt. Its runtime dependencies resolve here.
 beautifulsoup4>=4.12.2,<5
@@ -81,7 +81,7 @@ playwright>=1.44.0
 pytest-playwright>=0.5.0  # provides the playwright/browser_context/page pytest fixtures used by tests/e2e
 agentql>=1.0.0
 
-dnspython>=2.9.0       # CVE-2026-114605
+dnspython>=2.9.2       # CVE-2026-114605, CVE-2026-128089
 
 # Utilities
 google-api-python-client>=2.100.0
@@ -111,3 +111,7 @@ bandit>=1.7.8
 ruff>=0.4.0
 black>=24.0.0
 coverage>=7.5.0
+# Transitive floors for newly published CVEs (2026-11-24)
+opentelemetry-api>=1.45.2  # CVE-2026-126360
+pyasn1>=0.6.5              # CVE-2026-119194..119197
+soupsieve>=4.0.0,<5        # CVE-2026-126190, -126191, -126193 (bs4 HTML selectors)

@@ -1,18 +1,27 @@
 "use client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiClient, getApiErrorMessage } from "@/lib/api";
-import { Field, IslandButton, Select } from "@/components/vanguard";
+import { searchSources } from "@/lib/job-boards";
+import { Field, IslandButton, Select, Toggle } from "@/components/vanguard";
 
-const sources = ["greenhouse", "lever", "ashby", "workable", "smartrecruiters", "recruitee", "adzuna", "remotive", "remoteok", "arbeitnow", "jsonld"];
+const SOURCES = searchSources();
 const DAYS = [1, 7, 14, 30, 90];
 
 type Props = { value: string; onChange: (v: string) => void; source: string; onSource: (v: string) => void; days: number; onDays: (v: number) => void };
 
-const sourceLabel = (s: string) => (s === "jsonld" ? "Company sites" : s === "remoteok" ? "RemoteOK" : s[0].toUpperCase() + s.slice(1));
-
 /** Search basis (which resume / persona to match against), source and posting age. */
 export function JobSearchBasis(p: Props) {
   const client = useQueryClient();
+  // India focus is a saved preference (missing = on); search reads it server-side.
+  const prefs = useQuery<{ india_focus?: boolean } | null>({
+    queryKey: ["preferences"],
+    queryFn: async () => (await apiClient.get("/users/me/preferences")).data,
+  });
+  const indiaFocus = useMutation({
+    mutationFn: async (next: boolean) => (await apiClient.patch("/users/me/preferences", { india_focus: next })).data,
+    onSuccess: () => client.invalidateQueries({ queryKey: ["preferences"] }),
+  });
+  const indiaOn = indiaFocus.isPending ? indiaFocus.variables !== false : prefs.data?.india_focus !== false;
   const save = useMutation({
     mutationFn: async () => {
       const [kind, id] = p.value.split(":");
@@ -52,9 +61,9 @@ export function JobSearchBasis(p: Props) {
           {(id) => (
             <Select id={id} value={p.source} onChange={(e) => p.onSource(e.target.value)}>
               <option value="">All public sources</option>
-              {sources.map((s) => (
-                <option key={s} value={s}>
-                  {sourceLabel(s)}
+              {SOURCES.map(([id, label]) => (
+                <option key={id} value={id}>
+                  {label}
                 </option>
               ))}
             </Select>
@@ -72,9 +81,17 @@ export function JobSearchBasis(p: Props) {
           )}
         </Field>
       </div>
-      {(bases.isError || save.isError) && (
+      <div className="flex items-start gap-3 pl-1">
+        <Toggle checked={indiaOn} disabled={prefs.isPending || indiaFocus.isPending} onChange={(next) => indiaFocus.mutate(next)} label="India first" />
+        <p className="text-xs text-muted-foreground">
+          {indiaOn
+            ? "India first: roles in India and remote roles open to India come first, and roles open only outside India are hidden from search and never auto-applied to. Search a city outside India to include them."
+            : "India first is off: roles anywhere are shown and can be auto-applied to."}
+        </p>
+      </div>
+      {(bases.isError || save.isError || indiaFocus.isError) && (
         <p role="alert" className="pl-1 text-xs text-danger">
-          {getApiErrorMessage(bases.error || save.error, "Search basis unavailable")}
+          {getApiErrorMessage(bases.error || save.error || indiaFocus.error, "Search basis unavailable")}
         </p>
       )}
       {bases.data?.options.length === 0 && (

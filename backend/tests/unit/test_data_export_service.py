@@ -154,3 +154,42 @@ async def test_export_preserves_uploaded_cover_letter_bytes(monkeypatch):
     with zipfile.ZipFile(BytesIO(await build_user_data_export(db, user))) as zf:
         assert zf.read(f"documents/{document.id}.bin") == b"%PDF original"
     download.assert_called_once_with(document.storage_path, str(user.id))
+
+
+@pytest.mark.asyncio
+async def test_export_includes_saved_job_boards_and_submit_approvals():
+    from app.models.db import ApplicationSubmitApproval
+
+    user = User(id=uuid4(), email="boards@example.com")
+    approval = ApplicationSubmitApproval(
+        id=uuid4(),
+        user_id=user.id,
+        approved_by="member",
+        auto_approved=False,
+        review_hash="h" * 64,
+        answers=[{"label": "Notice", "value": "30"}],
+    )
+    board = {"source_id": "greenhouse:acme", "label": "Acme", "careers_url": "https://x.test"}
+    db = AsyncMock()
+
+    async def execute(query, params=None):
+        sql = str(query)
+        result = _empty_execute_result()
+        if "to_regclass" in sql:
+            result.scalar.return_value = (
+                "saved_job_boards" if params["table"] == "public.saved_job_boards" else None
+            )
+        elif "saved_job_boards" in sql:
+            result.scalars.return_value.all.return_value = [board]
+        elif "application_submit_approvals" in sql:
+            result.scalars.return_value.all.return_value = [approval]
+        return result
+
+    db.execute = AsyncMock(side_effect=execute)
+
+    archive = await build_user_data_export(db, user)
+
+    with zipfile.ZipFile(BytesIO(archive)) as zf:
+        assert json.loads(zf.read("saved_job_boards.json")) == [board]
+        approvals = json.loads(zf.read("application_submit_approvals.json"))
+        assert approvals[0]["answers"] == [{"label": "Notice", "value": "30"}]
