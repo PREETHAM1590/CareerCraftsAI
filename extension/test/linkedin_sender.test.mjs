@@ -4,7 +4,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright";
+
+// Needs Playwright's Chromium, which CI installs only for the end-to-end step
+// (which runs this file directly). The unit-test glob also picks this file up
+// before then: there it skips instead of failing on a missing package.
+let chromium;
+try {
+  ({ chromium } = await import("playwright"));
+} catch {
+  console.log("skip: playwright is not installed (runs in the end-to-end step)");
+  process.exit(0);
+}
 import { probePage, sendOnPage, linkedinCommand } from "../src/linkedin.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
