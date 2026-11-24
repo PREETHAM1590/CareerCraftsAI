@@ -32,6 +32,16 @@ class FakeRedis:
         self.data[key] = int(self.data.get(key, 0)) + 1
         return self.data[key]
 
+    async def decr(self, key):
+        self.data[key] = int(self.data.get(key, 0)) - 1
+        return self.data[key]
+
+    async def get(self, key):
+        return self.data.get(key)
+
+    async def exists(self, key):
+        return int(key in self.data)
+
     async def expire(self, key, seconds):
         return True
 
@@ -104,11 +114,21 @@ async def test_first_degree_gets_a_message(on, redis):
 
 
 @pytest.mark.asyncio
-async def test_others_get_an_invite_with_the_note_capped(on, redis):
+async def test_others_get_an_invite_with_the_note(on, redis):
     patcher, sent = commands(SECOND, {"delivery": "invited"})
     with patcher:
-        assert await li.deliver(USER, "dev1", URL, "x" * 400) == ("invited", None)
+        assert await li.deliver(USER, "dev1", URL, "x" * 300) == ("invited", None)
     assert sent[1]["as"] == "invite" and sent[1]["message"] == "x" * 300
+
+
+@pytest.mark.asyncio
+async def test_a_note_over_the_limit_is_refused_never_cut(on, redis):
+    patcher, sent = commands(SECOND)
+    with patcher:
+        delivery, error = await li.deliver(USER, "dev1", URL, "x" * 301)
+    assert delivery == "failed" and "300" in error
+    assert len(sent) == 1  # probe only: no send, no cap used
+    assert not any(k.startswith("li:invite:") for k in redis.data)
 
 
 @pytest.mark.asyncio
@@ -190,6 +210,7 @@ def item(delivery=None, url="https://www.linkedin.com/in/priya"):
         delivery_error=None,
         status="pending_approval",
         approved_at=None,
+        delivery_started_at=None,
         sent_at=None,
     )
 
@@ -217,6 +238,8 @@ async def test_unsent_items_can_be_sent(delivery):
         assert await li.send_item(USER, "dev1", uuid.uuid4()) == "invited"
     deliver.assert_awaited_once_with(USER, "dev1", URL, "Hi Priya")
     assert row.status == "sent" and row.sent_at is not None
+    # The send clock is separate: approved_at stays the member's approval time.
+    assert row.approved_at is None and row.delivery_started_at is not None
 
 
 @pytest.mark.asyncio
@@ -342,7 +365,7 @@ async def test_approval_without_extension_keeps_the_manual_handoff(on):
         ("completed", {}),
     ],
 )
-async def test_resend_only_for_idle_approved_runs(on, status, output):
+async def test_resend_only_for_idle_approved_runs(on, redis, status, output):
     from app.api.v1.linkedin import resend_outreach
 
     _, db = locked_run(status, output)
@@ -401,7 +424,7 @@ async def test_item_stuck_in_sending_becomes_unknown_not_resent():
     from datetime import UTC, datetime, timedelta
 
     row = item("sending")
-    row.approved_at = datetime.now(UTC) - li.STALE_AFTER - timedelta(minutes=1)
+    row.delivery_started_at = datetime.now(UTC) - li.STALE_AFTER - timedelta(minutes=1)
     with (
         patch("app.core.database.AsyncSessionLocal", return_value=queue_db(row)),
         patch.object(li, "deliver", AsyncMock()) as deliver,
@@ -412,7 +435,7 @@ async def test_item_stuck_in_sending_becomes_unknown_not_resent():
 
 
 @pytest.mark.asyncio
-async def test_resend_allowed_after_an_interrupted_batch(on):
+async def test_resend_allowed_after_an_interrupted_batch(on, redis):
     from datetime import UTC, datetime, timedelta
 
     from app.api.v1.linkedin import resend_outreach
@@ -434,3 +457,118 @@ async def test_resend_allowed_after_an_interrupted_batch(on):
     assert result["sending"] is True
     assert run.output["sending_started_at"] != old
     start.assert_called_once()
+
+
+# ── Review fixes ────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "answer",
+    [
+        {"error": "LinkedIn's invitation dialog did not open; nothing was sent."},
+        {"reason": "limit"},
+    ],
+)
+async def test_confirmed_non_sends_give_the_daily_slot_back(on, redis, answer):
+    patcher, _ = commands(SECOND, answer)
+    with patcher:
+        await li.deliver(USER, "dev1", URL, "Hi")
+    [(key, used)] = [(k, v) for k, v in redis.data.items() if k.startswith("li:invite:")]
+    assert used == 0
+
+
+@pytest.mark.asyncio
+async def test_maybe_sent_keeps_the_daily_slot(on, redis):
+    patcher, _ = commands(SECOND, {"reason": "unconfirmed"})
+    with patcher:
+        assert (await li.deliver(USER, "dev1", URL, "Hi"))[0] == "outcome_unknown"
+    assert [v for k, v in redis.data.items() if k.startswith("li:invite:")] == [1]
+
+
+@pytest.mark.asyncio
+async def test_a_cap_check_error_is_a_plain_failure(on, redis):
+    async def broken(key):
+        raise ConnectionError("redis down")
+
+    redis.incr = broken
+    patcher, sent = commands(SECOND)
+    with patcher:
+        delivery, error = await li.deliver(USER, "dev1", URL, "Hi")
+    assert delivery == "failed" and "nothing was sent" in error
+    assert len(sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_an_unexpected_send_error_is_maybe_sent(on, redis):
+    patcher, _ = commands(SECOND, RuntimeError("socket closed"))
+    with patcher:
+        assert (await li.deliver(USER, "dev1", URL, "Hi"))[0] == "outcome_unknown"
+
+
+@pytest.mark.asyncio
+async def test_device_lookup_errors_mean_offline():
+    from app.services import computer_service
+
+    with patch.object(
+        computer_service, "computer_backend", AsyncMock(side_effect=RuntimeError("registry"))
+    ):
+        assert await li.device_for(USER) is None
+
+
+@pytest.mark.asyncio
+async def test_one_item_error_does_not_stop_the_batch(redis):
+    run = SimpleNamespace(output={"queue_ids": [str(uuid.uuid4()), str(uuid.uuid4())]})
+    with (
+        patch("app.core.database.AsyncSessionLocal", return_value=run_session(run)),
+        patch.object(li, "device_for", AsyncMock(return_value="dev1")),
+        patch.object(
+            li, "send_item", AsyncMock(side_effect=[RuntimeError("db"), "invited"])
+        ) as send,
+    ):
+        await li.send_run(USER, uuid.uuid4())
+    assert send.await_count == 2
+    assert sorted(run.output["deliveries"].values()) == ["failed", "invited"]
+
+
+@pytest.mark.asyncio
+async def test_an_old_batch_never_releases_a_newer_batchs_lock_or_flag(redis):
+    run_id = uuid.uuid4()
+    run = SimpleNamespace(
+        output={"queue_ids": [str(uuid.uuid4())], "sending": True, "sending_started_at": "t1"}
+    )
+
+    async def newer_batch_takes_over(user_id, device, item_id):
+        # Simulates a resend after this batch's lock expired.
+        redis.data[li._lock_key(run_id)] = "newer"
+        run.output = {**run.output, "sending_started_at": "t2"}
+        return "invited"
+
+    with (
+        patch("app.core.database.AsyncSessionLocal", return_value=run_session(run)),
+        patch.object(li, "device_for", AsyncMock(return_value="dev1")),
+        patch.object(li, "send_item", newer_batch_takes_over),
+    ):
+        await li.send_run(USER, run_id)
+    assert redis.data[li._lock_key(run_id)] == "newer"
+    assert run.output["sending"] is True
+
+
+@pytest.mark.asyncio
+async def test_resend_refused_while_a_batch_holds_the_lock(on, redis):
+    from fastapi import HTTPException
+
+    from app.api.v1.linkedin import resend_outreach
+
+    run, db = locked_run("completed", {"queue_ids": ["x"]})
+    redis.data[li._lock_key(run.id)] = "token"
+    with (
+        patch.object(li, "device_for", AsyncMock(return_value="dev1")),
+        patch.object(li, "start_run") as start,
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await resend_outreach.__wrapped__(
+                request=MagicMock(), run_id=run.id, db=db, current_user=SimpleNamespace(id=USER)
+            )
+    assert exc.value.status_code == 409
+    start.assert_not_called()

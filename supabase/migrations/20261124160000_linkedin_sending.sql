@@ -3,5 +3,6 @@
 BEGIN;
 ALTER TABLE public.linkedin_outreach_queue
   ADD COLUMN IF NOT EXISTS delivery varchar(20),
-  ADD COLUMN IF NOT EXISTS delivery_error text;
+  ADD COLUMN IF NOT EXISTS delivery_error text,
+  ADD COLUMN IF NOT EXISTS delivery_started_at timestamptz;
 COMMIT;

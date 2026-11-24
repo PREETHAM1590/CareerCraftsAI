@@ -83,7 +83,16 @@ async def device_for(user_id) -> str | None:
     """The member's online extension device, or None."""
     from app.services import computer_service
 
-    return (await computer_service.computer_backend(user_id))["device"]
+    try:
+        return (await computer_service.computer_backend(user_id))["device"]
+    except Exception:
+        # Treated as offline: callers fall back to the manual handoff.
+        logger.warning("linkedin_device_lookup_failed", exc_info=True)
+        return None
+
+
+def _cap_key(user_id, kind: str) -> str:
+    return f"li:{kind}:{uuid.UUID(str(user_id))}:{datetime.now(UTC):%Y%m%d}"
 
 
 async def claim(user_id, kind: str) -> bool:
@@ -93,11 +102,22 @@ async def claim(user_id, kind: str) -> bool:
         else settings.LINKEDIN_MESSAGES_PER_DAY
     )
     redis = redis_client.get_redis()
-    key = f"li:{kind}:{uuid.UUID(str(user_id))}:{datetime.now(UTC):%Y%m%d}"
+    key = _cap_key(user_id, kind)
     used = await redis.incr(key)
     if used == 1:
         await redis.expire(key, 2 * 86400)
-    return used <= limit
+    if used > limit:
+        await release(user_id, kind)  # over the cap: this try isn't counted
+        return False
+    return True
+
+
+async def release(user_id, kind: str) -> None:
+    """Give back a claimed send that LinkedIn confirmed never went out."""
+    try:
+        await redis_client.get_redis().decr(_cap_key(user_id, kind))
+    except Exception:
+        logger.warning("linkedin_cap_release_failed", exc_info=True)
 
 
 async def _command(device: str, body: dict) -> dict:
@@ -125,26 +145,42 @@ async def deliver(user_id, device: str, url: str, message: str) -> tuple[str, st
         kind = "invite"
     else:
         return "failed", "LinkedIn offers neither Message nor Connect for this profile."
-    if not await claim(user_id, kind):
+    if kind == "invite" and len(message) > NOTE_LIMIT:
+        # Never send a cut-off note the member didn't approve.
+        return "failed", (
+            f"This person isn't a connection yet, and LinkedIn limits a connection note to "
+            f"{NOTE_LIMIT} characters. Shorten the draft to {NOTE_LIMIT}, then resend."
+        )
+    try:
+        claimed = await claim(user_id, kind)
+    except Exception:
+        logger.warning("linkedin_cap_claim_failed", exc_info=True)
+        return "failed", "Today's LinkedIn limit couldn't be checked; nothing was sent."
+    if not claimed:
         return "limit_reached", f"Today's LinkedIn {kind} limit is used up; send it tomorrow."
-    text = message[:NOTE_LIMIT] if kind == "invite" else message
     try:
         result = await _command(
-            device, {"op": "send", "as": kind, "profile_url": url, "message": text}
+            device, {"op": "send", "as": kind, "profile_url": url, "message": message}
         )
     except HTTPException as exc:
         if exc.status_code in (403, 409, 422):
+            await release(user_id, kind)
             return "failed", f"Your browser refused the send ({exc.detail}); nothing was sent."
         # Timed out or broke mid-way: it may have gone out.
+        return "outcome_unknown", "Your browser stopped mid-send; check LinkedIn before resending."
+    except Exception:
+        logger.warning("linkedin_send_command_failed", exc_info=True)
         return "outcome_unknown", "Your browser stopped mid-send; check LinkedIn before resending."
     delivery = result.get("delivery")
     if delivery in DONE:
         return delivery, None
     reason = result.get("reason")
-    if reason == "limit":
-        return "limit_reached", "LinkedIn's own limit was reached; try again later."
     if reason == "unconfirmed":
         return "outcome_unknown", "LinkedIn didn't confirm the send; check before resending."
+    # Confirmed not sent: today's slot is given back.
+    await release(user_id, kind)
+    if reason == "limit":
+        return "limit_reached", "LinkedIn's own limit was reached; try again later."
     return "failed", str(result.get("error") or "LinkedIn refused this send.")[:300]
 
 
@@ -166,8 +202,8 @@ async def send_item(user_id, device: str, item_id) -> str:
             return "missing"
         if (
             item.delivery == "sending"
-            and item.approved_at
-            and datetime.now(UTC) - item.approved_at > STALE_AFTER
+            and item.delivery_started_at
+            and datetime.now(UTC) - item.delivery_started_at > STALE_AFTER
         ):
             # Interrupted mid-send (restart): it may have gone out, so never
             # resend; record it as unknown instead of "sending" forever.
@@ -186,10 +222,19 @@ async def send_item(user_id, device: str, item_id) -> str:
             await db.commit()
             return item.delivery
         item.delivery, item.delivery_error = "sending", None
-        item.approved_at = datetime.now(UTC)
+        item.delivery_started_at = datetime.now(UTC)
         message = item.message
         await db.commit()
-    delivery, error = await deliver(user_id, device, url, message)
+    try:
+        delivery, error = await deliver(user_id, device, url, message)
+    except Exception:
+        # deliver() maps every pre-send failure to "failed" itself; anything
+        # left may have happened mid-send.
+        logger.warning("linkedin_deliver_failed", exc_info=True)
+        delivery, error = (
+            "outcome_unknown",
+            "Sending failed unexpectedly; check LinkedIn before resending.",
+        )
     async with AsyncSessionLocal() as db:
         item = await db.get(LinkedInOutreachQueue, item_id)
         item.delivery, item.delivery_error = delivery, error
@@ -206,36 +251,66 @@ async def send_run(user_id, run_id) -> None:
     from app.models.db import AgentRun
 
     redis = redis_client.get_redis()
-    lock = f"li:sending:{uuid.UUID(str(run_id))}"
-    if not await redis.set(lock, "1", nx=True, ex=int(STALE_AFTER.total_seconds())):
+    lock = _lock_key(run_id)
+    token = uuid.uuid4().hex
+    ttl = int(STALE_AFTER.total_seconds())
+    if not await redis.set(lock, token, nx=True, ex=ttl):
         return  # already sending this run
+    started = None
     try:
         async with AsyncSessionLocal() as db:
             run = await db.get(AgentRun, run_id)
-            queue_ids = list((run.output or {}).get("queue_ids") or []) if run else []
+            output = (run.output or {}) if run else {}
+            queue_ids = list(output.get("queue_ids") or [])
+            started = output.get("sending_started_at")
         for queue_id in queue_ids:
-            device = await device_for(user_id)
-            if device is None:
-                delivery = "failed"  # browser went offline: nothing sent, resend later
-            else:
-                delivery = await send_item(user_id, device, uuid.UUID(queue_id))
+            try:
+                device = await device_for(user_id)
+                if device is None:
+                    delivery = "failed"  # browser went offline: nothing sent, resend later
+                else:
+                    delivery = await send_item(user_id, device, uuid.UUID(queue_id))
+            except Exception:
+                # send_item records its own outcome once it starts a send, so
+                # this item was never marked sending: it can be resent.
+                logger.warning("linkedin_send_item_failed", exc_info=True)
+                delivery = "failed"
             async with AsyncSessionLocal() as db:
                 run = await db.get(AgentRun, run_id, with_for_update=True)
                 output = dict(run.output or {})
                 output["deliveries"] = {**(output.get("deliveries") or {}), queue_id: delivery}
                 run.output = output
                 await db.commit()
+            # A long batch keeps its lock: no second batch while this one runs.
+            if await _lock_value(redis, lock) == token:
+                await redis.expire(lock, ttl)
     except Exception:
         logger.warning("linkedin_send_run_failed", exc_info=True)
     finally:
         try:
             async with AsyncSessionLocal() as db:
                 run = await db.get(AgentRun, run_id, with_for_update=True)
-                if run is not None:
+                # Clear the flag only for this batch, never a newer one's.
+                if run is not None and (run.output or {}).get("sending_started_at") == started:
                     run.output = {**(run.output or {}), "sending": False}
                     await db.commit()
         finally:
-            await redis.delete(lock)
+            if await _lock_value(redis, lock) == token:
+                await redis.delete(lock)
+
+
+def _lock_key(run_id) -> str:
+    return f"li:sending:{uuid.UUID(str(run_id))}"
+
+
+async def _lock_value(redis, lock: str) -> str | None:
+    value = await redis.get(lock)
+    return value.decode() if isinstance(value, bytes) else value
+
+
+async def batch_running(run_id) -> bool:
+    """True while a send batch for this run holds its lock."""
+    return bool(await redis_client.get_redis().exists(_lock_key(run_id)))
 
 
 def start_run(user_id, run_id) -> None:

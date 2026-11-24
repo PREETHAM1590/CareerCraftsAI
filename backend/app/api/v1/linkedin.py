@@ -219,9 +219,7 @@ async def approve_outreach(
 
     if body.approved:
         device = (
-            await linkedin_sender.device_for(current_user.id)
-            if linkedin_sender.enabled()
-            else None
+            await linkedin_sender.device_for(current_user.id) if linkedin_sender.enabled() else None
         )
         if device is None:
             raise HTTPException(
@@ -314,7 +312,9 @@ async def resend_outreach(
         )
     # A batch interrupted by a restart never clears its flag: past the lock
     # TTL it is stale and the drafts can be resent.
-    if (run.output or {}).get("sending") and not linkedin_sender.sending_stale(run.output):
+    if await linkedin_sender.batch_running(run.id) or (
+        (run.output or {}).get("sending") and not linkedin_sender.sending_stale(run.output)
+    ):
         raise HTTPException(status_code=409, detail="These drafts are being sent right now")
     run.output = {
         **(run.output or {}),

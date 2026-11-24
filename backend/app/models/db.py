@@ -715,6 +715,9 @@ class LinkedInOutreachQueue(Base):
     # automatically, so a message is never sent twice.
     delivery: Mapped[str | None] = mapped_column(String(20), nullable=True)
     delivery_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # When the current send began (stale-send check); approved_at stays the
+    # member's approval time.
+    delivery_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
