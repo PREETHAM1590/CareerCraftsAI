@@ -686,6 +686,7 @@ async def plan_fields(db: AsyncSession, task: ExtensionTask, raw_fields: list[di
                 field.options,
                 field.label,
                 local_only=_local_match_only(field.normalized_key or "") or _local_match_only(key),
+                user_id=str(task.user_id),
             )
             if option is None:
                 entry.update(

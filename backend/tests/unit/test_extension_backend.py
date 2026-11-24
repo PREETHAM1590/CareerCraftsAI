@@ -34,6 +34,9 @@ def test_provider_selection(monkeypatch, configured, key, url, expected):
 async def test_jev_request_shape_and_answers(monkeypatch):
     monkeypatch.setattr(settings, "DECISION_ENGINE_PROVIDER", "jev")
     monkeypatch.setattr(settings, "TYPESAFE_API_KEY", "tk_test")
+    monkeypatch.setattr(
+        decision_engine, "_redact_payload", AsyncMock(side_effect=lambda u, s, q: (s, q))
+    )
     seen = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -49,7 +52,9 @@ async def test_jev_request_shape_and_answers(monkeypatch):
         lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw),
     )
     result = await decision_engine.decide(
-        "Thank you for applying", {"ok": {"type": "noul", "instructions": "Confirmed?"}}
+        None,
+        "Thank you for applying",
+        {"ok": {"type": "noul", "instructions": "Confirmed?"}},
     )
 
     assert result == {"provider": "jev", "answers": {"ok": {"type": "noul", "noul": 0.97}}}
@@ -70,7 +75,7 @@ async def test_provider_outage_falls_back_to_heuristics(monkeypatch):
             transport=httpx.MockTransport(lambda r: httpx.Response(503)), **kw
         ),
     )
-    result = await decision_engine.decide("x", {"ok": {"type": "noul", "instructions": "?"}})
+    result = await decision_engine.decide(None, "x", {"ok": {"type": "noul", "instructions": "?"}})
     assert result["provider"] == "heuristic"
     assert result["answers"]["ok"] == {"type": "noul", "noul": 0.5}  # "unknown", never acted on
 

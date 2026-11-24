@@ -10,7 +10,10 @@ adding it to the allowlists below.
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 APP = Path(__file__).resolve().parents[2] / "app"
 
@@ -52,10 +55,12 @@ PROVIDER_HOSTS = (
 )
 # Known model calls outside the gateway, each a documented gap
 # (docs/PRIVACY_PII.md). Do not add to this list.
-KNOWN_EXTERNAL_MODEL_ENDPOINTS = {
-    # Decision engine ("/v1/systemone"): form-option matching on TypeSafe Jev
-    # or a self-hosted Laya, only when configured.
-    "services/decision_engine.py",
+KNOWN_EXTERNAL_MODEL_ENDPOINTS: set[str] = set()
+# The decision engine still talks to its provider directly (no gateway chat
+# model for it), so its outbound payload MUST pass through the PII vault
+# first. This pins the redaction call into _remote().
+REDACTED_ENDPOINTS = {
+    "services/decision_engine.py": "_redact_payload",
 }
 
 
@@ -120,9 +125,101 @@ def test_no_provider_endpoints_outside_the_router():
                     if host in line and "/careers" not in line and "/jobs" not in line:
                         offenders.append(f"{rel}: {host}")
         if "chat/completions" in text or "/v1/systemone" in text:
-            if rel not in KNOWN_EXTERNAL_MODEL_ENDPOINTS:
+            if rel not in KNOWN_EXTERNAL_MODEL_ENDPOINTS and rel not in REDACTED_ENDPOINTS:
                 offenders.append(f"{rel}: model endpoint")
     assert offenders == []
+
+
+def test_external_model_endpoints_redact_before_sending():
+    for rel, func in REDACTED_ENDPOINTS.items():
+        tree = ast.parse((APP / rel).read_text(encoding="utf-8"))
+        posters = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.AsyncFunctionDef)
+            and any(
+                isinstance(c, ast.Call)
+                and (c.func.id if isinstance(c.func, ast.Name) else getattr(c.func, "attr", ""))
+                == "post"
+                for c in ast.walk(node)
+            )
+        ]
+        assert posters, f"{rel}: expected an outbound POST"
+        for poster in posters:
+            called = {
+                (c.func.id if isinstance(c.func, ast.Name) else getattr(c.func, "attr", ""))
+                for c in ast.walk(poster)
+                if isinstance(c, ast.Call)
+            }
+            assert func in called, (
+                f"{rel}: {poster.name} posts externally but never calls {func}()"
+            )
+
+
+def test_decision_engine_redacts_form_state_before_the_provider_call():
+    """The attack repro: the form state the extension uploads can contain the
+    member's name, email, phone — none of it may reach Typesafe/Laya raw."""
+    import asyncio
+
+    from app.core import config
+    from app.services import decision_engine
+
+    captured = {}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"answers": {"option": {"type": "noul", "noul": 0.9}}}
+
+    async def fake_post(url, *, json=None, headers=None):
+        captured["url"] = url
+        captured["json"] = json
+        return FakeResponse()
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return SimpleNamespace(post=fake_post)
+
+        async def __aexit__(self, *a):
+            return False
+
+    async def scenario():
+        async def fake_context(uid):
+            policy = SimpleNamespace(enabled=True, detect_patterns=True)
+            known = SimpleNamespace(values={"name": {"Priya Sharma"}, "email": {"priya@example.com"}})
+            return policy, known
+
+        def redact(text):
+            return text.replace("Priya Sharma", "[[NAME_1]]").replace(
+                "priya@example.com", "[[EMAIL_1]]"
+            )
+
+        def redact_obj(obj):
+            if isinstance(obj, str):
+                return redact(obj)
+            if isinstance(obj, list):
+                return [redact_obj(i) for i in obj]
+            if isinstance(obj, dict):
+                return {k: redact_obj(v) for k, v in obj.items()}
+            return obj
+
+        vault = SimpleNamespace(redact=redact, redact_obj=redact_obj, summary=lambda: {"name": 1})
+        with (
+            patch.object(decision_engine.httpx, "AsyncClient", FakeClient),
+            patch("app.services.pii_profile.load_privacy_context", fake_context),
+            patch("app.core.pii_vault.PiiVault", lambda *a, **kw: vault),
+        ):
+            await decision_engine._remote("u-1", "jev", {"value": "Priya Sharma"}, {})
+
+    asyncio.run(scenario())
+    sent = json.dumps(captured["json"])
+    assert "Priya Sharma" not in sent
+    assert "[[NAME_1]]" in sent
 
 
 def test_get_llm_goes_through_the_gateway():
