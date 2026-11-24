@@ -73,6 +73,9 @@ async def sync_connection(
         # Keep the local tombstone so a refresh cannot show it as connected again.
         return connection
     connection.provider_config_key = result.provider_config_key
+    if connection.external_connection_id != result.external_connection_id:
+        # A different external account: its address must be read and checked again.
+        connection.provider_metadata_enc = None
     connection.external_connection_id = result.external_connection_id
     connection.status = result.status
     connection.connected_at = result.connected_at or connection.connected_at or datetime.now(UTC)

@@ -53,7 +53,10 @@ def test_full_gmail_connection_is_used_first():
 )
 def test_send_only_connection_is_used_when_gmail_is_absent(missing):
     proxy, calls = sender(missing, SENT)
-    with patch.object(gmail_service, "proxy_request", proxy):
+    with (
+        patch.object(gmail_service, "proxy_request", proxy),
+        patch.object(gmail_service, "send_only_verified", return_value=True),
+    ):
         assert GmailMCPClient(str(USER_ID)).send_message("a@b.co", "Hi", "Body") == {"id": "msg-1"}
     assert calls == ["gmail", "gmail_send"]
 
@@ -72,7 +75,10 @@ def test_a_failed_send_never_retries_on_the_other_connection(failure):
 
 def test_no_connection_at_all_is_a_clear_error():
     proxy, calls = sender(ConnectionNotFoundError("none"), ConnectionNotFoundError("none"))
-    with patch.object(gmail_service, "proxy_request", proxy):
+    with (
+        patch.object(gmail_service, "proxy_request", proxy),
+        patch.object(gmail_service, "send_only_verified", return_value=True),
+    ):
         with pytest.raises(GmailSendError, match="not connected"):
             GmailMCPClient(str(USER_ID)).send_message("a@b.co", "Hi", "Body")
     assert calls == ["gmail", "gmail_send"]
@@ -155,3 +161,60 @@ async def test_connected_accounts_separate_inbox_from_sending(connected, google,
     db.execute.return_value.scalars.return_value.all.return_value = list(connected)
     result = await get_connected_accounts(db=db, current_user=SimpleNamespace(id=USER_ID))
     assert (result.google, result.gmail_send) == (google, can_send)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "answer",
+    [
+        IntegrationActionError("insufficient scope"),
+        IntegrationProxyResponse(status_code=200, data={"sub": "123"}),  # no email
+    ],
+)
+async def test_send_only_with_an_unreadable_address_is_revoked(answer):
+    connection = send_only_connection()
+    gateway = MagicMock()
+    gateway.proxy_request = AsyncMock(
+        side_effect=answer if isinstance(answer, Exception) else None,
+        return_value=None if isinstance(answer, Exception) else answer,
+    )
+    gateway.revoke_connection = AsyncMock()
+    with patch("app.api.v1.integrations.mark_revoked", AsyncMock()) as revoked:
+        await _sync_gmail_account_email(
+            connection,
+            db=SimpleNamespace(),
+            current_user=SimpleNamespace(id=USER_ID),
+            gateway=gateway,
+            login_email="me@gmail.com",
+        )
+    gateway.revoke_connection.assert_awaited_once_with(user_id=USER_ID, provider="gmail_send")
+    revoked.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_send_only_address_check_retries_when_google_is_down():
+    connection = send_only_connection()
+    gateway = MagicMock()
+    gateway.proxy_request = AsyncMock(side_effect=ProviderUnavailableError("down"))
+    gateway.revoke_connection = AsyncMock()
+    with patch("app.api.v1.integrations.mark_revoked", AsyncMock()) as revoked:
+        await _sync_gmail_account_email(
+            connection,
+            db=SimpleNamespace(),
+            current_user=SimpleNamespace(id=USER_ID),
+            gateway=gateway,
+            login_email="me@gmail.com",
+        )
+    gateway.revoke_connection.assert_not_called()
+    revoked.assert_not_called()
+
+
+def test_unverified_send_only_connection_is_never_used():
+    proxy, calls = sender(ConnectionNotFoundError("none"), SENT)
+    with (
+        patch.object(gmail_service, "proxy_request", proxy),
+        patch.object(gmail_service, "send_only_verified", return_value=False),
+    ):
+        with pytest.raises(GmailSendError, match="not connected"):
+            GmailMCPClient(str(USER_ID)).send_message("a@b.co", "Hi", "Body")
+    assert calls == ["gmail"]

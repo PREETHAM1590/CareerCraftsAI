@@ -98,6 +98,8 @@ class NangoIntegrationGateway(IntegrationGateway):
             if provider not in self._provider_config_keys:
                 continue
             config_key = self.provider_config_key(provider)
+            if provider == "gmail_send" and config_key == self._provider_config_keys.get("gmail"):
+                continue  # misconfigured: one Nango integration can't be both
             matched = next(
                 (item for item in connections if item.get("provider_config_key") == config_key),
                 None,

@@ -117,21 +117,26 @@ async def _sync_gmail_account_email(
                     else {"path": "gmail/v1/users/me/profile"}
                 ),
             )
-        except (ConnectionNotFoundError, IntegrationActionError, ProviderUnavailableError):
-            return
+        except (ConnectionNotFoundError, ProviderUnavailableError):
+            return  # try again on the next listing
+        except IntegrationActionError:
+            if not send_only:
+                return
+            profile = None  # Google refused userinfo: no "email" scope
         field = "email" if send_only else "emailAddress"
-        email = profile.data.get(field) if isinstance(profile.data, dict) else None
+        data = profile.data if profile is not None else None
+        email = data.get(field) if isinstance(data, dict) else None
         if isinstance(email, str) and email:
             connection.provider_metadata_enc = encrypt_api_key(
                 json.dumps({"account_email": email}), settings.APP_SECRET_KEY
             )
+        elif send_only:
+            # Send-only can't be checked against the sign-in any other way, so
+            # an unreadable address counts as a mismatch.
+            email = ""
 
-    if (
-        isinstance(email, str)
-        and login_email
-        and login_email.casefold().endswith("@gmail.com")
-        and email.casefold() != login_email.casefold()
-    ):
+    gmail_login = bool(login_email and login_email.casefold().endswith("@gmail.com"))
+    if isinstance(email, str) and gmail_login and email.casefold() != login_email.casefold():
         try:
             await gateway.revoke_connection(user_id=current_user.id, provider=connection.provider)
         except ConnectionNotFoundError:

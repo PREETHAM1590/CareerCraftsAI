@@ -522,8 +522,13 @@ export default function EmailPage() {
     queryFn: async () => (await apiClient.get("/integrations")).data,
     enabled: gmailConnectionFlag,
   });
-  const gmailConnection = integrations.find((connection) => connection.provider === "gmail");
-  const gmailConnected = gmailConnectionFlag && gmailConnection?.status === "connected";
+  const connected = (provider: string) =>
+    integrations.find((connection) => connection.provider === provider && connection.status === "connected");
+  // Full Gmail can send and save drafts; "Gmail (send only)" can only send.
+  const fullGmail = connected("gmail");
+  const gmailConnection = fullGmail ?? connected("gmail_send");
+  const gmailConnected = gmailConnectionFlag && Boolean(gmailConnection);
+  const canSaveDrafts = gmailConnectionFlag && Boolean(fullGmail);
   const gmailAccountEmail = gmailConnection?.account_email;
 
   const drafts = [...localDrafts, ...remoteDrafts.filter((d) => !localDrafts.find((x) => x.id === d.id))];
@@ -552,8 +557,8 @@ export default function EmailPage() {
   };
 
   const handleSaveDraft = async () => {
-    if (!gmailConnected) {
-      toast.error("Connect Gmail to save drafts in Gmail.");
+    if (!canSaveDrafts) {
+      toast.error(gmailConnected ? "Saving drafts needs full Gmail access, not send only." : "Connect Gmail to save drafts in Gmail.");
       return;
     }
     if (!recipientEmail.trim() || !subject.trim()) {

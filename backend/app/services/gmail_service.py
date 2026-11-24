@@ -15,6 +15,40 @@ from app.services.integration_proxy_service import proxy_request
 SEND_PROVIDERS = ("gmail", "gmail_send")
 
 
+def send_only_verified(user_id: str) -> bool:
+    """The send-only connection is used only once its Gmail address was read
+    and matched to the member's sign-in (a mismatch revokes it)."""
+    from uuid import UUID
+
+    from sqlalchemy import select
+
+    from app.core.database import AsyncSessionLocal
+    from app.models.db import IntegrationConnection
+    from app.services.integration_proxy_service import _run
+
+    async def check() -> bool:
+        async with AsyncSessionLocal() as db:
+            row = (
+                await db.execute(
+                    select(IntegrationConnection).where(
+                        IntegrationConnection.user_id == UUID(str(user_id)),
+                        IntegrationConnection.provider == "gmail_send",
+                        IntegrationConnection.status == "connected",
+                    )
+                )
+            ).scalar_one_or_none()
+        if row is None:
+            return False
+        from app.api.v1.integrations import _account_email
+
+        return bool(_account_email(row))
+
+    try:
+        return _run(check())
+    except Exception:
+        return False
+
+
 class GmailSendError(RuntimeError):
     """Raised when Nango or Gmail cannot send an approved message."""
 
@@ -147,6 +181,8 @@ class GmailMCPClient:
         raw = base64.urlsafe_b64encode(message.as_bytes()).decode().rstrip("=")
         result = None
         for provider in SEND_PROVIDERS:
+            if provider == "gmail_send" and not send_only_verified(self.user_id):
+                continue  # its address hasn't been checked against the sign-in yet
             try:
                 result = proxy_request(
                     user_id=self.user_id,
