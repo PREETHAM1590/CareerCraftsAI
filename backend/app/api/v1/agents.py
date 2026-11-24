@@ -158,6 +158,9 @@ async def decide_run(run_id: str, payload: ApproveRequest, db: AsyncSession, cur
             AgentRun.user_id == current_user.id,
         )
         .with_for_update()
+        # The session may already hold this run (Nova's code routes load it
+        # first): re-read the locked row so the status check sees the latest.
+        .execution_options(populate_existing=True)
     )
     run = res.scalar_one_or_none()
     if not run:

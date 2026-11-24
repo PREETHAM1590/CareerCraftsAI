@@ -237,6 +237,10 @@ async def handle_event(payload: dict) -> dict:
     subject = str(email.get("subject") or data.get("subject") or "")[:500]
     text = (email.get("text") or html_to_text(email.get("html")))[:MAX_TEXT]
     codes = extract_codes(f"{subject}\n{text}")
+    # Resend's receiving server computes these (the sender can't forge them);
+    # DKIM "pass" means the signature matches the From domain.
+    auth = email.get("authentication") if isinstance(email.get("authentication"), dict) else {}
+    authenticated = auth.get("dkim") == "pass" or auth.get("dmarc") == "pass"
     links = extract_links(text, email.get("html"))
     stored = 0
     for owner in owners:
@@ -262,7 +266,9 @@ async def handle_event(payload: dict) -> dict:
         if message_id is None:
             continue  # redelivered webhook
         stored += 1
-        if len(codes) == 1:
+        # Only a sender that proved its domain can hand a code to Nova; anyone
+        # else's code stays in the inbox for the member to use.
+        if len(codes) == 1 and authenticated:
             await fill_waiting_code(owner, sender, codes[0], message_id)
     return {"status": "stored", "messages": stored}
 

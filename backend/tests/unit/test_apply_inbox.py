@@ -284,3 +284,51 @@ def test_alias_local_part_is_safe():
     assert apply_inbox._slug(user) == "priya"
     assert apply_inbox._slug(SimpleNamespace(full_name="", email="Ünïcode+tag@x.com")) == "ncodetag"
     assert apply_inbox._slug(SimpleNamespace(full_name=None, email=None)) == "me"
+
+
+def inbound_db(owner):
+    db = MagicMock()
+    db.__aenter__ = AsyncMock(return_value=db)
+    db.__aexit__ = AsyncMock(return_value=False)
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = [owner]
+    result.scalar_one_or_none.return_value = uuid.uuid4()
+    db.execute = AsyncMock(return_value=result)
+    db.commit = AsyncMock()
+    return db
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("authentication", "filled"),
+    [
+        ({"spf": "pass", "dkim": "pass", "dmarc": "pass"}, True),
+        ({"spf": "pass", "dkim": "gray", "dmarc": "pass"}, True),
+        # A forged From: the receiving server's checks fail or don't align.
+        ({"spf": "fail", "dkim": "fail", "dmarc": "fail"}, False),
+        ({"spf": "pass", "dkim": "gray", "dmarc": "gray"}, False),
+        (None, False),
+    ],
+)
+async def test_only_an_authenticated_sender_can_hand_nova_a_code(
+    monkeypatch, authentication, filled
+):
+    monkeypatch.setattr(apply_inbox.settings, "APPLY_EMAIL_DOMAIN", "apply.example.com")
+    email = {
+        "from": "otp@mail.naukri.com",
+        "subject": "Your verification code",
+        "text": "Your one-time verification code is 482913",
+        "authentication": authentication,
+    }
+    payload = {
+        "type": "email.received",
+        "data": {"email_id": "email-12345678", "to": ["priya.k7f2m@apply.example.com"]},
+    }
+    with (
+        patch("app.core.database.AsyncSessionLocal", return_value=inbound_db(uuid.uuid4())),
+        patch.object(apply_inbox, "fetch_received", AsyncMock(return_value=email)),
+        patch.object(apply_inbox, "fill_waiting_code", AsyncMock()) as fill,
+    ):
+        result = await apply_inbox.handle_event(payload)
+    assert result["status"] == "stored"
+    assert fill.await_count == (1 if filled else 0)

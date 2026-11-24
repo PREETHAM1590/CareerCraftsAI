@@ -357,7 +357,8 @@ async def test_refusal_before_typing_forgets_the_login_so_retries_work(recorder,
     ):
         with pytest.raises(HTTPException):
             await nova_signin.create_account(USER, signup(), PAGE)
-    forget.assert_awaited_once_with(uuid.UUID(USER), ORIGIN)
+    [row] = recorder.saved
+    forget.assert_awaited_once_with(uuid.UUID(USER), ORIGIN, row.password_enc)
     assert "sign_in_on" not in recorder.events
 
 
@@ -567,3 +568,25 @@ async def test_stored_create_account_payload_is_re_proposed_not_replayed():
     create.assert_not_called()
     assert result == {"status": "awaiting_approval"}
     assert "fresh proposal" in replan.await_args.args[1]
+
+
+@pytest.mark.asyncio
+async def test_automatic_sign_in_rechecks_the_login_it_types(monkeypatch):
+    row = SimpleNamespace(auto_signin=False, username_enc="u", password_enc="p")
+    with (
+        patch.object(nova_signin, "saved_login", AsyncMock(return_value=row)),
+        patch.object(nova_signin, "_dispatch", AsyncMock()) as dispatch,
+    ):
+        with pytest.raises(ValueError, match="Automatic sign-in is off"):
+            await nova_signin.sign_in(
+                USER,
+                ComputerAction(
+                    operation="sign_in",
+                    parameters={"usernameRef": "e1", "passwordRef": "e2", "snapshotId": 4},
+                    computer_run="run1",
+                    approved_snapshot=4,
+                ),
+                PAGE,
+                automatic=True,
+            )
+    dispatch.assert_not_called()

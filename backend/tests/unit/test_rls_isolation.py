@@ -83,6 +83,7 @@ async def test_score_resume_background_filters_by_user_id():
     assert captured_queries, "background scorer must query the owner-scoped document"
     from sqlalchemy.sql import visitors
     from sqlalchemy.sql.elements import BinaryExpression, BindParameter
+
     comparisons = []
     for statement in captured_queries:
         for node in visitors.iterate(statement.whereclause):
@@ -200,8 +201,7 @@ def test_approve_endpoint_rejects_other_users_run():
     )
     source = inspect.getsource(agents.decide_run)
     assert "AgentRun.user_id == current_user.id" in source, (
-        "decide_run MUST filter by current_user.id — "
-        "without this, any user can approve any run"
+        "decide_run MUST filter by current_user.id — " "without this, any user can approve any run"
     )
 
 

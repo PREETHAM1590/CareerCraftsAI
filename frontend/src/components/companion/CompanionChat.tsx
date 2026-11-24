@@ -17,7 +17,7 @@ export function CompanionChat() {
   return <div className="companion-chat">
     <div ref={log} className="companion-chat-log" role="log" aria-label="Conversation with your companion" onScroll={event => { const el = event.currentTarget; follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40; }}>
       {!visible.length && <p className="py-6 text-center text-xs leading-5 text-muted-foreground">Tell me what you're working on.<br />This is your saved Nova conversation.</p>}
-      {visible.map(message => <div key={message.id} className={`companion-chat-message ${message.role === "user" ? "from-user" : "from-assistant"}`}><p className="mb-1 text-[10px] font-semibold text-muted-foreground">{message.role === "user" ? "You" : "Copilot"}</p><p className="whitespace-pre-wrap break-words text-xs leading-5">{String(message.content)}</p></div>)}
+      {visible.map(message => <div key={message.id} className={`companion-chat-message ${message.role === "user" ? "from-user" : "from-assistant"}`}><p className="mb-1 text-[10px] font-semibold text-muted-foreground">{message.role === "user" ? "You" : "Nova"}</p><p className="whitespace-pre-wrap break-words text-xs leading-5">{String(message.content)}</p></div>)}
       {runId && <CopilotRunCard runId={runId} />}
       {running && <p role="status" className="py-2 text-xs text-muted-foreground">Nova is responding…</p>}
     </div>

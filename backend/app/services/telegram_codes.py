@@ -28,6 +28,11 @@ from app.core import redis_client
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+# The bot token is part of every Bot API URL, and httpx logs request URLs at
+# INFO: keep its loggers above that so the token never reaches the logs.
+for _name in ("httpx", "httpcore"):
+    if logging.getLogger(_name).getEffectiveLevel() < logging.WARNING:
+        logging.getLogger(_name).setLevel(logging.WARNING)
 
 API = "https://api.telegram.org"
 LINK_TTL = 900
@@ -208,9 +213,11 @@ async def handle_update(update: dict) -> dict:
         "sendMessage",
         {
             "chat_id": chat_id,
-            "text": "Got it. Nova is entering the code."
-            if accepted
-            else "Nova isn't waiting for that code any more. Open CareerCraft to check.",
+            "text": (
+                "Got it. Nova is entering the code."
+                if accepted
+                else "Nova isn't waiting for that code any more. Open CareerCraft to check."
+            ),
         },
     )
     return {"status": "code_accepted" if accepted else "code_rejected"}

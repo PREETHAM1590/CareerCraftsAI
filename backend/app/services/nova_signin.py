@@ -137,12 +137,18 @@ async def _dispatch(user_id, body: dict, audit_name: str) -> dict:
         await computer_service.finish_audit(audit_id, status, 0)
 
 
-async def sign_in(user_id, action, page_url: str | None) -> dict:
-    """Type the saved login for this exact origin and submit the form."""
+async def sign_in(user_id, action, page_url: str | None, automatic: bool = False) -> dict:
+    """Type the saved login for this exact origin and submit the form.
+
+    automatic: no per-step approval, so the login typed must itself still
+    allow automatic sign-in (it may have been replaced or switched off since
+    claim_auto_signin)."""
     origin = page_origin(page_url)
     row = await saved_login(user_id, origin)
     if row is None:
         raise ValueError(f"No saved login for {origin}. Save one in the computer panel first.")
+    if automatic and not row.auto_signin:
+        raise ValueError(f"Automatic sign-in is off for {origin}; approve the sign-in instead.")
     params = action.parameters
     body = {
         "operation": "credentials/fill",
@@ -286,6 +292,7 @@ async def create_account(user_id, action, page_url: str | None) -> dict:
     if not await claim_signup(user_id, origin):
         raise ValueError(f"Nova already tried to create an account on {origin} today.")
     password = new_password()
+    sealed_password = encrypt_api_key(password, settings.APP_SECRET_KEY)
     host = urlsplit(origin).hostname or origin
     owner = uuid.UUID(str(user_id))
     async with AsyncSessionLocal() as db:
@@ -295,7 +302,7 @@ async def create_account(user_id, action, page_url: str | None) -> dict:
                 origin=origin,
                 label=f"{host} (created by Nova)"[:100],
                 username_enc=encrypt_api_key(email, settings.APP_SECRET_KEY),
-                password_enc=encrypt_api_key(password, settings.APP_SECRET_KEY),
+                password_enc=sealed_password,
                 auto_signin=False,
                 consent_at=consent.consent_at,
                 consent_version=consent.consent_version,
@@ -330,7 +337,7 @@ async def create_account(user_id, action, page_url: str | None) -> dict:
         result = await _dispatch(user_id, body, "nova_create_account")
     except HTTPException as exc:
         if exc.status_code in NOTHING_TYPED:
-            await _forget_login(owner, origin)
+            await _forget_login(owner, origin, sealed_password)
         # Otherwise the outcome is unknown: keep the password, sign-in stays off.
         raise
     submitted = bool(result.get("submitted"))
@@ -338,14 +345,21 @@ async def create_account(user_id, action, page_url: str | None) -> dict:
         async with AsyncSessionLocal() as db:
             await db.execute(
                 update(PortalCredential)
-                .where(PortalCredential.user_id == owner, PortalCredential.origin == origin)
+                .where(
+                    PortalCredential.user_id == owner,
+                    PortalCredential.origin == origin,
+                    PortalCredential.password_enc == sealed_password,
+                    # Switched off meanwhile (consent cleared): stays off.
+                    PortalCredential.consent_at.is_not(None),
+                )
                 .values(auto_signin=True)
             )
             await db.commit()
     return {"submitted": submitted, "origin": origin, "email": email}
 
 
-async def _forget_login(owner: uuid.UUID, origin: str) -> None:
+async def _forget_login(owner: uuid.UUID, origin: str, sealed_password: str) -> None:
+    """Remove the login this sign-up saved, never one the member replaced."""
     from app.core.database import AsyncSessionLocal
     from app.models.db import PortalCredential
 
@@ -355,6 +369,7 @@ async def _forget_login(owner: uuid.UUID, origin: str) -> None:
                 PortalCredential.user_id == owner,
                 PortalCredential.origin == origin,
                 PortalCredential.created_by_nova.is_(True),
+                PortalCredential.password_enc == sealed_password,
             )
         )
         await db.commit()
