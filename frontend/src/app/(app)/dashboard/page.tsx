@@ -401,7 +401,7 @@ export default function DashboardPage() {
       cta: "Prep",
     });
   }
-  const keywordGapKey = JSON.stringify([...(resumeData?.missing_keywords ?? [])].sort());
+  const keywordGapKey = JSON.stringify((resumeData?.missing_keywords ?? []).toSorted());
   const visibleActions = nextActions.filter((action) => action.id !== "keywords" || dismissedKeywordGaps !== keywordGapKey).slice(0, 4);
 
   const heroSummary =

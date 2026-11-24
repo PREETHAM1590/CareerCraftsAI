@@ -610,7 +610,7 @@ export function PrepPlanPanel({ onStartMock }: { onStartMock: () => void }) {
                         onChange={(e) => setEditingTitle(e.target.value)}
                         onBlur={() => commitStoryTitle(story.id)}
                         onKeyDown={(e) => {
-                          if (e.key === "Enter") commitStoryTitle(story.id);
+                          if (e.key === "Enter" && !e.nativeEvent.isComposing) commitStoryTitle(story.id);
                           if (e.key === "Escape") setEditingStoryId(null);
                         }}
                         className="h-9 text-[13px] font-medium"

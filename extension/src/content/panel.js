@@ -134,7 +134,7 @@
 
   function showStatus(text, sub) {
     ensureMounted();
-    wrap.innerHTML = "";
+    wrap.replaceChildren();
     wrap.appendChild(
       h(`
       <div class="cc-header">
@@ -249,7 +249,7 @@
     //         secondaryLabel, allowRemember }
     ensureMounted();
     settle({ action: "cancel", reason: "superseded" });
-    wrap.innerHTML = "";
+    wrap.replaceChildren();
     const fields = opts.fields || [];
     wrap.appendChild(
       h(`

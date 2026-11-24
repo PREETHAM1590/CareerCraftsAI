@@ -391,7 +391,7 @@ function ApplicationsView() {
                     value={cityDraft}
                     onChange={setCityDraft}
                     onKeyDown={(event) => {
-                      if (event.key === "Enter" && cityDraft.trim()) {
+                      if (event.key === "Enter" && !event.nativeEvent.isComposing && cityDraft.trim()) {
                         event.preventDefault();
                         addCity(cityDraft);
                       }

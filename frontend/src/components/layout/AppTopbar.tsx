@@ -52,7 +52,7 @@ export function AppTopbar({ onMenuClick }: { onMenuClick?: () => void }) {
   const router = useRouter();
   const [search, setSearch] = useState("");
   const submitSearch = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Enter" && search.trim()) { router.push(`/applications?q=${encodeURIComponent(search.trim())}`); setMobileSearchOpen(false); }
+    if (event.key === "Enter" && !event.nativeEvent.isComposing && search.trim()) { router.push(`/applications?q=${encodeURIComponent(search.trim())}`); setMobileSearchOpen(false); }
   };
   const [notifOpen, setNotifOpen] = useState(false);
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
