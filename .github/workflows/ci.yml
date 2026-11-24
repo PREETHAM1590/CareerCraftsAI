@@ -182,7 +182,7 @@ jobs:
       # sites and a fake API; no request leaves the runner.
       - name: End-to-end apply flow
         run: |
-          npm install --no-save --no-package-lock playwright@1.56.1
+          npm install --no-save --no-package-lock playwright@1.63.0
           npx playwright install --with-deps chromium
           node test/e2e_apply.mjs
           node test/linkedin_sender.test.mjs
