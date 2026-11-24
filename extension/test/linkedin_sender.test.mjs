@@ -40,6 +40,9 @@ check(p.degree === "1st" && p.can_message && !p.can_connect, `1st degree: Messag
 await open("degree=2nd&pending=1");
 p = await probe();
 check(p.pending && !p.can_connect, "pending request is reported, not re-sent");
+await open("degree=2nd&noconnect=1");
+p = await probe();
+check(!p.can_connect && !(await page.evaluate(() => document.getElementById("menu").classList.contains("hidden") === false)), "More without Connect: can_connect is false and the menu is closed again");
 await page.goto("https://www.linkedin.com/authwall?trk=x");
 check((await probe()).signed_out === true, "signed-out page is reported");
 
@@ -54,6 +57,14 @@ await open("degree=1st");
 r = await send("message", "Thanks for connecting, Priya!");
 s = await sent();
 check(r.delivery === "messaged" && s.kind === "message" && s.text === "Thanks for connecting, Priya!", `message sent and shown in the thread ${JSON.stringify(r)}`);
+
+// An earlier identical message must not count as this send
+await open("degree=1st&old=1&stuck=1");
+r = await send("message", "Thanks for connecting, Priya!");
+check(r.reason === "unconfirmed" && (await sent()) === null, `same text already in the thread, Send did nothing: unconfirmed ${JSON.stringify(r)}`);
+await open("degree=1st&old=1");
+r = await send("message", "Thanks for connecting, Priya!");
+check(r.delivery === "messaged", "same text already in the thread, Send worked: messaged");
 
 // Limits and failures
 await open("degree=2nd&nonote=1");

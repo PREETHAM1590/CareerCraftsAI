@@ -55,8 +55,23 @@ interface OutreachRun {
 
 /* ───────────────────────────── helpers ───────────────────────────── */
 
+// agent_runs.status can't say "sending": an approved run is "completed" at
+// once and its LinkedIn delivery lives in output. Show what really happened.
+function displayStatus(run: OutreachRun): string {
+  const output = run.output;
+  if (run.status !== "completed" || !output?.deliveries) return run.status;
+  if (output.sending) return "sending";
+  const results = Object.values(output.deliveries);
+  const total = output.queue_ids?.length ?? results.length;
+  const sent = results.filter((r) => r === "invited" || r === "messaged").length;
+  if (total && sent === total) return "completed";
+  return sent ? "partly sent" : "not sent";
+}
+
 function statusTone(status: string): StatusTone {
   if (status === "completed") return "success";
+  if (status === "partly sent") return "warning";
+  if (status === "not sent") return "danger";
   if (status === "awaiting_approval") return "warning";
   if (status === "failed" || status === "cancelled") return "danger";
   return "primary";
@@ -163,8 +178,8 @@ function QueueCard({ run, featured, deciding, onDecide, canSend, onResend }: Que
             ) : null}
           </div>
         </div>
-        <StatusPill tone={statusTone(run.status)} live={inFlight} className="shrink-0">
-          {run.status.replace("_", " ")}
+        <StatusPill tone={statusTone(displayStatus(run))} live={inFlight || displayStatus(run) === "sending"} className="shrink-0">
+          {displayStatus(run).replace("_", " ")}
         </StatusPill>
       </header>
 
@@ -372,7 +387,7 @@ export default function LinkedInOutreachPage() {
   const linkedin = useLinkedInAccount();
   const awaitingCount = queue.filter((r) => r.status === "awaiting_approval").length;
   const inFlightCount = queue.filter((r) => r.status === "running" || r.status === "pending").length;
-  const completedCount = queue.filter((r) => r.status === "completed").length;
+  const completedCount = queue.filter((r) => displayStatus(r) === "completed").length;
 
   return (
     <Screen>

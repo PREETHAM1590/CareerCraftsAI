@@ -330,7 +330,15 @@ async def test_approval_without_extension_keeps_the_manual_handoff(on):
     ("status", "output"),
     [
         ("awaiting_approval", {"queue_ids": ["x"]}),
-        ("completed", {"queue_ids": ["x"], "sending": True}),
+        # A batch still running (started "now"; far-future so it never goes stale).
+        (
+            "completed",
+            {
+                "queue_ids": ["x"],
+                "sending": True,
+                "sending_started_at": "9999-01-01T00:00:00+00:00",
+            },
+        ),
         ("completed", {}),
     ],
 )
@@ -372,3 +380,57 @@ async def test_status_when_off():
         "enabled": False,
         "ready": False,
     }
+
+
+# ── Interrupted sends (restart mid-batch) ───────────────────────
+
+
+def test_sending_flag_goes_stale_after_the_lock_ttl():
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime.now(UTC)
+    assert not li.sending_stale({"sending": False})
+    assert not li.sending_stale({"sending": True, "sending_started_at": now.isoformat()})
+    old = (now - li.STALE_AFTER - timedelta(minutes=1)).isoformat()
+    assert li.sending_stale({"sending": True, "sending_started_at": old})
+    assert li.sending_stale({"sending": True})  # flag from before the start time was kept
+
+
+@pytest.mark.asyncio
+async def test_item_stuck_in_sending_becomes_unknown_not_resent():
+    from datetime import UTC, datetime, timedelta
+
+    row = item("sending")
+    row.approved_at = datetime.now(UTC) - li.STALE_AFTER - timedelta(minutes=1)
+    with (
+        patch("app.core.database.AsyncSessionLocal", return_value=queue_db(row)),
+        patch.object(li, "deliver", AsyncMock()) as deliver,
+    ):
+        assert await li.send_item(USER, "dev1", uuid.uuid4()) == "outcome_unknown"
+    deliver.assert_not_called()
+    assert "interrupted" in row.delivery_error
+
+
+@pytest.mark.asyncio
+async def test_resend_allowed_after_an_interrupted_batch(on):
+    from datetime import UTC, datetime, timedelta
+
+    from app.api.v1.linkedin import resend_outreach
+
+    old = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
+    run, db = locked_run(
+        "completed", {"queue_ids": ["x"], "sending": True, "sending_started_at": old}
+    )
+    with (
+        patch.object(li, "device_for", AsyncMock(return_value="dev1")),
+        patch.object(li, "start_run") as start,
+    ):
+        result = await resend_outreach.__wrapped__(
+            request=MagicMock(),
+            run_id=uuid.uuid4(),
+            db=db,
+            current_user=SimpleNamespace(id=USER),
+        )
+    assert result["sending"] is True
+    assert run.output["sending_started_at"] != old
+    start.assert_called_once()

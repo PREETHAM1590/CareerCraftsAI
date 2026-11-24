@@ -5,7 +5,9 @@
 <body>
 <!-- LinkedIn-shaped profile for test/linkedin_sender.test.mjs. Query flags:
      degree=1st|2nd, pending=1, nonote=1 (out of personalised notes),
-     weekly=1 (weekly limit after Send), silent=1 (Send shows nothing). -->
+     weekly=1 (weekly limit after Send), silent=1 (Send shows nothing),
+     noconnect=1 (More holds no Connect), old=1 (thread already has the
+     message text), stuck=1 (message Send does nothing). -->
 <main>
   <section class="top-card">
     <h1>Priya Sharma</h1>
@@ -42,7 +44,8 @@
   } else {
     actions.append(button("Follow", "Follow Priya"));
     actions.append(button("More", "More actions", () => menu.classList.toggle("hidden")));
-    menu.append(button("Connect", "Invite Priya Sharma to connect", openInvite, "div"));
+    if (q.get("noconnect")) menu.append(button("Report or block", "Report or block", null, "div"));
+    else menu.append(button("Connect", "Invite Priya Sharma to connect", openInvite, "div"));
   }
 
   function openInvite() {
@@ -85,8 +88,15 @@
     const input = box.querySelector(".msg-form__contenteditable");
     const send = box.querySelector(".msg-form__send-button");
     input.addEventListener("input", () => { send.disabled = !input.textContent.trim(); });
+    if (q.get("old")) {
+      const prior = document.createElement("div");
+      prior.className = "msg-s-event-listitem__body";
+      prior.textContent = "Thanks for connecting, Priya!";
+      box.querySelector(".msg-s-message-list").append(prior);
+    }
     box.querySelector("form").addEventListener("submit", (e) => {
       e.preventDefault();
+      if (q.get("stuck")) return;
       window.__sent = { kind: "message", text: input.textContent };
       const item = document.createElement("div");
       item.className = "msg-s-event-listitem__body";

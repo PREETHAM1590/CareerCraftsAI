@@ -211,7 +211,12 @@ async def approve_outreach(
         # (completed) and output.sending tracks the background send.
         run.status = "completed"
         run.completed_at = datetime.now(UTC)
-        run.output = {**(run.output or {}), "deliveries": {}, "sending": True}
+        run.output = {
+            **(run.output or {}),
+            "deliveries": {},
+            "sending": True,
+            "sending_started_at": datetime.now(UTC).isoformat(),
+        }
         await db.flush()
         await db.commit()
         linkedin_sender.start_run(current_user.id, run.id)
@@ -281,9 +286,15 @@ async def resend_outreach(
         raise HTTPException(
             status_code=409, detail="Open Chrome with the CareerCraft extension, then resend."
         )
-    if (run.output or {}).get("sending"):
+    # A batch interrupted by a restart never clears its flag: past the lock
+    # TTL it is stale and the drafts can be resent.
+    if (run.output or {}).get("sending") and not linkedin_sender.sending_stale(run.output):
         raise HTTPException(status_code=409, detail="These drafts are being sent right now")
-    run.output = {**(run.output or {}), "sending": True}
+    run.output = {
+        **(run.output or {}),
+        "sending": True,
+        "sending_started_at": datetime.now(UTC).isoformat(),
+    }
     await db.commit()
     # Items already sent, or maybe sent, are skipped by send_item.
     linkedin_sender.start_run(current_user.id, run.id)

@@ -28,7 +28,7 @@ import asyncio
 import logging
 import re
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -45,6 +45,23 @@ PROFILE_URL = re.compile(
 DONE = {"invited", "messaged"}
 # Sent, being sent, or maybe sent: never sent again automatically.
 FINAL = DONE | {"sending", "outcome_unknown"}
+# A send or batch older than this was interrupted (e.g. a restart): the batch
+# lock has expired, so it can no longer be running.
+STALE_AFTER = timedelta(minutes=30)
+
+
+def sending_stale(output: dict | None) -> bool:
+    """True when output.sending is set but its batch can no longer be running."""
+    output = output or {}
+    if not output.get("sending"):
+        return False
+    try:
+        started = datetime.fromisoformat(str(output.get("sending_started_at")))
+    except ValueError:
+        return True  # no start time: set before this field existed
+    return datetime.now(UTC) - started > STALE_AFTER
+
+
 _tasks: set[asyncio.Task] = set()
 
 
@@ -147,6 +164,17 @@ async def send_item(user_id, device: str, item_id) -> str:
         ).scalar_one_or_none()
         if item is None:
             return "missing"
+        if (
+            item.delivery == "sending"
+            and item.approved_at
+            and datetime.now(UTC) - item.approved_at > STALE_AFTER
+        ):
+            # Interrupted mid-send (restart): it may have gone out, so never
+            # resend; record it as unknown instead of "sending" forever.
+            item.delivery = "outcome_unknown"
+            item.delivery_error = "Sending was interrupted; check LinkedIn before resending."
+            await db.commit()
+            return item.delivery
         if item.delivery in FINAL:
             return item.delivery  # sending, sent or maybe sent: never twice
         url = profile_url(item.contact_linkedin_url)
@@ -179,7 +207,7 @@ async def send_run(user_id, run_id) -> None:
 
     redis = redis_client.get_redis()
     lock = f"li:sending:{uuid.UUID(str(run_id))}"
-    if not await redis.set(lock, "1", nx=True, ex=30 * 60):
+    if not await redis.set(lock, "1", nx=True, ex=int(STALE_AFTER.total_seconds())):
         return  # already sending this run
     try:
         async with AsyncSessionLocal() as db:

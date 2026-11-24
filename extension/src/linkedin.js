@@ -29,7 +29,13 @@ export async function linkedinCommand(body) {
     if (!["invite", "message"].includes(body.as) || !text || text.length > 8000) return fail(422, "Invalid message");
     if (body.as === "invite" && text.length > NOTE_LIMIT) return fail(422, "A connection note is at most 300 characters");
   }
-  const tabId = await openProfile(body.profile_url);
+  let tabId;
+  try {
+    tabId = await openProfile(body.profile_url);
+  } catch (e) {
+    // Nothing was clicked yet: a plain refusal, never "maybe sent".
+    return fail(409, "LinkedIn did not load; nothing was sent.");
+  }
   const [injection] = await chrome.scripting.executeScript({
     target: { tabId },
     func: op === "probe" ? probePage : sendOnPage,
@@ -49,10 +55,9 @@ async function openProfile(url) {
       tab = null;
     }
   }
-  if (tab) {
-    await chrome.tabs.update(tab.id, { url });
-  } else {
-    tab = await chrome.tabs.create({ url, active: false });
+  if (!tab) {
+    // A blank tab first, so the profile load below is always watched from its start.
+    tab = await chrome.tabs.create({ url: "about:blank", active: false });
     await chrome.storage.session.set({ [TAB_KEY]: tab.id });
     try {
       const group = await chrome.tabs.group({ tabIds: tab.id });
@@ -61,18 +66,25 @@ async function openProfile(url) {
       /* tab groups unavailable */
     }
   }
-  await waitForLoad(tab.id);
+  // Listen before navigating: a fast (cached) load must not complete unseen.
+  const loaded = waitForLoad(tab.id);
+  await chrome.tabs.update(tab.id, { url });
+  await loaded;
   return tab.id;
 }
 
 function waitForLoad(tabId) {
   return new Promise((resolve, reject) => {
+    let started = false;
     const timer = setTimeout(() => {
       chrome.tabs.onUpdated.removeListener(listener);
       reject(new Error("LinkedIn took too long to load"));
     }, LOAD_TIMEOUT_MS);
     function listener(id, info) {
-      if (id === tabId && info.status === "complete") {
+      if (id !== tabId) return;
+      if (info.status === "loading") started = true;
+      // "complete" only counts after this navigation began loading.
+      if (started && info.status === "complete") {
         clearTimeout(timer);
         chrome.tabs.onUpdated.removeListener(listener);
         resolve();
@@ -107,12 +119,27 @@ export async function probePage() {
   const badge = card.querySelector(".dist-value, [class*='distance-badge']");
   const degree = (text(badge) || text(card)).match(/\b(1st|2nd|3rd)\b/);
   const pending = has(/\bpending\b/i);
-  const more = has(/^more( actions)?\b/i);
+  let canConnect = !pending && has(/\b(connect|invite .* to connect)\b/i);
+  const firstDegree = !!(degree && degree[1] === "1st");
+  const more = buttons.find((b) => /^more( actions)?\b/i.test(label(b)));
+  if (!pending && !canConnect && more && !firstDegree) {
+    // Connect is often tucked under "More": look, then close the menu again,
+    // so a daily invite is only claimed when Connect really is offered.
+    more.click();
+    let item = null;
+    for (let i = 0; i < 12 && !item; i++) {
+      await sleep(250);
+      item = Array.from(document.querySelectorAll("[role=menuitem], div[role=button], li button, .artdeco-dropdown__item")).find(
+        (el) => visible(el) && /\b(invite .* to connect|^connect)\b/i.test(label(el))
+      );
+    }
+    canConnect = !!item;
+    more.click();
+  }
   return {
     degree: degree ? degree[1] : null,
     can_message: has(/\bmessage\b/i) && !has(/^inmail\b/i),
-    // Connect is often tucked under "More" for people outside the network.
-    can_connect: !pending && (has(/\b(connect|invite .* to connect)\b/i) || (more && !(degree && degree[1] === "1st"))),
+    can_connect: canConnect,
     pending,
   };
 }
@@ -168,6 +195,13 @@ export async function sendOnPage(kind, message) {
     box.focus();
     document.execCommand("insertText", false, message);
     box.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: message }));
+    const head = message.slice(0, 40);
+    const matching = () =>
+      Array.from(document.querySelectorAll(".msg-s-event-listitem__body, .msg-s-message-list__event, [data-event-urn]")).filter((m) =>
+        text(m).includes(head)
+      ).length;
+    // The thread may already hold this text (an earlier send): require a new one.
+    const before = matching();
     const form = box.closest("form") || document;
     const send = await waitFor(() => {
       const b = form.querySelector("button.msg-form__send-button, button[type=submit]") || find(form, /^send\b/i);
@@ -175,11 +209,7 @@ export async function sendOnPage(kind, message) {
     }, 4000);
     if (!send) return { error: "LinkedIn's Send button stayed disabled; nothing was sent." };
     press(send);
-    const head = message.slice(0, 40);
-    const shown = await waitFor(
-      () => Array.from(document.querySelectorAll(".msg-s-event-listitem__body, .msg-s-message-list__event, [data-event-urn]")).some((m) => text(m).includes(head)),
-      10000
-    );
+    const shown = await waitFor(() => matching() > before, 10000);
     return shown ? { delivery: "messaged" } : { reason: "unconfirmed" };
   }
 
