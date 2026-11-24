@@ -8,6 +8,7 @@ import { wakeAgent } from "@/lib/extension-bridge";
 import { apiClient, getApiErrorMessage } from "@/lib/api";
 import { CopilotRunCard } from "./CopilotRunCard";
 import { ApplyInbox } from "./ApplyInbox";
+import { AccountSites } from "./AccountSites";
 import { TelegramConnect } from "./TelegramConnect";
 import { LiveBrowserSurface, type BrowserSurfaceHandle } from "./LiveBrowserSurface";
 import { Bezel, IslandButton, Input, Select, Textarea, Field } from "@/components/vanguard";
@@ -17,7 +18,7 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/compone
 
 type Screen = { base64: string; width: number; height: number; url: string; mime?: string };
 type Snapshot = { snapshotId: number; computer_run: string; elements: { ref: string; role: string; name: string }[] };
-type SavedLogin = { id: string; origin: string; label: string; auto_signin?: boolean };
+type SavedLogin = { id: string; origin: string; label: string; auto_signin?: boolean; created_by_nova?: boolean };
 
 export function ComputerPanel() {
   const [expanded, setExpanded] = useState(false);
@@ -244,7 +245,7 @@ export function ComputerPanel() {
         <IslandButton size="sm" tone="ghost" disabled={busy} type="submit">Save login</IslandButton>
       </form>
       <div className="mt-3 space-y-2">
-        {logins.map(login => <div key={login.id} className="space-y-1 text-sm"><div className="flex items-center justify-between gap-2"><span className="min-w-0 break-all">{login.label}  /  {login.origin}</span>
+        {logins.map(login => <div key={login.id} className="space-y-1 text-sm"><div className="flex items-center justify-between gap-2"><span className="min-w-0 break-all">{login.label}  /  {login.origin}{login.created_by_nova && <span className="ml-2 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">Created by Nova</span>}</span>
           <IslandButton size="sm" tone="ghost" disabled={busy} onClick={() => perform(async () => { await apiClient.delete(`/computer/credentials/${login.id}`); await refreshLogins(); })}>Delete</IslandButton></div>
           <label className="flex items-start gap-2 text-xs text-muted-foreground"><input type="checkbox" className="mt-0.5" checked={Boolean(login.auto_signin)} disabled={busy}
             onChange={e => { const enabled = e.target.checked; void perform(async () => { await apiClient.put(`/computer/credentials/${login.id}/auto-signin`, { enabled }); await refreshLogins(); }); }} />
@@ -260,6 +261,7 @@ export function ComputerPanel() {
         </>}
       </div>
     </details>
+    <AccountSites />
     <ApplyInbox />
     <TelegramConnect />
     {taskForm}

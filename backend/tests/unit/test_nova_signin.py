@@ -266,6 +266,7 @@ async def test_planner_asks_before_signing_in_without_consent():
         patch.object(agent, "AsyncSessionLocal", return_value=db),
         patch.object(agent, "get_chat_gateway_llm", AsyncMock(return_value=llm)),
         patch.object(agent.nova_signin, "saved_logins", AsyncMock(return_value=[])),
+        patch.object(agent.nova_signin, "account_sites", AsyncMock(return_value=[])),
         patch.object(agent.nova_signin, "saved_login", AsyncMock(return_value=SimpleNamespace())),
         patch.object(agent.nova_signin, "claim_auto_signin", AsyncMock(return_value=False)),
         patch.object(agent.nova_signin, "sign_in", AsyncMock()) as sign_in,
@@ -290,6 +291,7 @@ async def test_planner_reports_missing_login_instead_of_proposing():
         patch.object(agent, "AsyncSessionLocal", return_value=db),
         patch.object(agent, "get_chat_gateway_llm", AsyncMock(return_value=llm)),
         patch.object(agent.nova_signin, "saved_logins", AsyncMock(return_value=[])),
+        patch.object(agent.nova_signin, "account_sites", AsyncMock(return_value=[])),
         patch.object(agent.nova_signin, "saved_login", AsyncMock(return_value=None)),
     ):
         result = await agent.plan(run)
@@ -312,6 +314,7 @@ async def test_planner_marks_code_steps_for_private_entry():
         patch.object(agent, "AsyncSessionLocal", return_value=db),
         patch.object(agent, "get_chat_gateway_llm", AsyncMock(return_value=llm)),
         patch.object(agent.nova_signin, "saved_logins", AsyncMock(return_value=[])),
+        patch.object(agent.nova_signin, "account_sites", AsyncMock(return_value=[])),
     ):
         result = await agent.plan(run)
     assert result["status"] == "awaiting_approval"
