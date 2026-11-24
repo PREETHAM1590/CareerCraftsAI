@@ -15,6 +15,9 @@ class ProviderDefinition:
 SUPPORTED_PROVIDERS: dict[str, ProviderDefinition] = {
     "github": ProviderDefinition("github", "github"),
     "gmail": ProviderDefinition("gmail", "google-mail"),
+    # Same Google provider, separate Nango integration whose OAuth scopes are
+    # only gmail.send + email: outreach without inbox access.
+    "gmail_send": ProviderDefinition("gmail_send", "google-mail"),
     "google_drive": ProviderDefinition("google_drive", "google-drive"),
     "google_calendar": ProviderDefinition("google_calendar", "google-calendar"),
     "outlook_mail": ProviderDefinition("outlook_mail", "outlook"),

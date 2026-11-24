@@ -71,6 +71,14 @@ class Settings(BaseSettings):
     # tracking adds its pixel only when this is set to a public https URL.
     PUBLIC_API_URL: str | None = None
 
+    # ── LinkedIn sending (beta, off by default) ────────────────────────
+    # Sends approved outreach from the member's own LinkedIn, through their
+    # paired CareerCraft extension in their own Chrome. LinkedIn's User
+    # Agreement prohibits automation; accounts can be restricted.
+    LINKEDIN_OUTREACH_ENABLED: bool = False
+    LINKEDIN_INVITES_PER_DAY: int = 10
+    LINKEDIN_MESSAGES_PER_DAY: int = 25
+
     # ── Redis ──────────────────────────────────────────────────────────
     REDIS_PASSWORD: str | None = None
 

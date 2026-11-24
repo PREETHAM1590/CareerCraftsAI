@@ -11,6 +11,7 @@ import {
   CalendarDots,
   CloudSlash,
   EnvelopeSimple,
+  PaperPlaneTilt,
   GoogleDriveLogo,
   GoogleLogo,
   Info,
@@ -43,7 +44,7 @@ import { openNangoConnectWindow } from "@/lib/nango-connect";
 import { GitHubSettings } from "@/components/integrations/GitHubSettings";
 import { cn } from "@/lib/utils";
 
-type Provider = "gmail" | "google_drive" | "google_calendar" | "outlook_mail" | "outlook_calendar";
+type Provider = "gmail" | "gmail_send" | "google_drive" | "google_calendar" | "outlook_mail" | "outlook_calendar";
 type ConnectionStatus = "pending" | "connected" | "disconnected" | "error" | "revoked";
 
 type Connection = {
@@ -64,6 +65,7 @@ type ProviderDef = { id: Provider; name: string; description: string };
 
 const PROVIDERS: Array<ProviderDef> = [
   { id: "gmail", name: "Gmail", description: "Read context and send approved outreach." },
+  { id: "gmail_send", name: "Gmail (send only)", description: "Send approved outreach. CareerCraft can't read your inbox." },
   { id: "google_drive", name: "Google Drive", description: "Save documents you explicitly export." },
   { id: "google_calendar", name: "Google Calendar", description: "Schedule approved interview events." },
   { id: "outlook_mail", name: "Microsoft Outlook Mail", description: "Read context and send approved outreach." },
@@ -72,13 +74,14 @@ const PROVIDERS: Array<ProviderDef> = [
 
 const PROVIDER_ICON: Record<Provider, ReactNode> = {
   gmail: <EnvelopeSimple size={18} weight="light" />,
+  gmail_send: <PaperPlaneTilt size={18} weight="light" />,
   google_drive: <GoogleDriveLogo size={18} weight="light" />,
   google_calendar: <CalendarBlank size={18} weight="light" />,
   outlook_mail: <MicrosoftOutlookLogo size={18} weight="light" />,
   outlook_calendar: <CalendarDots size={18} weight="light" />,
 };
 
-const GOOGLE_IDS: Provider[] = ["gmail", "google_drive", "google_calendar"];
+const GOOGLE_IDS: Provider[] = ["gmail", "gmail_send", "google_drive", "google_calendar"];
 const MICROSOFT_IDS: Provider[] = ["outlook_mail", "outlook_calendar"];
 
 function providerDef(id: Provider): ProviderDef {
@@ -432,7 +435,7 @@ export default function IntegrationsSettingsPage() {
     const provider = providerDef(id);
     const connection = byProvider.get(id);
     const accountMismatch = Boolean(
-      provider.id === "gmail" &&
+      (provider.id === "gmail" || provider.id === "gmail_send") &&
         enforceGmailMatch &&
         connection?.account_email &&
         loginEmail &&
@@ -574,6 +577,7 @@ export default function IntegrationsSettingsPage() {
                       </Notice>
                     ) : null}
                   </ProviderTile>
+                  <ProviderTile variant="row" {...tileProps("gmail_send")} />
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <ProviderTile variant="compact" {...tileProps("google_drive")} />
                     <ProviderTile variant="compact" {...tileProps("google_calendar")} />

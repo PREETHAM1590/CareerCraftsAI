@@ -20,6 +20,26 @@ NANGO_WEBHOOK_SECRET=webhook-signing-key
 NANGO_PROVIDER_CONFIG_KEYS={"gmail":"google-mail-prod","google_drive":"google-drive-prod","google_calendar":"google-calendar-prod","outlook_mail":"outlook-mail-prod","outlook_calendar":"outlook-calendar-prod"}
 ```
 
+### Gmail (send only)
+
+Some members want outreach sent from their Gmail without giving CareerCraft
+inbox access. For them, add a **second** Google Mail integration in Nango and
+map it under `gmail_send`:
+
+```dotenv
+NANGO_PROVIDER_CONFIG_KEYS={"gmail":"google-mail-prod","gmail_send":"google-mail-send-prod",...}
+```
+
+- **Scopes:** set them to exactly `https://www.googleapis.com/auth/gmail.send`
+  and `email`. `email` lets the backend read the account address from Google's
+  userinfo endpoint. That enforces the same rule as full Gmail: the connected
+  address must match the member's Gmail sign-in.
+- **Sending:** uses the full `gmail` connection when there is one, and otherwise
+  the send-only connection. A message Gmail rejects is never retried on the
+  other connection.
+- **Inbox features** (reply tracking, inbox cleanup) still need the full `gmail`
+  connection.
+
 Set the Nango webhook URL to
 `https://<api-host>/api/v1/integrations/webhooks/nango`. The endpoint verifies
 Nango's documented `X-Nango-Hmac-Sha256` HMAC-SHA256 signature over the raw
