@@ -4,6 +4,7 @@ import { useId, useRef, useState, type InputHTMLAttributes, type KeyboardEvent }
 import { MapPin } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
 import { suggestLocations } from "@/lib/locations";
+import { isComposing } from "@/lib/ime";
 
 type Props = Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "onChange"> & {
   value: string;
@@ -44,7 +45,7 @@ export function LocationInput({ value, onChange, multiple = false, inputClassNam
       setActive((i) => (i + (e.key === "ArrowDown" ? 1 : options.length - 1)) % options.length);
       return;
     }
-    if (showList && e.key === "Enter" && current.trim() && options[active]) {
+    if (showList && e.key === "Enter" && !isComposing(e) && current.trim() && options[active]) {
       // Pick the highlighted city instead of submitting a half-typed one.
       e.preventDefault();
       choose(options[active]);

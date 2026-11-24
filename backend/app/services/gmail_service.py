@@ -3,11 +3,56 @@
 from __future__ import annotations
 
 import base64
+import logging
 from email.message import EmailMessage
 from urllib.parse import quote, urlencode
 
-from app.integrations.exceptions import IntegrationActionError
+from app.integrations.exceptions import ConnectionNotFoundError, IntegrationActionError
 from app.services.integration_proxy_service import proxy_request
+
+# Sending tries the full Gmail connection, then the send-only one. Only a
+# missing or unconfigured connection falls through; a rejection or an
+# unavailable provider never retries on the other (no double sends).
+logger = logging.getLogger(__name__)
+
+SEND_PROVIDERS = ("gmail", "gmail_send")
+
+
+def send_only_verified(user_id: str) -> bool:
+    """The send-only connection is used only once its Gmail address was read
+    and matched to the member's sign-in (a mismatch revokes it)."""
+    from uuid import UUID
+
+    from sqlalchemy import select
+
+    from app.integrations.repository import account_email
+    from app.models.db import IntegrationConnection
+    from app.services.integration_proxy_service import _run
+
+    # _run may start a new event loop (worker thread or a thread of its
+    # own): use the NullPool sessions, whose connections never cross loops.
+    from app.services.jobs_database import AsyncSessionLocal
+
+    async def check() -> bool:
+        async with AsyncSessionLocal() as db:
+            row = (
+                await db.execute(
+                    select(IntegrationConnection).where(
+                        IntegrationConnection.user_id == UUID(str(user_id)),
+                        IntegrationConnection.provider == "gmail_send",
+                        IntegrationConnection.status == "connected",
+                    )
+                )
+            ).scalar_one_or_none()
+        return row is not None and bool(account_email(row))
+
+    try:
+        return _run(check())
+    except Exception:
+        # Fail closed (not verified), but never silently: a DB outage here
+        # would otherwise look exactly like an unverified connection.
+        logger.warning("gmail_send_only_verification_failed", exc_info=True)
+        return False
 
 
 class GmailSendError(RuntimeError):
@@ -140,18 +185,27 @@ class GmailMCPClient:
                 content, maintype="application", subtype="pdf", filename=filename
             )
         raw = base64.urlsafe_b64encode(message.as_bytes()).decode().rstrip("=")
-        try:
-            result = proxy_request(
-                user_id=self.user_id,
-                provider="gmail",
-                method="POST",
-                path="gmail/v1/users/me/messages/send",
-                json_data={"raw": raw},
-            )
-        except IntegrationActionError as exc:
-            raise GmailSendError("Gmail rejected the approved message") from exc
-        except Exception as exc:
-            raise GmailSendError("Gmail is not connected through Nango") from exc
+        result = None
+        for provider in SEND_PROVIDERS:
+            if provider == "gmail_send" and not send_only_verified(self.user_id):
+                continue  # its address hasn't been checked against the sign-in yet
+            try:
+                result = proxy_request(
+                    user_id=self.user_id,
+                    provider=provider,
+                    method="POST",
+                    path="gmail/v1/users/me/messages/send",
+                    json_data={"raw": raw},
+                )
+                break
+            except IntegrationActionError as exc:
+                raise GmailSendError("Gmail rejected the approved message") from exc
+            except (ConnectionNotFoundError, ValueError):
+                continue  # not connected / not configured: try the next one
+            except Exception as exc:
+                raise GmailSendError("Gmail is not connected through Nango") from exc
+        if result is None:
+            raise GmailSendError("Gmail is not connected through Nango")
         if not isinstance(result.data, dict):
             raise GmailSendError("Gmail returned an invalid response")
         return result.data

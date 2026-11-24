@@ -10,6 +10,7 @@ import { ThemeToggle } from "@/components/theme/ThemeToggle";
 import { usePollMs } from "@/store/agentStore";
 import { apiClient } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { isComposing } from "@/lib/ime";
 
 const UserMenu = dynamic(
   () => import("@/components/auth/UserMenu").then((m) => ({ default: m.UserMenu })),
@@ -52,7 +53,7 @@ export function AppTopbar({ onMenuClick }: { onMenuClick?: () => void }) {
   const router = useRouter();
   const [search, setSearch] = useState("");
   const submitSearch = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Enter" && search.trim()) { router.push(`/applications?q=${encodeURIComponent(search.trim())}`); setMobileSearchOpen(false); }
+    if (event.key === "Enter" && !isComposing(event) && search.trim()) { router.push(`/applications?q=${encodeURIComponent(search.trim())}`); setMobileSearchOpen(false); }
   };
   const [notifOpen, setNotifOpen] = useState(false);
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
