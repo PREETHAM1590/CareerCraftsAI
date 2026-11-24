@@ -1,29 +1,32 @@
-"""LinkedIn sending (beta): off by default, hosted login, at-most-once sends."""
+"""LinkedIn sending (beta): off by default, sent by the member's own extension,
+at most once per draft, under daily caps."""
 
-import json
 import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
 import pytest
+from fastapi import HTTPException
 
 from app.core.config import settings
 from app.services import linkedin_sender as li
 
 USER = "8f7c2b5e-6a0d-4f7e-9d6c-0b1a2c3d4e5f"
-REAL_CLIENT = httpx.AsyncClient
+URL = "https://www.linkedin.com/in/priya/"
 
 
 class FakeRedis:
     def __init__(self):
         self.data = {}
 
-    async def set(self, key, value, ex=None):
+    async def set(self, key, value, ex=None, nx=False):
+        if nx and key in self.data:
+            return None
         self.data[key] = value
+        return True
 
-    async def getdel(self, key):
-        return self.data.pop(key, None)
+    async def delete(self, key):
+        self.data.pop(key, None)
 
     async def incr(self, key):
         self.data[key] = int(self.data.get(key, 0)) + 1
@@ -43,26 +46,8 @@ def redis():
 @pytest.fixture
 def on(monkeypatch):
     monkeypatch.setattr(settings, "LINKEDIN_OUTREACH_ENABLED", True)
-    monkeypatch.setattr(settings, "UNIPILE_DSN", "https://api8.unipile.com:13851")
-    monkeypatch.setattr(settings, "UNIPILE_API_KEY", "key")
-    monkeypatch.setattr(settings, "PUBLIC_API_URL", "https://api.careercraftsai.me")
-    monkeypatch.setattr(settings, "FRONTEND_URL", "https://careercraftsai.me")
     monkeypatch.setattr(settings, "LINKEDIN_INVITES_PER_DAY", 10)
     monkeypatch.setattr(settings, "LINKEDIN_MESSAGES_PER_DAY", 25)
-
-
-def unipile(handler):
-    """Route every httpx call in linkedin_sender to `handler`."""
-    calls = []
-
-    def recorder(request):
-        calls.append(request)
-        return handler(request)
-
-    transport = httpx.MockTransport(recorder)
-    return patch.object(
-        li.httpx, "AsyncClient", lambda **kw: REAL_CLIENT(transport=transport, **kw)
-    ), calls
 
 
 def test_off_by_default():
@@ -71,168 +56,119 @@ def test_off_by_default():
 
 
 @pytest.mark.parametrize(
-    ("url", "ident"),
+    ("url", "canonical"),
     [
-        ("https://www.linkedin.com/in/priya-sharma-123/", "priya-sharma-123"),
-        ("https://in.linkedin.com/in/rahul_v?trk=x", "rahul_v"),
+        (
+            "https://www.linkedin.com/in/priya-sharma-123",
+            "https://www.linkedin.com/in/priya-sharma-123/",
+        ),
+        ("https://in.linkedin.com/in/rahul_v/?trk=x", "https://www.linkedin.com/in/rahul_v/"),
         ("http://www.linkedin.com/in/priya", None),
         ("https://www.linkedin.com/company/acme", None),
         ("https://evil.example/in/priya", None),
         (None, None),
     ],
 )
-def test_public_identifier(url, ident):
-    assert li.public_identifier(url) == ident
+def test_profile_url(url, canonical):
+    assert li.profile_url(url) == canonical
 
 
-# ── Connecting ──────────────────────────────────────────────────
+# ── One send through the extension ──────────────────────────────
 
 
-@pytest.mark.asyncio
-async def test_link_needs_the_flag(redis):
-    with pytest.raises(li.LinkedInUnavailable):
-        await li.link_url(USER)
+def commands(*answers):
+    """Stand-in for the device command channel; records each command body."""
+    sent = []
+
+    async def command(device, body):
+        sent.append(body)
+        answer = answers[len(sent) - 1]
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    return patch.object(li, "_command", command), sent
 
 
-@pytest.mark.asyncio
-async def test_link_uses_unilogin_and_a_one_time_state(on, redis):
-    client, calls = unipile(
-        lambda r: httpx.Response(201, json={"url": "https://account.unipile.com/x"})
-    )
-    with client:
-        assert await li.link_url(USER) == "https://account.unipile.com/x"
-    body = json.loads(calls[0].content)
-    assert calls[0].url.path == "/api/v1/hosted/accounts/link"
-    assert calls[0].headers["X-API-KEY"] == "key"
-    assert body["providers"] == ["LINKEDIN"] and "unilogin" in body
-    assert body["name"] == USER
-    state = body["notify_url"].split("state=")[1]
-    assert body["notify_url"].startswith("https://api.careercraftsai.me/api/v1/inbound/unipile?")
-    assert redis.data[f"li:link:{state}"] == USER
-
-
-def account_db(existing=None):
-    db = MagicMock()
-    db.__aenter__ = AsyncMock(return_value=db)
-    db.__aexit__ = AsyncMock(return_value=False)
-    db.get = AsyncMock(return_value=existing)
-    db.add = MagicMock()
-    db.commit = AsyncMock()
-    return db
-
-
-@pytest.mark.asyncio
-async def test_callback_connects_only_with_the_matching_state(redis):
-    state = "s" * 24
-    redis.data[f"li:link:{state}"] = USER
-    db = account_db()
-    with patch("app.core.database.AsyncSessionLocal", return_value=db):
-        result = await li.handle_notify(
-            state, {"status": "CREATION_SUCCESS", "account_id": "e54m8LR22bA7", "name": USER}
-        )
-    assert result == {"status": "connected"}
-    row = db.add.call_args.args[0]
-    assert str(row.user_id) == USER and row.unipile_account_id == "e54m8LR22bA7"
-    assert f"li:link:{state}" not in redis.data
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("state", "payload", "status"),
-    [
-        ("bad state!", {}, "ignored"),
-        ("u" * 24, {"status": "CREATION_SUCCESS", "account_id": "abcd", "name": USER}, "expired"),
-        (
-            "s" * 24,
-            {"status": "CREATION_SUCCESS", "account_id": "abcd", "name": "someone"},
-            "rejected",
-        ),
-        ("s" * 24, {"status": "FAILED", "account_id": "abcd", "name": USER}, "rejected"),
-    ],
-)
-async def test_callback_rejects_anything_else(redis, state, payload, status):
-    redis.data[f"li:link:{'s' * 24}"] = USER
-    db = account_db()
-    with patch("app.core.database.AsyncSessionLocal", return_value=db):
-        assert await li.handle_notify(state, payload) == {"status": status}
-    db.add.assert_not_called()
-
-
-# ── Sending ─────────────────────────────────────────────────────
-
-
-def profile(distance="SECOND_DEGREE", provider_id="ACoAAAEkw"):
-    return httpx.Response(200, json={"provider_id": provider_id, "network_distance": distance})
+SECOND = {"degree": "2nd", "can_connect": True, "can_message": False, "pending": False}
+FIRST = {"degree": "1st", "can_connect": False, "can_message": True, "pending": False}
 
 
 @pytest.mark.asyncio
 async def test_first_degree_gets_a_message(on, redis):
-    def handler(request):
-        if request.method == "GET":
-            return profile("FIRST_DEGREE")
-        return httpx.Response(201, json={"object": "ChatStarted"})
-
-    client, calls = unipile(handler)
-    with client:
-        assert await li.deliver(USER, "acc1", "priya", "Hi Priya") == ("messaged", None)
-    assert calls[1].url.path == "/api/v1/chats"
-    assert calls[1].headers["content-type"].startswith("multipart/form-data")
-    assert b"Hi Priya" in calls[1].content and b"ACoAAAEkw" in calls[1].content
+    patcher, sent = commands(FIRST, {"delivery": "messaged"})
+    with patcher:
+        assert await li.deliver(USER, "dev1", URL, "Hi Priya") == ("messaged", None)
+    assert sent[0] == {"op": "probe", "profile_url": URL}
+    assert sent[1] == {"op": "send", "as": "message", "profile_url": URL, "message": "Hi Priya"}
 
 
 @pytest.mark.asyncio
 async def test_others_get_an_invite_with_the_note_capped(on, redis):
-    def handler(request):
-        if request.method == "GET":
-            return profile()
-        return httpx.Response(201, json={"object": "UserInvitationSent"})
-
-    client, calls = unipile(handler)
-    with client:
-        result = await li.deliver(USER, "acc1", "priya", "x" * 400)
-    assert result == ("invited", None)
-    body = json.loads(calls[1].content)
-    assert calls[1].url.path == "/api/v1/users/invite"
-    assert body == {"account_id": "acc1", "provider_id": "ACoAAAEkw", "message": "x" * 300}
-
-
-@pytest.mark.asyncio
-async def test_daily_cap_stops_before_anything_is_sent(on, redis, monkeypatch):
-    monkeypatch.setattr(settings, "LINKEDIN_INVITES_PER_DAY", 0)
-    client, calls = unipile(lambda r: profile())
-    with client:
-        delivery, _ = await li.deliver(USER, "acc1", "priya", "Hi")
-    assert delivery == "limit_reached"
-    assert [c.method for c in calls] == ["GET"]
+    patcher, sent = commands(SECOND, {"delivery": "invited"})
+    with patcher:
+        assert await li.deliver(USER, "dev1", URL, "x" * 400) == ("invited", None)
+    assert sent[1]["as"] == "invite" and sent[1]["message"] == "x" * 300
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("response", "delivery"),
+    ("probe", "error"),
     [
-        (httpx.Response(422, json={"type": "errors/cannot_resend_yet"}), "limit_reached"),
-        (httpx.Response(429), "limit_reached"),
-        (httpx.Response(401), "failed"),
-        (httpx.Response(400, json={"type": "errors/invalid"}), "failed"),
-        (httpx.Response(500), "outcome_unknown"),
+        ({"signed_out": True}, "Sign in to LinkedIn"),
+        ({"not_found": True}, "could not be opened"),
+        ({**SECOND, "pending": True}, "already pending"),
+        ({"degree": "3rd", "can_connect": False, "can_message": False}, "neither"),
     ],
 )
-async def test_send_outcomes(on, redis, response, delivery):
-    client, _ = unipile(lambda r: profile() if r.method == "GET" else response)
-    with client:
-        assert (await li.deliver(USER, "acc1", "priya", "Hi"))[0] == delivery
+async def test_probe_refusals_send_nothing(on, redis, probe, error):
+    patcher, sent = commands(probe)
+    with patcher:
+        delivery, message = await li.deliver(USER, "dev1", URL, "Hi")
+    assert delivery == "failed" and error in message
+    assert len(sent) == 1  # probe only
+    assert redis.data == {}  # no cap used
 
 
 @pytest.mark.asyncio
-async def test_timeout_after_sending_is_an_unknown_outcome(on, redis):
-    def handler(request):
-        if request.method == "GET":
-            return profile()
-        raise httpx.ReadTimeout("slow")
+async def test_unreachable_browser_on_probe_is_a_plain_failure(on, redis):
+    patcher, sent = commands(HTTPException(504, "Your browser didn't respond in time."))
+    with patcher:
+        assert (await li.deliver(USER, "dev1", URL, "Hi"))[0] == "failed"
+    assert len(sent) == 1
 
-    client, _ = unipile(handler)
-    with client:
-        assert (await li.deliver(USER, "acc1", "priya", "Hi"))[0] == "outcome_unknown"
+
+@pytest.mark.asyncio
+async def test_daily_cap_stops_before_the_send(on, redis, monkeypatch):
+    monkeypatch.setattr(settings, "LINKEDIN_INVITES_PER_DAY", 0)
+    patcher, sent = commands(SECOND)
+    with patcher:
+        assert (await li.deliver(USER, "dev1", URL, "Hi"))[0] == "limit_reached"
+    assert [c["op"] for c in sent] == ["probe"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("answer", "delivery"),
+    [
+        ({"reason": "limit"}, "limit_reached"),
+        ({"reason": "unconfirmed"}, "outcome_unknown"),
+        ({"error": "LinkedIn did not offer a note; nothing was sent."}, "failed"),
+        (HTTPException(504, "Your browser didn't respond in time."), "outcome_unknown"),
+        (
+            HTTPException(502, "The browser could not complete the LinkedIn step."),
+            "outcome_unknown",
+        ),
+        (HTTPException(422, "Invalid message"), "failed"),
+    ],
+)
+async def test_send_outcomes(on, redis, answer, delivery):
+    patcher, _ = commands(SECOND, answer)
+    with patcher:
+        assert (await li.deliver(USER, "dev1", URL, "Hi"))[0] == delivery
+
+
+# ── At most once per draft ──────────────────────────────────────
 
 
 def queue_db(item):
@@ -246,7 +182,7 @@ def queue_db(item):
     return db
 
 
-def item(delivery=None, url="https://www.linkedin.com/in/priya/"):
+def item(delivery=None, url="https://www.linkedin.com/in/priya"):
     return SimpleNamespace(
         message="Hi Priya",
         contact_linkedin_url=url,
@@ -260,73 +196,103 @@ def item(delivery=None, url="https://www.linkedin.com/in/priya/"):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("delivery", ["sending", "invited", "messaged", "outcome_unknown"])
-async def test_sent_or_maybe_sent_items_are_never_sent_again(on, delivery):
+async def test_sent_or_maybe_sent_items_are_never_sent_again(delivery):
     row = item(delivery)
     with (
-        patch.object(li, "account_for", AsyncMock(return_value="acc1")),
         patch("app.core.database.AsyncSessionLocal", return_value=queue_db(row)),
         patch.object(li, "deliver", AsyncMock()) as deliver,
     ):
-        assert await li.send_item(USER, uuid.uuid4()) == delivery
+        assert await li.send_item(USER, "dev1", uuid.uuid4()) == delivery
     deliver.assert_not_called()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("delivery", [None, "failed", "limit_reached"])
-async def test_unsent_items_can_be_sent(on, delivery):
+async def test_unsent_items_can_be_sent(delivery):
     row = item(delivery)
     with (
-        patch.object(li, "account_for", AsyncMock(return_value="acc1")),
         patch("app.core.database.AsyncSessionLocal", return_value=queue_db(row)),
         patch.object(li, "deliver", AsyncMock(return_value=("invited", None))) as deliver,
     ):
-        assert await li.send_item(USER, uuid.uuid4()) == "invited"
-    deliver.assert_awaited_once_with(USER, "acc1", "priya", "Hi Priya")
+        assert await li.send_item(USER, "dev1", uuid.uuid4()) == "invited"
+    deliver.assert_awaited_once_with(USER, "dev1", URL, "Hi Priya")
     assert row.status == "sent" and row.sent_at is not None
 
 
 @pytest.mark.asyncio
-async def test_contact_without_profile_link_is_not_sent(on):
+async def test_contact_without_profile_link_is_not_sent():
     row = item(url="https://www.linkedin.com/company/acme")
     with (
-        patch.object(li, "account_for", AsyncMock(return_value="acc1")),
         patch("app.core.database.AsyncSessionLocal", return_value=queue_db(row)),
         patch.object(li, "deliver", AsyncMock()) as deliver,
     ):
-        assert await li.send_item(USER, uuid.uuid4()) == "failed"
+        assert await li.send_item(USER, "dev1", uuid.uuid4()) == "failed"
     deliver.assert_not_called()
 
 
+# ── A batch ─────────────────────────────────────────────────────
+
+
+def run_session(run):
+    db = MagicMock()
+    db.__aenter__ = AsyncMock(return_value=db)
+    db.__aexit__ = AsyncMock(return_value=False)
+    db.get = AsyncMock(return_value=run)
+    db.commit = AsyncMock()
+    return db
+
+
 @pytest.mark.asyncio
-async def test_sending_needs_flag_and_connection(on):
-    with patch.object(li, "account_for", AsyncMock(return_value=None)):
-        with pytest.raises(li.LinkedInUnavailable):
-            await li.send_item(USER, uuid.uuid4())
+async def test_batch_records_each_result_and_clears_the_flag(redis):
+    ids = [str(uuid.uuid4()), str(uuid.uuid4())]
+    run = SimpleNamespace(output={"queue_ids": ids, "sending": True, "deliveries": {}})
+    with (
+        patch("app.core.database.AsyncSessionLocal", return_value=run_session(run)),
+        patch.object(li, "device_for", AsyncMock(side_effect=["dev1", None])),
+        patch.object(li, "send_item", AsyncMock(return_value="invited")) as send,
+    ):
+        await li.send_run(USER, uuid.uuid4())
+    send.assert_awaited_once()  # the second found the browser offline
+    assert run.output["deliveries"] == {ids[0]: "invited", ids[1]: "failed"}
+    assert run.output["sending"] is False
+    assert redis.data == {}  # lock released
 
 
-# ── Approval endpoint ───────────────────────────────────────────
+@pytest.mark.asyncio
+async def test_one_batch_at_a_time(redis):
+    run_id = uuid.uuid4()
+    redis.data[f"li:sending:{run_id}"] = "1"
+    with patch.object(li, "send_item", AsyncMock()) as send:
+        await li.send_run(USER, run_id)
+    send.assert_not_called()
 
 
-def run_db(queue_ids):
+# ── API ─────────────────────────────────────────────────────────
+
+
+def locked_run(status="awaiting_approval", output=None):
     run = SimpleNamespace(
-        status="awaiting_approval", output={"queue_ids": queue_ids}, completed_at=None
+        id=uuid.uuid4(),
+        status=status,
+        output=output if output is not None else {"queue_ids": [str(uuid.uuid4())]},
+        completed_at=None,
     )
     db = MagicMock()
     db.execute = AsyncMock(return_value=MagicMock())
     db.execute.return_value.scalar_one_or_none.return_value = run
     db.flush = AsyncMock()
+    db.commit = AsyncMock()
     return run, db
 
 
 @pytest.mark.asyncio
-async def test_approval_sends_each_draft_when_connected(on):
+async def test_approval_hands_the_batch_to_the_extension(on):
     from app.api.v1.linkedin import OutreachApproveRequest, approve_outreach
 
-    ids = [str(uuid.uuid4()), str(uuid.uuid4())]
-    run, db = run_db(ids)
+    run, db = locked_run()
     with (
-        patch.object(li, "account_for", AsyncMock(return_value="acc1")),
-        patch.object(li, "send_item", AsyncMock(side_effect=["invited", "limit_reached"])) as send,
+        patch.object(li, "device_for", AsyncMock(return_value="dev1")),
+        patch.object(li, "start_run") as start,
     ):
         result = await approve_outreach(
             uuid.uuid4(),
@@ -334,29 +300,75 @@ async def test_approval_sends_each_draft_when_connected(on):
             db=db,
             current_user=SimpleNamespace(id=USER),
         )
-    assert send.await_count == 2
-    assert run.output["deliveries"] == {ids[0]: "invited", ids[1]: "limit_reached"}
-    assert result["status"] == "completed"
+    assert result["sending"] is True
+    assert run.status == "completed" and run.output["sending"] is True
+    start.assert_called_once_with(USER, run.id)
 
 
 @pytest.mark.asyncio
-async def test_approval_without_connection_keeps_the_manual_handoff():
-    from fastapi import HTTPException
-
+async def test_approval_without_extension_keeps_the_manual_handoff(on):
     from app.api.v1.linkedin import OutreachApproveRequest, approve_outreach
 
-    _, db = run_db([str(uuid.uuid4())])
-    with pytest.raises(HTTPException) as exc:
-        await approve_outreach(
-            uuid.uuid4(),
-            OutreachApproveRequest(approved=True),
-            db=db,
-            current_user=SimpleNamespace(id=USER),
-        )
+    _, db = locked_run()
+    with (
+        patch.object(li, "device_for", AsyncMock(return_value=None)),
+        patch.object(li, "start_run") as start,
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await approve_outreach(
+                uuid.uuid4(),
+                OutreachApproveRequest(approved=True),
+                db=db,
+                current_user=SimpleNamespace(id=USER),
+            )
     assert exc.value.status_code == 409 and "Copy the draft" in exc.value.detail
+    start.assert_not_called()
 
 
-def test_callback_path_skips_session_auth():
-    from app.core.request_middleware import PUBLIC_PATHS
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "output"),
+    [
+        ("awaiting_approval", {"queue_ids": ["x"]}),
+        ("completed", {"queue_ids": ["x"], "sending": True}),
+        ("completed", {}),
+    ],
+)
+async def test_resend_only_for_idle_approved_runs(on, status, output):
+    from app.api.v1.linkedin import resend_outreach
 
-    assert "/api/v1/inbound/unipile" in PUBLIC_PATHS
+    _, db = locked_run(status, output)
+    with (
+        patch.object(li, "device_for", AsyncMock(return_value="dev1")),
+        patch.object(li, "start_run") as start,
+    ):
+        with pytest.raises(HTTPException) as exc:
+            # Past the rate limiter (it needs a real request); the checks are inside.
+            await resend_outreach.__wrapped__(
+                request=MagicMock(),
+                run_id=uuid.uuid4(),
+                db=db,
+                current_user=SimpleNamespace(id=USER),
+            )
+    assert exc.value.status_code == 409
+    start.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_status_reports_whether_the_extension_is_online(on):
+    from app.api.v1.linkedin import linkedin_sending_status
+
+    with patch.object(li, "device_for", AsyncMock(return_value="dev1")):
+        status = await linkedin_sending_status(current_user=SimpleNamespace(id=USER))
+    assert status["enabled"] and status["ready"]
+    assert status["invites_per_day"] == 10
+
+
+@pytest.mark.asyncio
+async def test_status_when_off():
+    from app.api.v1.linkedin import linkedin_sending_status
+
+    assert await linkedin_sending_status(current_user=SimpleNamespace(id=USER)) == {
+        "enabled": False,
+        "ready": False,
+    }

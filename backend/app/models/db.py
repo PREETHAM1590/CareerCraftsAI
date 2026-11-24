@@ -679,17 +679,6 @@ class LinkedInOutreachQueue(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
-class LinkedInAccount(Base):
-    """The member's LinkedIn as connected through Unipile: an account id only."""
-
-    __tablename__ = "linkedin_accounts"
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
-    )
-    unipile_account_id: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
-    connected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-
 class AtsScore(Base):
     __tablename__ = "ats_scores"
 

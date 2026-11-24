@@ -38,8 +38,6 @@ PUBLIC_PATHS = {
     "/redoc",
     "/openapi.json",
     "/api/v1/integrations/webhooks/nango",
-    # Unipile hosted-login callback; matched by a single-use state token (app/api/v1/linkedin.py).
-    "/api/v1/inbound/unipile",
     # Public marketing-site demo: intentionally unauthenticated, gated
     # instead by a per-IP lifetime search cap (see app/api/v1/demo.py).
     "/api/v1/demo/job-search",

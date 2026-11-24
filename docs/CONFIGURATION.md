@@ -237,27 +237,30 @@ provider credentials; CareerCraft does not store provider OAuth tokens.
 
 ## LinkedIn sending (beta, off by default)
 
-Sends approved LinkedIn outreach from the member's own account through
-[Unipile](https://developer.unipile.com).
+Sends approved LinkedIn outreach from the member's own LinkedIn, through
+their paired CareerCraft extension in their own Chrome. There is no
+third-party service and nothing new on the server: LinkedIn access never
+leaves the member's computer.
 
 > **Risk:** LinkedIn's User Agreement prohibits automated tools, and LinkedIn
 > can restrict accounts that use them. Keep this off unless you accept that
-> risk for your users. Free LinkedIn accounts can send only about 5
-> connection notes a month.
+> risk for your users. Free LinkedIn accounts can send only a few connection
+> notes a month.
 
 | Variable | Description |
 |---|---|
 | `LINKEDIN_OUTREACH_ENABLED` | `true` to offer it. Default `false`; off means drafts are copy-only, as before. |
-| `UNIPILE_DSN` | Your Unipile API address, e.g. `https://api8.unipile.com:13851`. |
-| `UNIPILE_API_KEY` | Unipile access token (server only). |
-| `PUBLIC_API_URL` | Required. Unipile calls `https://<api>/api/v1/inbound/unipile?state=...` when a member connects. |
 | `LINKEDIN_INVITES_PER_DAY` / `LINKEDIN_MESSAGES_PER_DAY` | Per-member daily caps (default 10 and 25). |
 
 **How it works**
-- **Connecting:** "Connect LinkedIn" on the outreach page opens Unipile's hosted login with UniLogin. That uses the LinkedIn already signed in to the browser, or Unipile's own form. CareerCraft stores only Unipile's account id, never a password or cookie. The callback is accepted only with the single-use state token issued for that member (valid 30 minutes).
-- **Sending:** "Send on LinkedIn" on an approved draft sends each message once. A first-degree connection gets a message; anyone else gets a connection request with the note (300 characters max).
-- **Delivery states:** each item records `invited`, `messaged`, `failed`, `limit_reached` or `outcome_unknown`. Nothing is retried automatically. `failed` and `limit_reached` items can be sent again later.
-- **Disconnecting** unlinks the account at Unipile and forgets the id.
+- **Sending:** "Send on LinkedIn" on an approved draft card hands the batch to the member's online extension, in the background. It needs Chrome open with the extension, signed in to LinkedIn.
+- **For each draft, the extension:**
+  1. opens the profile in a background tab (grouped as "CareerCraft LinkedIn") and checks it, read only;
+  2. after the server claims the day's cap, sends a message to a first-degree connection, or a connection request with the note (300 characters max) to anyone else;
+  3. reports success only once LinkedIn shows it.
+- **Delivery states:** each draft records `invited`, `messaged`, `failed`, `limit_reached` or `outcome_unknown`. Nothing is retried automatically.
+- **Resend unsent** sends `failed` and `limit_reached` drafts again. Drafts that were sent, or might have been, are never resent.
+- **Out of free notes:** when a free account has no personalised notes left, the extension stops. It never sends a bare request instead.
 
 Run migration `20261124160000_linkedin_sending.sql`.
 

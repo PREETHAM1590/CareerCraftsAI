@@ -1,30 +1,36 @@
-"""Send approved LinkedIn outreach from the member's own account (beta).
+"""Send approved LinkedIn outreach from the member's own browser (beta).
 
-Off unless LINKEDIN_OUTREACH_ENABLED and Unipile are configured. LinkedIn's
-User Agreement prohibits automated activity and accounts can be restricted,
-so this only ever sends messages the member approved, under small daily caps.
+Off unless LINKEDIN_OUTREACH_ENABLED. LinkedIn's User Agreement prohibits
+automated activity and accounts can be restricted, so this only ever sends
+messages the member approved, under small daily caps.
 
-* Connecting: the member opens a Unipile hosted-login link (UniLogin: the
-  LinkedIn already signed in to their browser, or Unipile's own form).
-  CareerCraft never sees a LinkedIn password or session cookie; it stores
-  only Unipile's account id. The callback is matched by a single-use random
-  token in the notify URL, not by the user id Unipile echoes back.
-* Sending one approved item: resolve the profile; a first-degree connection
-  gets a message, anyone else a connection request carrying the note
-  (LinkedIn's 300-character limit). Each item moves through
-  sending -> invited/messaged/failed/limit_reached/outcome_unknown and is
-  never retried automatically, so nothing is sent twice.
+No third party holds LinkedIn access: the member's paired CareerCraft
+extension does the sending in their own Chrome, with the LinkedIn session
+already signed in there, through the device command channel
+(computer_service.send_command). For each approved item:
+
+1. "probe" (read only): open the profile and report sign-in state, degree,
+   and whether Message / Connect are offered.
+2. Claim today's cap for the kind of send, then "send": a first-degree
+   connection gets a message, anyone else a connection request with the note
+   (LinkedIn's 300-character limit). The extension reports success only once
+   LinkedIn shows it (message in the thread, request pending).
+
+Each item moves through sending -> invited/messaged/failed/limit_reached/
+outcome_unknown. Sent or maybe-sent items are never sent again; failed and
+limit_reached ones can be resent. A batch runs in the background so the
+approval returns at once; the outreach page shows progress.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
-import secrets
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
-import httpx
+from fastapi import HTTPException
 from sqlalchemy import select
 
 from app.core import redis_client
@@ -32,7 +38,6 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-LINK_TTL = 30 * 60
 NOTE_LIMIT = 300
 PROFILE_URL = re.compile(
     r"^https://(?:www\.|[a-z]{2}\.)?linkedin\.com/in/([A-Za-z0-9\-_%]{3,100})/?(?:\?.*)?$"
@@ -40,121 +45,28 @@ PROFILE_URL = re.compile(
 DONE = {"invited", "messaged"}
 # Sent, being sent, or maybe sent: never sent again automatically.
 FINAL = DONE | {"sending", "outcome_unknown"}
+_tasks: set[asyncio.Task] = set()
 
 
 class LinkedInUnavailable(RuntimeError):
-    """Sending is off, or the member hasn't connected LinkedIn."""
+    """Sending is off, or the member's extension isn't online."""
 
 
 def enabled() -> bool:
-    return bool(
-        settings.LINKEDIN_OUTREACH_ENABLED and settings.UNIPILE_DSN and settings.UNIPILE_API_KEY
-    )
+    return bool(settings.LINKEDIN_OUTREACH_ENABLED)
 
 
-def _url(path: str) -> str:
-    return settings.UNIPILE_DSN.rstrip("/") + "/api/v1/" + path.lstrip("/")
+def profile_url(url: str | None) -> str | None:
+    """Canonical https://www.linkedin.com/in/<id>/ or None."""
+    match = PROFILE_URL.match((url or "").strip())
+    return f"https://www.linkedin.com/in/{match.group(1)}/" if match else None
 
 
-def _headers() -> dict:
-    return {"X-API-KEY": settings.UNIPILE_API_KEY, "accept": "application/json"}
+async def device_for(user_id) -> str | None:
+    """The member's online extension device, or None."""
+    from app.services import computer_service
 
-
-# ── Connecting ──────────────────────────────────────────────────
-
-
-async def link_url(user_id) -> str:
-    """A Unipile hosted-login link for this member, valid for 30 minutes."""
-    if not enabled():
-        raise LinkedInUnavailable("LinkedIn sending is not enabled on this site")
-    if not settings.PUBLIC_API_URL:
-        raise LinkedInUnavailable("PUBLIC_API_URL must be set for the LinkedIn callback")
-    state = secrets.token_urlsafe(24)
-    await redis_client.get_redis().set(f"li:link:{state}", str(user_id), ex=LINK_TTL)
-    expires = (datetime.now(UTC) + timedelta(seconds=LINK_TTL)).isoformat().replace("+00:00", "Z")
-    app = settings.FRONTEND_URL.rstrip("/")
-    async with httpx.AsyncClient(timeout=20, trust_env=False) as client:
-        response = await client.post(
-            _url("hosted/accounts/link"),
-            headers=_headers(),
-            json={
-                "type": "create",
-                "providers": ["LINKEDIN"],
-                "api_url": settings.UNIPILE_DSN.rstrip("/"),
-                "expiresOn": expires,
-                "name": str(user_id),
-                "notify_url": settings.PUBLIC_API_URL.rstrip("/")
-                + f"/api/v1/inbound/unipile?state={state}",
-                "success_redirect_url": f"{app}/linkedin/outreach?linkedin=connected",
-                "failure_redirect_url": f"{app}/linkedin/outreach?linkedin=failed",
-                # The LinkedIn already signed in to the member's browser,
-                # without CareerCraft ever receiving its cookies.
-                "unilogin": {"publisher_name": "CareerCraft"},
-            },
-        )
-    response.raise_for_status()
-    return response.json()["url"]
-
-
-async def handle_notify(state: str, payload: dict) -> dict:
-    """Unipile's callback after a successful hosted login."""
-    from app.core.database import AsyncSessionLocal
-    from app.models.db import LinkedInAccount
-
-    if not re.fullmatch(r"[A-Za-z0-9_-]{16,64}", state or ""):
-        return {"status": "ignored"}
-    owner = await redis_client.get_redis().getdel(f"li:link:{state}")
-    if not owner:
-        return {"status": "expired"}
-    owner = owner.decode() if isinstance(owner, bytes) else owner
-    account_id = str(payload.get("account_id") or "")
-    if (
-        payload.get("status") not in {"CREATION_SUCCESS", "RECONNECTED"}
-        or str(payload.get("name") or "") != owner
-        or not re.fullmatch(r"[A-Za-z0-9_-]{4,100}", account_id)
-    ):
-        return {"status": "rejected"}
-    async with AsyncSessionLocal() as db:
-        row = await db.get(LinkedInAccount, uuid.UUID(owner))
-        if row is None:
-            db.add(LinkedInAccount(user_id=uuid.UUID(owner), unipile_account_id=account_id))
-        else:
-            row.unipile_account_id = account_id
-            row.connected_at = datetime.now(UTC)
-        await db.commit()
-    return {"status": "connected"}
-
-
-async def account_for(user_id) -> str | None:
-    from app.core.database import AsyncSessionLocal
-    from app.models.db import LinkedInAccount
-
-    async with AsyncSessionLocal() as db:
-        row = await db.get(LinkedInAccount, uuid.UUID(str(user_id)))
-    return row.unipile_account_id if row else None
-
-
-async def disconnect(user_id) -> None:
-    """Unlink at Unipile (revoking its session) and forget the account id."""
-    from app.core.database import AsyncSessionLocal
-    from app.models.db import LinkedInAccount
-
-    async with AsyncSessionLocal() as db:
-        row = await db.get(LinkedInAccount, uuid.UUID(str(user_id)))
-        if row is None:
-            return
-        account_id = row.unipile_account_id
-        await db.delete(row)
-        await db.commit()
-    if enabled():
-        try:
-            async with httpx.AsyncClient(timeout=20, trust_env=False) as client:
-                await client.delete(_url(f"accounts/{account_id}"), headers=_headers())
-        except httpx.HTTPError:
-            logger.warning("unipile_disconnect_failed")
-
-
-# ── Sending ─────────────────────────────────────────────────────
+    return (await computer_service.computer_backend(user_id))["device"]
 
 
 async def claim(user_id, kind: str) -> bool:
@@ -171,95 +83,59 @@ async def claim(user_id, kind: str) -> bool:
     return used <= limit
 
 
-def public_identifier(url: str | None) -> str | None:
-    match = PROFILE_URL.match((url or "").strip())
-    return match.group(1) if match else None
+async def _command(device: str, body: dict) -> dict:
+    from app.services import computer_service
+
+    return await computer_service.send_command(device, "linkedin", body)
 
 
-def first_degree(profile: dict) -> bool:
-    distance = str(profile.get("network_distance") or "").upper()
-    return distance in {"FIRST_DEGREE", "DISTANCE_1"} or profile.get("is_relationship") is True
-
-
-def _limit_error(response: httpx.Response) -> bool:
-    if response.status_code == 429:
-        return True
-    if response.status_code != 422:
-        return False
+async def deliver(user_id, device: str, url: str, message: str) -> tuple[str, str | None]:
+    """One send through the member's extension. Returns (delivery, error)."""
     try:
-        kind = str((response.json() or {}).get("type") or "")
-    except ValueError:
-        kind = ""
-    return "cannot_resend" in kind or "limit" in kind
-
-
-async def deliver(
-    user_id, account_id: str, identifier: str, message: str
-) -> tuple[str, str | None]:
-    """One send. Returns (delivery, error). Never retries."""
-    async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
-        try:
-            profile = await client.get(
-                _url(f"users/{identifier}"), params={"account_id": account_id}, headers=_headers()
-            )
-        except httpx.HTTPError:
-            return "failed", "LinkedIn profile lookup failed; nothing was sent."
-        if profile.status_code in (401, 403):
-            return "failed", "Reconnect LinkedIn: the connection expired."
-        if profile.status_code != 200:
-            return "failed", "That LinkedIn profile could not be found; nothing was sent."
-        data = profile.json()
-        provider_id = str(data.get("provider_id") or "")
-        if not provider_id:
-            return "failed", "That LinkedIn profile could not be found; nothing was sent."
-        kind = "message" if first_degree(data) else "invite"
-        if not await claim(user_id, kind):
-            return "limit_reached", f"Today's LinkedIn {kind} limit is used up; send it tomorrow."
-        try:
-            if kind == "message":
-                response = await client.post(
-                    _url("chats"),
-                    headers=_headers(),
-                    # Unipile's start-chat endpoint takes multipart/form-data.
-                    files={
-                        "account_id": (None, account_id),
-                        "attendees_ids": (None, provider_id),
-                        "text": (None, message),
-                    },
-                )
-            else:
-                response = await client.post(
-                    _url("users/invite"),
-                    headers=_headers(),
-                    json={
-                        "account_id": account_id,
-                        "provider_id": provider_id,
-                        "message": message[:NOTE_LIMIT],
-                    },
-                )
-        except httpx.TimeoutException:
-            return "outcome_unknown", "LinkedIn didn't answer in time; check before resending."
-        except httpx.HTTPError:
-            return "failed", "Could not reach LinkedIn; nothing was sent."
-    if response.status_code in (200, 201):
-        return ("messaged" if kind == "message" else "invited"), None
-    if _limit_error(response):
+        probe = await _command(device, {"op": "probe", "profile_url": url})
+    except HTTPException as exc:
+        # Read-only step: whatever happened, nothing was sent.
+        return "failed", f"Your browser couldn't open the profile ({exc.detail}); nothing was sent."
+    if probe.get("signed_out"):
+        return "failed", "Sign in to LinkedIn in Chrome, then send again."
+    if probe.get("not_found"):
+        return "failed", "That LinkedIn profile could not be opened; nothing was sent."
+    if probe.get("pending"):
+        return "failed", "A connection request to this person is already pending."
+    if probe.get("degree") == "1st" and probe.get("can_message"):
+        kind = "message"
+    elif probe.get("can_connect"):
+        kind = "invite"
+    else:
+        return "failed", "LinkedIn offers neither Message nor Connect for this profile."
+    if not await claim(user_id, kind):
+        return "limit_reached", f"Today's LinkedIn {kind} limit is used up; send it tomorrow."
+    text = message[:NOTE_LIMIT] if kind == "invite" else message
+    try:
+        result = await _command(
+            device, {"op": "send", "as": kind, "profile_url": url, "message": text}
+        )
+    except HTTPException as exc:
+        if exc.status_code in (403, 409, 422):
+            return "failed", f"Your browser refused the send ({exc.detail}); nothing was sent."
+        # Timed out or broke mid-way: it may have gone out.
+        return "outcome_unknown", "Your browser stopped mid-send; check LinkedIn before resending."
+    delivery = result.get("delivery")
+    if delivery in DONE:
+        return delivery, None
+    reason = result.get("reason")
+    if reason == "limit":
         return "limit_reached", "LinkedIn's own limit was reached; try again later."
-    if response.status_code in (401, 403):
-        return "failed", "Reconnect LinkedIn: the connection expired."
-    if response.status_code >= 500:
-        return "outcome_unknown", "LinkedIn returned an error; check before resending."
-    return "failed", "LinkedIn refused this send."
+    if reason == "unconfirmed":
+        return "outcome_unknown", "LinkedIn didn't confirm the send; check before resending."
+    return "failed", str(result.get("error") or "LinkedIn refused this send.")[:300]
 
 
-async def send_item(user_id, item_id) -> str:
+async def send_item(user_id, device: str, item_id) -> str:
     """Send one approved queue item at most once. Returns its delivery state."""
     from app.core.database import AsyncSessionLocal
     from app.models.db import LinkedInOutreachQueue
 
-    account_id = await account_for(user_id)
-    if not enabled() or not account_id:
-        raise LinkedInUnavailable("Connect LinkedIn first")
     owner = uuid.UUID(str(user_id))
     async with AsyncSessionLocal() as db:
         item = (
@@ -273,19 +149,19 @@ async def send_item(user_id, item_id) -> str:
             return "missing"
         if item.delivery in FINAL:
             return item.delivery  # sending, sent or maybe sent: never twice
-        identifier = public_identifier(item.contact_linkedin_url)
-        if identifier is None:
+        url = profile_url(item.contact_linkedin_url)
+        if url is None:
             item.delivery, item.delivery_error = (
                 "failed",
                 "No LinkedIn profile link for this contact.",
             )
             await db.commit()
             return item.delivery
-        item.delivery = "sending"
+        item.delivery, item.delivery_error = "sending", None
         item.approved_at = datetime.now(UTC)
         message = item.message
         await db.commit()
-    delivery, error = await deliver(user_id, account_id, identifier, message)
+    delivery, error = await deliver(user_id, device, url, message)
     async with AsyncSessionLocal() as db:
         item = await db.get(LinkedInOutreachQueue, item_id)
         item.delivery, item.delivery_error = delivery, error
@@ -294,3 +170,48 @@ async def send_item(user_id, item_id) -> str:
             item.sent_at = datetime.now(UTC)
         await db.commit()
     return delivery
+
+
+async def send_run(user_id, run_id) -> None:
+    """Send every approved item of one outreach run, one at a time."""
+    from app.core.database import AsyncSessionLocal
+    from app.models.db import AgentRun
+
+    redis = redis_client.get_redis()
+    lock = f"li:sending:{uuid.UUID(str(run_id))}"
+    if not await redis.set(lock, "1", nx=True, ex=30 * 60):
+        return  # already sending this run
+    try:
+        async with AsyncSessionLocal() as db:
+            run = await db.get(AgentRun, run_id)
+            queue_ids = list((run.output or {}).get("queue_ids") or []) if run else []
+        for queue_id in queue_ids:
+            device = await device_for(user_id)
+            if device is None:
+                delivery = "failed"  # browser went offline: nothing sent, resend later
+            else:
+                delivery = await send_item(user_id, device, uuid.UUID(queue_id))
+            async with AsyncSessionLocal() as db:
+                run = await db.get(AgentRun, run_id, with_for_update=True)
+                output = dict(run.output or {})
+                output["deliveries"] = {**(output.get("deliveries") or {}), queue_id: delivery}
+                run.output = output
+                await db.commit()
+    except Exception:
+        logger.warning("linkedin_send_run_failed", exc_info=True)
+    finally:
+        try:
+            async with AsyncSessionLocal() as db:
+                run = await db.get(AgentRun, run_id, with_for_update=True)
+                if run is not None:
+                    run.output = {**(run.output or {}), "sending": False}
+                    await db.commit()
+        finally:
+            await redis.delete(lock)
+
+
+def start_run(user_id, run_id) -> None:
+    """Send a run in the background; the approval request returns at once."""
+    task = asyncio.get_running_loop().create_task(send_run(user_id, run_id))
+    _tasks.add(task)
+    task.add_done_callback(_tasks.discard)

@@ -4,6 +4,7 @@
 // result back. Every check that guards a page write lives here; the page-side
 // function below only does what it is told on refs from the latest snapshot.
 import { getPairing, jobUrl, SESSION_KEYS } from "./common.js";
+import { linkedinCommand } from "./linkedin.js";
 
 const AGENT_KEY = "agentTab";
 const AGENT_PERMISSION_KEY = "agentPermissionNeeded";
@@ -96,6 +97,7 @@ export async function executeCommand(cmd) {
     if (cmd.kind === "start") return await startAgentTab();
     if (cmd.kind === "stop") return await stopAgentTab();
     if (cmd.kind === "action") return await runAction(cmd.body || {});
+    if (cmd.kind === "linkedin") return await runLinkedIn(cmd.body || {});
     return fail(422, "Unknown command");
   } catch (e) {
     console.warn("CareerCraft: agent command failed", e && e.message);
@@ -108,6 +110,19 @@ export async function executeCommand(cmd) {
       return fail(409, CLOSED);
     }
     return fail(502, "The browser could not complete this action.");
+  }
+}
+
+// Approved LinkedIn outreach (beta): runs in its own background tab, not the
+// agent tab, and never takes the agent tab's place.
+async function runLinkedIn(body) {
+  try {
+    return await linkedinCommand(body);
+  } catch (e) {
+    console.warn("CareerCraft: LinkedIn command failed", e && e.message);
+    // A send that threw part-way may or may not have gone out: 502 tells the
+    // server "unknown", never "nothing sent".
+    return fail(502, "The browser could not complete the LinkedIn step.");
   }
 }
 

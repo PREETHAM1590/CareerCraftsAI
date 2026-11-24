@@ -16,8 +16,6 @@ from app.models.db import AgentRun, LinkedInOutreachQueue, User
 from app.services import linkedin_sender
 
 router = APIRouter(prefix="/linkedin", tags=["linkedin"])
-# Public: Unipile's hosted-login callback, matched by a single-use state token.
-inbound_router = APIRouter(prefix="/inbound", tags=["inbound"], include_in_schema=False)
 logger = logging.getLogger(__name__)
 
 
@@ -194,24 +192,30 @@ async def approve_outreach(
         raise HTTPException(status_code=400, detail="Run is not awaiting approval")
 
     if body.approved:
-        if not linkedin_sender.enabled() or not await linkedin_sender.account_for(current_user.id):
+        device = (
+            await linkedin_sender.device_for(current_user.id)
+            if linkedin_sender.enabled()
+            else None
+        )
+        if device is None:
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    "Copy the draft and send it on LinkedIn yourself, or connect LinkedIn "
-                    "(beta) to send approved drafts from here."
+                    "Copy the draft and send it on LinkedIn yourself, or open Chrome with the "
+                    "CareerCraft extension to send approved drafts from your LinkedIn."
                 ),
             )
-        # The member approved these drafts: send each at most once, within
-        # today's caps. The run row stays locked, so a double click waits.
-        output = run.output or {}
-        deliveries = {}
-        for queue_id in output.get("queue_ids") or []:
-            deliveries[queue_id] = await linkedin_sender.send_item(
-                current_user.id, uuid.UUID(queue_id)
-            )
+        # The member approved these drafts: the extension sends each at most
+        # once, in the background, within today's caps.
+        # agent_runs.status has a fixed set of values: the run is approved
+        # (completed) and output.sending tracks the background send.
         run.status = "completed"
-        run.output = {**output, "deliveries": deliveries}
+        run.completed_at = datetime.now(UTC)
+        run.output = {**(run.output or {}), "deliveries": {}, "sending": True}
+        await db.flush()
+        await db.commit()
+        linkedin_sender.start_run(current_user.id, run.id)
+        return {"status": "completed", "sending": True, "run_id": str(run_id)}
     else:
         output = run.output or {}
         for queue_id in output.get("queue_ids") or []:
@@ -229,59 +233,58 @@ async def approve_outreach(
 
     run.completed_at = datetime.now(UTC)
     await db.flush()
-    deliveries = (run.output or {}).get("deliveries") if body.approved else None
-    return {"status": run.status, "run_id": str(run_id), "deliveries": deliveries}
+    return {"status": run.status, "run_id": str(run_id)}
 
 
 # ── LinkedIn sending (beta) ─────────────────────────────────────
 
 
 @router.get("/account")
-async def linkedin_account(current_user: User = Depends(get_current_user)):
+async def linkedin_sending_status(current_user: User = Depends(get_current_user)):
+    """Whether approved drafts can be sent from the member's own LinkedIn."""
     if not linkedin_sender.enabled():
-        return {"enabled": False, "connected": False}
+        return {"enabled": False, "ready": False}
     return {
         "enabled": True,
-        "connected": await linkedin_sender.account_for(current_user.id) is not None,
+        # Sent by the paired extension in the member's Chrome, so it must be online.
+        "ready": await linkedin_sender.device_for(current_user.id) is not None,
         "invites_per_day": linkedin_sender.settings.LINKEDIN_INVITES_PER_DAY,
         "messages_per_day": linkedin_sender.settings.LINKEDIN_MESSAGES_PER_DAY,
     }
 
 
-@router.post("/account/link")
+@router.post("/outreach/{run_id}/resend")
 @limiter.limit("10/minute")
-async def linkedin_account_link(request: Request, current_user: User = Depends(get_current_user)):
-    try:
-        return {"url": await linkedin_sender.link_url(current_user.id)}
-    except linkedin_sender.LinkedInUnavailable as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from None
-    except Exception as exc:
-        logger.warning("unipile_link_failed", extra={"error_type": type(exc).__name__})
+async def resend_outreach(
+    request: Request,
+    run_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Send the drafts of an approved run that failed or hit a limit."""
+    run = (
+        await db.execute(
+            select(AgentRun)
+            .where(
+                AgentRun.id == run_id,
+                AgentRun.user_id == current_user.id,
+                AgentRun.agent_type == "linkedin_outreach",
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Outreach run not found")
+    if run.status != "completed" or not (run.output or {}).get("queue_ids"):
+        raise HTTPException(status_code=409, detail="Only approved outreach can be resent")
+    if not linkedin_sender.enabled() or await linkedin_sender.device_for(current_user.id) is None:
         raise HTTPException(
-            status_code=502, detail="Could not start the LinkedIn connection"
-        ) from None
-
-
-@router.delete("/account")
-async def linkedin_account_disconnect(current_user: User = Depends(get_current_user)):
-    await linkedin_sender.disconnect(current_user.id)
-    return {"connected": False}
-
-
-@inbound_router.post("/unipile")
-@limiter.limit("60/minute")
-async def unipile_notify(request: Request, state: str = "") -> dict:
-    if not linkedin_sender.enabled():
-        raise HTTPException(status_code=503, detail="LinkedIn sending is not enabled")
-    body = await request.body()
-    if len(body) > 16_000:
-        raise HTTPException(status_code=413, detail="Callback too large")
-    try:
-        import json
-
-        payload = json.loads(body)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid callback") from None
-    if not isinstance(payload, dict):
-        raise HTTPException(status_code=400, detail="Invalid callback")
-    return await linkedin_sender.handle_notify(state, payload)
+            status_code=409, detail="Open Chrome with the CareerCraft extension, then resend."
+        )
+    if (run.output or {}).get("sending"):
+        raise HTTPException(status_code=409, detail="These drafts are being sent right now")
+    run.output = {**(run.output or {}), "sending": True}
+    await db.commit()
+    # Items already sent, or maybe sent, are skipped by send_item.
+    linkedin_sender.start_run(current_user.id, run.id)
+    return {"status": "completed", "sending": True, "run_id": str(run_id)}

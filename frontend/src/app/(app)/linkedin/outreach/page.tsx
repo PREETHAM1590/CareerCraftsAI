@@ -42,7 +42,14 @@ interface OutreachRun {
   id: string;
   status: string;
   input: { company_name?: string } | null;
-  output: { contacts?: Array<{ name: string; title: string; linkedin_url: string }>; messages?: Array<{ contact_name: string; message: string }> } | null;
+  output: {
+    contacts?: Array<{ name: string; title: string; linkedin_url: string }>;
+    messages?: Array<{ contact_name: string; message: string }>;
+    queue_ids?: string[];
+    // LinkedIn sending (beta): per-draft result, filled in as the extension sends.
+    deliveries?: Record<string, string>;
+    sending?: boolean;
+  } | null;
   started_at: string | null;
 }
 
@@ -95,9 +102,26 @@ interface QueueCardProps {
   deciding: boolean;
   onDecide: (approved: boolean) => void;
   canSend?: boolean;
+  onResend?: () => void;
 }
 
-function QueueCard({ run, featured, deciding, onDecide, canSend }: QueueCardProps) {
+function deliverySummary(run: OutreachRun): string | null {
+  const deliveries = run.output?.deliveries;
+  if (!deliveries) return null;
+  const results = Object.values(deliveries);
+  const total = run.output?.queue_ids?.length ?? results.length;
+  const sent = results.filter((r) => r === "invited" || r === "messaged").length;
+  const waiting = results.filter((r) => r === "limit_reached").length;
+  const unknown = results.filter((r) => r === "outcome_unknown").length;
+  const failed = results.filter((r) => r === "failed").length;
+  const parts = [`${sent} of ${total} sent on LinkedIn`];
+  if (waiting) parts.push(`${waiting} waiting for tomorrow's limit`);
+  if (failed) parts.push(`${failed} not sent`);
+  if (unknown) parts.push(`${unknown} to check on LinkedIn`);
+  return parts.join(" · ") + (run.output?.sending ? " · sending…" : "");
+}
+
+function QueueCard({ run, featured, deciding, onDecide, canSend, onResend }: QueueCardProps) {
   const [expanded, setExpanded] = useState(false);
   const contacts = run.output?.contacts ?? [];
   const messages = run.output?.messages ?? [];
@@ -236,6 +260,17 @@ function QueueCard({ run, featured, deciding, onDecide, canSend }: QueueCardProp
         <p className="mt-3 text-xs text-muted-foreground">Finding decision-makers and drafting messages…</p>
       ) : null}
 
+      {/* LinkedIn sending progress (beta) */}
+      {run.output?.deliveries && (
+        <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
+          <span>{deliverySummary(run)}</span>
+          {canSend && onResend && !run.output.sending &&
+            Object.values(run.output.deliveries).some((r) => r === "failed" || r === "limit_reached") && (
+              <IslandButton tone="ghost" size="sm" onClick={onResend}>Resend unsent</IslandButton>
+            )}
+        </div>
+      )}
+
       {/* HITL decision */}
       {run.status === "awaiting_approval" && (
         <footer className="mt-auto flex flex-wrap gap-2 pt-6">
@@ -311,15 +346,20 @@ export default function LinkedInOutreachPage() {
       if (!approved) {
         toast.success("Message discarded");
       } else {
-        const results = Object.values((response.data?.deliveries ?? {}) as Record<string, string>);
-        const sent = results.filter((r) => r === "invited" || r === "messaged").length;
-        const waiting = results.filter((r) => r === "limit_reached").length;
-        const other = results.length - sent - waiting;
-        toast.success(`Sent ${sent} on LinkedIn${waiting ? `, ${waiting} waiting for tomorrow's limit` : ""}${other ? `, ${other} not sent` : ""}.`);
+        toast.success("Sending from your LinkedIn in Chrome. Keep Chrome open; progress shows on the card.");
       }
       qc.invalidateQueries({ queryKey: ["outreach-queue"] });
     },
     onError: (error) => toast.error(getApiErrorMessage(error, "Could not process that decision.")),
+  });
+
+  const resendMutation = useMutation({
+    mutationFn: (runId: string) => apiClient.post(`/linkedin/outreach/${runId}/resend`),
+    onSuccess: () => {
+      toast.success("Sending the unsent drafts. Keep Chrome open.");
+      qc.invalidateQueries({ queryKey: ["outreach-queue"] });
+    },
+    onError: (error) => toast.error(getApiErrorMessage(error, "Could not resend.")),
   });
 
   const canSearch = company.trim().length > 0 && !identifyMutation.isPending;
@@ -449,7 +489,8 @@ export default function LinkedInOutreachPage() {
                   featured={index === 0}
                   deciding={approveMutation.isPending && approveMutation.variables?.runId === run.id}
                   onDecide={(approved) => approveMutation.mutate({ runId: run.id, approved })}
-                  canSend={Boolean(linkedin.data?.enabled && linkedin.data?.connected)}
+                  canSend={Boolean(linkedin.data?.enabled && linkedin.data?.ready)}
+                  onResend={() => resendMutation.mutate(run.id)}
                 />
               </motion.div>
             ))}
