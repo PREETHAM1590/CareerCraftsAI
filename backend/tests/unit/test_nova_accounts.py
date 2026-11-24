@@ -559,7 +559,9 @@ async def test_stored_create_account_payload_is_re_proposed_not_replayed():
     pending = {"action": signup().model_dump(), "page_url": PAGE, "summary": "Create account"}
     with (
         patch.object(agent.nova_signin, "create_account", AsyncMock()) as create,
-        patch.object(agent, "plan", AsyncMock(return_value={"status": "awaiting_approval"})) as replan,
+        patch.object(
+            agent, "plan", AsyncMock(return_value={"status": "awaiting_approval"})
+        ) as replan,
     ):
         result = await agent.continue_step(run, pending)
     create.assert_not_called()
