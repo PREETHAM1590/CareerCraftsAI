@@ -214,15 +214,27 @@ async def test_x_request_is_one_bounded_page_with_bearer(monkeypatch):
 @pytest.mark.asyncio
 async def test_searxng_request_uses_json_and_recent_results(monkeypatch):
     monkeypatch.setattr(settings, "SEARXNG_URL", "http://127.0.0.1:18188/")
+    import json as _json
+
+    body = _json.dumps(searx()).encode()
+
+    async def chunks():
+        yield body
+
     response = MagicMock()
-    response.json.return_value = searx()
+    response.raise_for_status = MagicMock()
+    response.aiter_bytes = chunks
+    stream = MagicMock()
+    stream.__aenter__ = AsyncMock(return_value=response)
+    stream.__aexit__ = AsyncMock(return_value=False)
     client = MagicMock()
-    client.get = AsyncMock(return_value=response)
+    client.stream = MagicMock(return_value=stream)
     client.__aenter__ = AsyncMock(return_value=client)
     client.__aexit__ = AsyncMock(return_value=False)
     with patch.object(hp.httpx, "AsyncClient", return_value=client):
         assert await hp.fetch_linkedin_posts('"data analyst"') == []
-    url, kwargs = client.get.await_args.args[0], client.get.await_args.kwargs
+    assert client.stream.call_args.args[0] == "GET"
+    url, kwargs = client.stream.call_args.args[1], client.stream.call_args.kwargs
     assert url == "http://127.0.0.1:18188/search"
     assert kwargs["params"]["format"] == "json"
     assert kwargs["params"]["time_range"] == "week"
@@ -384,3 +396,17 @@ async def test_an_x_timeout_is_not_retried(monkeypatch):
     monkeypatch.setattr(job_catalog, "fetch_page", fetch)
     await job_catalog.refresh_source(_hiring_source("x_hiring"))
     assert calls == [1]
+
+
+def test_linkedin_poster_fallback_never_crashes_on_odd_paths():
+    assert hp._linkedin_poster("", "https://www.linkedin.com/posts") == "a LinkedIn member"
+    assert hp._linkedin_poster("", "https://www.linkedin.com/posts/priya-s_hiring-1") == "Priya S"
+
+
+def test_posts_per_refresh_is_bounded_at_config_load():
+    from pydantic import ValidationError
+
+    from app.core.config import Settings
+
+    with pytest.raises(ValidationError):
+        Settings(X_HIRING_POSTS_PER_REFRESH=500)

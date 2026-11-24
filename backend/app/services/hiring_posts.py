@@ -19,6 +19,7 @@ the post it came from.
 
 from __future__ import annotations
 
+import json
 import re
 from urllib.parse import urlencode, urlsplit
 
@@ -27,6 +28,7 @@ import httpx
 from app.core.config import settings
 
 X_SEARCH = "https://api.x.com/2/tweets/search/recent"
+SEARXNG_MAX_BYTES = 2_000_000
 X_HIRING_TERMS = (
     '"we\'re hiring" OR "we are hiring" OR "is hiring" OR "now hiring" OR "join our team"'
     ' OR "hiring for" OR #hiring'
@@ -274,7 +276,9 @@ def _linkedin_poster(title: str, url: str) -> str:
     match = re.match(r"^(.{2,80}?) on LinkedIn\b", title or "")
     if match:
         return match.group(1).strip()
-    slug = urlsplit(url).path.split("/")[2].split("_")[0]
+    # /posts/<slug>_<activity>: read defensively, the URL is untrusted.
+    parts = [part for part in urlsplit(url).path.split("/") if part]
+    slug = parts[1].split("_")[0] if len(parts) > 1 else ""
     return slug.replace("-", " ").title()[:80] or "a LinkedIn member"
 
 
@@ -306,8 +310,11 @@ async def fetch_linkedin_posts(roles: str) -> list[dict]:
         raise ValueError("LinkedIn posts source needs role terms")
     # Our own SearXNG on loopback: a trusted, configured address, so not
     # public_get (which refuses private addresses by design).
+    # Capped like the X path: a misconfigured SEARXNG_URL can't stream an
+    # unbounded body into memory.
     async with httpx.AsyncClient(timeout=25, trust_env=False) as client:
-        response = await client.get(
+        async with client.stream(
+            "GET",
             settings.SEARXNG_URL.rstrip("/") + "/search",
             params={
                 "q": linkedin_query(roles),
@@ -316,6 +323,11 @@ async def fetch_linkedin_posts(roles: str) -> list[dict]:
                 "language": "en",
                 "safesearch": 1,
             },
-        )
-    response.raise_for_status()
-    return parse_searxng(response.json())
+        ) as response:
+            response.raise_for_status()
+            body = bytearray()
+            async for chunk in response.aiter_bytes():
+                body.extend(chunk)
+                if len(body) > SEARXNG_MAX_BYTES:
+                    raise ValueError("SearXNG response exceeds size limit")
+    return parse_searxng(json.loads(body))

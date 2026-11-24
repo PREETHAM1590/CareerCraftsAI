@@ -218,7 +218,7 @@ stay in the catalog until they age out with the catalog's freshness window.
 
 **What gets through**
 - Posts are untrusted text. A post becomes a job only when it reads as an employer hiring and names a role.
-- Job-seeker posts (#OpenToWork, "looking for a job") are dropped.
+- Job-seeker posts (#OpenToWork, "looking for a job", "I'm looking for a ... role") are dropped. This is checked on the whole post, so an employer post that quotes a seeker's line is dropped too: precision over recall.
 - Scam signals drop a post: fees or deposits, Telegram or WhatsApp-only contact, crypto, "earn per day", "no interview".
 - Links are never opened. A link to a specific posting on a known ATS (Greenhouse, Lever, Workday...) becomes the job URL; any other link, or a generic careers page, leaves the post itself as the link.
 - Every job credits the post: "Posted by @handle on X: <link>".
