@@ -1,6 +1,7 @@
 """LinkedIn sending (beta): off by default, sent by the member's own extension,
 at most once per draft, under daily caps."""
 
+import json
 import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -216,14 +217,16 @@ def item(delivery=None, url="https://www.linkedin.com/in/priya"):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("device", ["dev1", None])
 @pytest.mark.parametrize("delivery", ["sending", "invited", "messaged", "outcome_unknown"])
-async def test_sent_or_maybe_sent_items_are_never_sent_again(delivery):
+async def test_sent_or_maybe_sent_items_are_never_sent_again(delivery, device):
     row = item(delivery)
     with (
         patch("app.core.database.AsyncSessionLocal", return_value=queue_db(row)),
         patch.object(li, "deliver", AsyncMock()) as deliver,
     ):
-        assert await li.send_item(USER, "dev1", uuid.uuid4()) == delivery
+        assert await li.send_item(USER, device, uuid.uuid4()) == delivery
+    assert row.delivery == delivery
     deliver.assert_not_called()
 
 
@@ -272,10 +275,10 @@ async def test_batch_records_each_result_and_clears_the_flag(redis):
     with (
         patch("app.core.database.AsyncSessionLocal", return_value=run_session(run)),
         patch.object(li, "device_for", AsyncMock(side_effect=["dev1", None])),
-        patch.object(li, "send_item", AsyncMock(return_value="invited")) as send,
+        patch.object(li, "send_item", AsyncMock(side_effect=["invited", "failed"])) as send,
     ):
         await li.send_run(USER, uuid.uuid4())
-    send.assert_awaited_once()  # the second found the browser offline
+    send.assert_awaited_with(USER, None, uuid.UUID(ids[1]))
     assert run.output["deliveries"] == {ids[0]: "invited", ids[1]: "failed"}
     assert run.output["sending"] is False
     assert redis.data == {}  # lock released
@@ -528,7 +531,7 @@ async def test_one_item_error_does_not_stop_the_batch(redis):
     ):
         await li.send_run(USER, uuid.uuid4())
     assert send.await_count == 2
-    assert sorted(run.output["deliveries"].values()) == ["failed", "invited"]
+    assert sorted(run.output["deliveries"].values()) == ["invited", "outcome_unknown"]
 
 
 @pytest.mark.asyncio
@@ -583,3 +586,61 @@ async def test_linkedin_commands_get_a_longer_wait_within_the_socket_timeout():
         await li._command("dev1", {"op": "probe", "profile_url": URL})
     assert send.await_args.kwargs["timeout"] == li.COMMAND_TIMEOUT
     assert computer_service.COMMAND_TIMEOUT < li.COMMAND_TIMEOUT < BLOCKING_SOCKET_TIMEOUT
+
+
+@pytest.mark.asyncio
+async def test_retry_only_visits_items_not_already_reported_sent_or_unknown(redis):
+    states = ["invited", "messaged", "outcome_unknown", "failed", "limit_reached"]
+    ids = [str(uuid.uuid4()) for _ in states]
+    run = SimpleNamespace(output={"queue_ids": ids, "deliveries": dict(zip(ids, states))})
+    with (
+        patch("app.core.database.AsyncSessionLocal", return_value=run_session(run)),
+        patch.object(li, "device_for", AsyncMock(side_effect=["dev1", None])),
+        patch.object(li, "send_item", AsyncMock(side_effect=["invited", "failed"])) as send,
+    ):
+        await li.send_run(USER, uuid.uuid4())
+    assert [call.args for call in send.await_args_list] == [
+        (USER, "dev1", uuid.UUID(ids[3])),
+        (USER, None, uuid.UUID(ids[4])),
+    ]
+    assert list(run.output["deliveries"].values()) == [*states[:3], "invited", "failed"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stage", "bad_reply", "expected", "used"),
+    [
+        ("probe", "{", "failed", 0),
+        ("probe", "[]", "failed", 0),
+        ("probe", '{"ok":true,"result":[]}', "failed", 0),
+        ("enqueue", None, "failed", 0),
+        ("send", "{", "outcome_unknown", 1),
+        ("send", "[]", "outcome_unknown", 1),
+        ("send", '{"ok":true,"result":[]}', "outcome_unknown", 1),
+        ("send", '{"ok":true,"result":{"error":"No result from the page"}}', "outcome_unknown", 1),
+        ("send", HTTPException(422, "Error reading result"), "outcome_unknown", 1),
+        ("send", '{"ok":false,"status":422,"error":"Invalid message"}', "failed", 0),
+    ],
+)
+async def test_command_failures_persist_the_outcome(on, redis, stage, bad_reply, expected, used):
+    row = item()
+    command_redis = AsyncMock()
+    if stage == "enqueue":
+        command_redis.set.side_effect = [True, ConnectionError("redis down")]
+    probe = ("probe", json.dumps({"ok": True, "result": SECOND}))
+    bad = bad_reply if isinstance(bad_reply, Exception) else ("reply", bad_reply)
+    blocking = SimpleNamespace(
+        blpop=AsyncMock(side_effect=[bad] if stage == "probe" else [probe, bad])
+    )
+    # The first get_redis is for the probe command, then the daily cap;
+    # the third is for enqueueing the send, followed by a possible cap release.
+    connections = [command_redis, redis, command_redis, redis]
+    with (
+        patch("app.core.database.AsyncSessionLocal", return_value=queue_db(row)),
+        patch.object(li.redis_client, "get_redis", side_effect=connections),
+        patch.object(li.redis_client, "get_blocking_redis", return_value=blocking),
+    ):
+        assert await li.send_item(USER, "dev1", uuid.uuid4()) == expected
+    assert row.delivery == expected and row.delivery_error
+    assert command_redis.rpush.await_count == (1 if stage in {"probe", "enqueue"} else 2)
+    assert redis.data.get(li._cap_key(USER, "invite"), 0) == used

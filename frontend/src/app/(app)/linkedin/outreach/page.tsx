@@ -85,12 +85,13 @@ function displayStatus(run: OutreachRun): string {
   const total = output.queue_ids?.length ?? results.length;
   const sent = results.filter((r) => r === "invited" || r === "messaged").length;
   if (total && sent === total) return "completed";
+  if (results.includes("outcome_unknown")) return "delivery uncertain";
   return sent ? "partly sent" : "not sent";
 }
 
 function statusTone(status: string): StatusTone {
   if (status === "completed") return "success";
-  if (status === "partly sent") return "warning";
+  if (status === "partly sent" || status === "delivery uncertain") return "warning";
   if (status === "not sent") return "danger";
   if (status === "awaiting_approval") return "warning";
   if (status === "failed" || status === "cancelled") return "danger";
@@ -152,7 +153,7 @@ function deliverySummary(run: OutreachRun): string | null {
   const parts = [`${sent} of ${total} sent on LinkedIn`];
   if (waiting) parts.push(`${waiting} waiting for tomorrow's limit`);
   if (failed) parts.push(`${failed} not sent`);
-  if (unknown) parts.push(`${unknown} to check on LinkedIn`);
+  if (unknown) parts.push(`${unknown} with unknown delivery. Check LinkedIn before resending.`);
   return parts.join(" · ") + (isSending(run) ? " · sending…" : "");
 }
 
@@ -316,7 +317,7 @@ function QueueCard({ run, featured, deciding, onDecide, canSend, onResend }: Que
               trailing={deciding ? <CircleNotch size={14} weight="light" className="animate-spin" /> : <PaperPlaneTilt size={14} weight="light" />}
               onClick={() => {
                 const count = messages.length;
-                if (window.confirm(`Send ${count} ${count === 1 ? "draft" : "drafts"} from your LinkedIn now? Each person gets exactly the text shown.`)) onDecide(true);
+                if (window.confirm(`Send ${count} ${count === 1 ? "draft" : "drafts"} from your LinkedIn now? Connection requests to people you’re not connected to can include a note of up to 300 characters. If a draft is too long for a connection request, it will be skipped.`)) onDecide(true);
               }}
             >
               Send on LinkedIn

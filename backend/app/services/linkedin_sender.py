@@ -124,7 +124,7 @@ async def release(user_id, kind: str) -> None:
         logger.warning("linkedin_cap_release_failed", exc_info=True)
 
 
-async def _command(device: str, body: dict) -> dict:
+async def _command(device: str, body: dict) -> object:
     from app.services import computer_service
 
     return await computer_service.send_command(device, "linkedin", body, timeout=COMMAND_TIMEOUT)
@@ -132,11 +132,18 @@ async def _command(device: str, body: dict) -> dict:
 
 async def deliver(user_id, device: str, url: str, message: str) -> tuple[str, str | None]:
     """One send through the member's extension. Returns (delivery, error)."""
+    from app.services.computer_service import CommandNotDispatched
+
     try:
         probe = await _command(device, {"op": "probe", "profile_url": url})
     except HTTPException as exc:
         # Read-only step: whatever happened, nothing was sent.
         return "failed", f"Your browser couldn't open the profile ({exc.detail}); nothing was sent."
+    except Exception:
+        logger.warning("linkedin_probe_failed", exc_info=True)
+        return "failed", "Your browser couldn't check the profile; nothing was sent."
+    if not isinstance(probe, dict):
+        return "failed", "Your browser returned an invalid profile check; nothing was sent."
     if probe.get("signed_out"):
         return "failed", "Sign in to LinkedIn in Chrome, then send again."
     if probe.get("not_found"):
@@ -166,6 +173,10 @@ async def deliver(user_id, device: str, url: str, message: str) -> tuple[str, st
         result = await _command(
             device, {"op": "send", "as": kind, "profile_url": url, "message": message}
         )
+    except CommandNotDispatched:
+        await release(user_id, kind)
+        logger.warning("linkedin_send_not_dispatched", exc_info=True)
+        return "failed", "Your browser couldn't be reached; nothing was sent."
     except HTTPException as exc:
         if exc.status_code in (403, 409, 422):
             await release(user_id, kind)
@@ -175,20 +186,25 @@ async def deliver(user_id, device: str, url: str, message: str) -> tuple[str, st
     except Exception:
         logger.warning("linkedin_send_command_failed", exc_info=True)
         return "outcome_unknown", "Your browser stopped mid-send; check LinkedIn before resending."
+    if not isinstance(result, dict):
+        return "outcome_unknown", "Your browser didn't report the send result; check LinkedIn."
     delivery = result.get("delivery")
-    if delivery in DONE:
+    if isinstance(delivery, str) and delivery in DONE:
         return delivery, None
     reason = result.get("reason")
     if reason == "unconfirmed":
         return "outcome_unknown", "LinkedIn didn't confirm the send; check before resending."
-    # Confirmed not sent: today's slot is given back.
-    await release(user_id, kind)
     if reason == "limit":
+        await release(user_id, kind)
         return "limit_reached", "LinkedIn's own limit was reached; try again later."
-    return "failed", str(result.get("error") or "LinkedIn refused this send.")[:300]
+    error = result.get("error")
+    if isinstance(error, str) and error and error != "No result from the page":
+        await release(user_id, kind)
+        return "failed", error[:300]
+    return "outcome_unknown", "Your browser didn't report the send result; check LinkedIn."
 
 
-async def send_item(user_id, device: str, item_id) -> str:
+async def send_item(user_id, device: str | None, item_id) -> str:
     """Send one approved queue item at most once. Returns its delivery state."""
     from app.core.database import AsyncSessionLocal
     from app.models.db import LinkedInOutreachQueue
@@ -217,6 +233,13 @@ async def send_item(user_id, device: str, item_id) -> str:
             return item.delivery
         if item.delivery in FINAL:
             return item.delivery  # sending, sent or maybe sent: never twice
+        if device is None:
+            item.delivery, item.delivery_error = (
+                "failed",
+                "Chrome was offline; nothing was sent.",
+            )
+            await db.commit()
+            return item.delivery
         url = profile_url(item.contact_linkedin_url)
         if url is None:
             item.delivery, item.delivery_error = (
@@ -267,18 +290,18 @@ async def send_run(user_id, run_id) -> None:
             output = (run.output or {}) if run else {}
             queue_ids = list(output.get("queue_ids") or [])
             started = output.get("sending_started_at")
+        previous_deliveries = output.get("deliveries") or {}
         for queue_id in queue_ids:
+            if previous_deliveries.get(queue_id) in DONE | {"outcome_unknown"}:
+                continue  # Preserve results already reported as sent or uncertain.
             try:
                 device = await device_for(user_id)
-                if device is None:
-                    delivery = "failed"  # browser went offline: nothing sent, resend later
-                else:
-                    delivery = await send_item(user_id, device, uuid.UUID(queue_id))
+                delivery = await send_item(user_id, device, uuid.UUID(queue_id))
             except Exception:
-                # send_item records its own outcome once it starts a send, so
-                # this item was never marked sending: it can be resent.
+                # A write may have failed after dispatch. Never report a
+                # confirmed non-delivery if we couldn't record the outcome.
                 logger.warning("linkedin_send_item_failed", exc_info=True)
-                delivery = "failed"
+                delivery = "outcome_unknown"
             async with AsyncSessionLocal() as db:
                 run = await db.get(AgentRun, run_id, with_for_update=True)
                 output = dict(run.output or {})
