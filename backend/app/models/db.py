@@ -213,6 +213,10 @@ class PortalCredential(Base):
     label: Mapped[str] = mapped_column(String(100), nullable=False)
     username_enc: Mapped[str] = mapped_column(Text, nullable=False)
     password_enc: Mapped[str] = mapped_column(Text, nullable=False)
+    # Member consent for Nova to sign in without a per-step approval.
+    auto_signin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    consent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    consent_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     __table_args__ = (UniqueConstraint("user_id", "origin", name="portal_credentials_user_origin"),)
 

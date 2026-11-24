@@ -210,7 +210,8 @@ async def start_job_application(job_url: str) -> str:
     """Prepare an application to the exact job link supplied by the user.
 
     Wakes their browser on demand. Browser mutations and submission still
-    require the user's approval. Login needs private human help; saved resume
+    require the user's approval. Nova signs in with a saved login and asks the
+    user for one-time codes; saved resume
     uploads are supported after review.
     """
     from app.services.computer_service import AGENT_WRITES, ComputerAction

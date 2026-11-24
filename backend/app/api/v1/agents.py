@@ -208,6 +208,13 @@ async def approve_or_cancel(
 
     from app.services.workflow_service import validate_approval
 
+    step = (pending.get("action") or {}) if redis_action_type == "computer_action" else {}
+    if step.get("operation") == "enter_code":
+        from app.services import nova_signin
+
+        if not await nova_signin.has_code(run_uuid):
+            raise HTTPException(status_code=422, detail="Enter the code the site sent you")
+
     try:
         continuation = validate_approval(pending, payload.edits or {})
     except ValueError as exc:

@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import logging
+import re
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -57,7 +58,11 @@ PARAMETERS = {
     "human/secret": {"text"},
     "privacy/release": set(),
     "human/navigate": {"url"},
+    # Nova's private steps (see nova_signin): refs only, never a secret.
+    "sign_in": {"usernameRef", "passwordRef", "snapshotId"},
+    "enter_code": {"ref", "snapshotId"},
 }
+NOVA_STEPS = {"sign_in", "enter_code"}
 # The extension drives one agent tab; anything else stays cloud-only.
 BROWSER_OPERATIONS = {
     "navigate",
@@ -79,6 +84,7 @@ COMMAND_TIMEOUT = 60  # navigation in the user's browser can be slow
 RESULT_TTL = 120
 RESULT_STATUSES = {403, 409, 422, 502}
 PERMISSION_PREFIX = "Allow the CareerCraft extension on "
+REF = re.compile(r"[a-zA-Z0-9_-]{1,30}")
 
 
 class ComputerAction(BaseModel):
@@ -112,6 +118,18 @@ class ComputerAction(BaseModel):
                 or not self.parameters.get("ref")
             ):
                 raise ValueError("Use the current computer run, snapshotId and element ref")
+        if self.operation in NOVA_STEPS:
+            refs = (
+                [self.parameters.get("usernameRef"), self.parameters.get("passwordRef")]
+                if self.operation == "sign_in"
+                else [self.parameters.get("ref")]
+            )
+            if (
+                not self.computer_run
+                or not isinstance(self.parameters.get("snapshotId"), int)
+                or not all(isinstance(ref, str) and REF.fullmatch(ref) for ref in refs)
+            ):
+                raise ValueError("Use the current computer run, snapshotId and element refs")
         if self.operation == "upload":
             uuid.UUID(str(self.parameters["document_id"]))
             if self.approved_snapshot != self.parameters["snapshotId"]:

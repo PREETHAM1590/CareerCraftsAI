@@ -44,7 +44,7 @@ def test_secret_model_and_metadata():
         username_enc="encrypted",
         password_enc="encrypted",
     )
-    assert set(metadata(row)) == {"id", "origin", "label"}
+    assert set(metadata(row)) == {"id", "origin", "label", "auto_signin"}
 
 
 def test_private_validation_never_echoes_secret():
@@ -229,6 +229,7 @@ async def test_planner_cannot_execute_own_proposal():
         patch.object(agent, "act", AsyncMock(return_value=snapshot)) as act,
         patch.object(agent, "AsyncSessionLocal", return_value=db),
         patch.object(agent, "get_chat_gateway_llm", AsyncMock(return_value=llm)),
+        patch.object(agent.nova_signin, "saved_logins", AsyncMock(return_value=[])),
     ):
         result = await agent.plan(run)
     assert result["status"] == "awaiting_approval"

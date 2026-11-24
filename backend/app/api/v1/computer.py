@@ -1,6 +1,8 @@
 """Member computer controls and write-only encrypted portal credentials."""
 
+import re
 import uuid
+from datetime import UTC, datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -14,8 +16,9 @@ from app.api.v1.deps import get_current_user, get_db
 from app.core.config import settings
 from app.core.rate_limit import limiter
 from app.core.security import decrypt_api_key, encrypt_api_key
-from app.models.db import PortalCredential, User
+from app.models.db import AgentRun, PortalCredential, User
 from app.services import computer_service as service
+from app.services import nova_signin
 
 
 class PrivateInputRoute(APIRoute):
@@ -116,7 +119,12 @@ class SaveCredential(BaseModel):
 
 
 def metadata(row):
-    return {"id": str(row.id), "origin": row.origin, "label": row.label}
+    return {
+        "id": str(row.id),
+        "origin": row.origin,
+        "label": row.label,
+        "auto_signin": bool(getattr(row, "auto_signin", False)),
+    }
 
 
 @router.get("/credentials")
@@ -236,3 +244,87 @@ async def fill(
         raise
     await service.finish_audit(audit_id, "completed", 0)
     return {"filled": bool(result.get("filled")), "submitted": False}
+
+
+class AutoSignin(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
+
+
+@router.put("/credentials/{credential_id}/auto-signin")
+@limiter.limit("30/minute")
+async def set_auto_signin(
+    request: Request,
+    credential_id: uuid.UUID,
+    payload: AutoSignin,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Consent for Nova to use this login without asking each time."""
+    row = (
+        await db.execute(
+            select(PortalCredential).where(
+                PortalCredential.user_id == user.id, PortalCredential.id == credential_id
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(404, "Saved login not found")
+    row.auto_signin = payload.enabled
+    row.consent_at = datetime.now(UTC) if payload.enabled else None
+    row.consent_version = nova_signin.CONSENT_VERSION if payload.enabled else None
+    await db.commit()
+    await service.audit(user.id, "auto_signin_on" if payload.enabled else "auto_signin_off")
+    return metadata(row)
+
+
+CODE = re.compile(r"[A-Za-z0-9-]{4,12}")
+
+
+class OneTimeCode(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    code: SecretStr
+
+    @field_validator("code")
+    @classmethod
+    def code_shape(cls, value):
+        if not CODE.fullmatch(value.get_secret_value().strip()):
+            raise ValueError("Enter the 4 to 12 letter or digit code")
+        return SecretStr(value.get_secret_value().strip())
+
+
+@router.post("/runs/{run_id}/code")
+@limiter.limit("10/minute")
+async def enter_code(
+    request: Request,
+    run_id: uuid.UUID,
+    payload: OneTimeCode,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Hand Nova a one-time code for the step it is waiting on, then approve it.
+
+    The code goes only to Redis (encrypted, short-lived, read once); the
+    approval that follows carries no code into the workflow history."""
+    run = (
+        await db.execute(select(AgentRun).where(AgentRun.id == run_id, AgentRun.user_id == user.id))
+    ).scalar_one_or_none()
+    pending = (run.output or {}) if run else {}
+    step = pending.get("action") or {}
+    if (
+        run is None
+        or run.status != "awaiting_approval"
+        or pending.get("type") != "computer_action"
+        or step.get("operation") != "enter_code"
+    ):
+        raise HTTPException(409, "Nova isn't waiting for a code on this task")
+    await nova_signin.store_code(run_id, payload.code.get_secret_value())
+    from app.api.v1.agents import ApproveRequest, approve_or_cancel
+
+    return await approve_or_cancel(
+        run_id=str(run_id),
+        payload=ApproveRequest(approved=True, action_type="computer_action"),
+        request=request,
+        db=db,
+        current_user=user,
+    )
