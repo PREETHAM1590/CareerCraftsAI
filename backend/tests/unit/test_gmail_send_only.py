@@ -218,3 +218,14 @@ def test_unverified_send_only_connection_is_never_used():
         with pytest.raises(GmailSendError, match="not connected"):
             GmailMCPClient(str(USER_ID)).send_message("a@b.co", "Hi", "Body")
     assert calls == ["gmail"]
+
+
+def test_send_only_check_uses_loop_safe_sessions_and_logs_failures(caplog):
+    class Boom:
+        def __call__(self):
+            raise RuntimeError("db down")
+
+    with patch("app.services.jobs_database.AsyncSessionLocal", Boom()):
+        with caplog.at_level("WARNING"):
+            assert gmail_service.send_only_verified(str(USER_ID)) is False
+    assert "gmail_send_only_verification_failed" in caplog.text

@@ -154,3 +154,22 @@ async def apply_auth_webhook(
         return "ignored"
     await db.flush()
     return "processed"
+
+
+def account_email(connection: IntegrationConnection) -> str | None:
+    """The Gmail address stored for a connection, or None."""
+    import json
+
+    from app.core.config import settings
+    from app.core.security import decrypt_api_key
+
+    if not connection.provider_metadata_enc:
+        return None
+    try:
+        metadata = json.loads(
+            decrypt_api_key(connection.provider_metadata_enc, settings.APP_SECRET_KEY)
+        )
+    except (ValueError, json.JSONDecodeError):
+        return None
+    email = metadata.get("account_email") if isinstance(metadata, dict) else None
+    return email if isinstance(email, str) else None

@@ -24,6 +24,7 @@ from app.integrations.factory import get_integration_gateway, nango_provider_con
 from app.integrations.gateway import IntegrationGateway
 from app.integrations.providers import provider_definition
 from app.integrations.repository import (
+    account_email,
     apply_auth_webhook,
     get_connection,
     mark_pending,
@@ -76,16 +77,7 @@ def _connection_response(connection: IntegrationConnection) -> ConnectionRespons
 
 
 def _account_email(connection: IntegrationConnection) -> str | None:
-    if not connection.provider_metadata_enc:
-        return None
-    try:
-        metadata = json.loads(
-            decrypt_api_key(connection.provider_metadata_enc, settings.APP_SECRET_KEY)
-        )
-    except (ValueError, json.JSONDecodeError):
-        return None
-    email = metadata.get("account_email") if isinstance(metadata, dict) else None
-    return email if isinstance(email, str) else None
+    return account_email(connection)
 
 
 async def _sync_gmail_account_email(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 from email.message import EmailMessage
 from urllib.parse import quote, urlencode
 
@@ -12,6 +13,8 @@ from app.services.integration_proxy_service import proxy_request
 # Sending tries the full Gmail connection, then the send-only one. Only a
 # missing or unconfigured connection falls through; a rejection or an
 # unavailable provider never retries on the other (no double sends).
+logger = logging.getLogger(__name__)
+
 SEND_PROVIDERS = ("gmail", "gmail_send")
 
 
@@ -22,9 +25,13 @@ def send_only_verified(user_id: str) -> bool:
 
     from sqlalchemy import select
 
-    from app.core.database import AsyncSessionLocal
+    from app.integrations.repository import account_email
     from app.models.db import IntegrationConnection
     from app.services.integration_proxy_service import _run
+
+    # _run may start a new event loop (worker thread or a thread of its
+    # own): use the NullPool sessions, whose connections never cross loops.
+    from app.services.jobs_database import AsyncSessionLocal
 
     async def check() -> bool:
         async with AsyncSessionLocal() as db:
@@ -37,15 +44,14 @@ def send_only_verified(user_id: str) -> bool:
                     )
                 )
             ).scalar_one_or_none()
-        if row is None:
-            return False
-        from app.api.v1.integrations import _account_email
-
-        return bool(_account_email(row))
+        return row is not None and bool(account_email(row))
 
     try:
         return _run(check())
     except Exception:
+        # Fail closed (not verified), but never silently: a DB outage here
+        # would otherwise look exactly like an unverified connection.
+        logger.warning("gmail_send_only_verification_failed", exc_info=True)
         return False
 
 
