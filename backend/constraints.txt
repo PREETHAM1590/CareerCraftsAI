@@ -19,3 +19,7 @@ ag-ui-langgraph==0.0.46
 ag-ui-protocol==1.0.0
 ag-ui-a2ui-toolkit==0.0.4
 jsonschema==4.26.0
+
+# Patched PDF and ASN.1 parsers.
+pypdf>=6.21.4
+pyasn1>=0.6.5

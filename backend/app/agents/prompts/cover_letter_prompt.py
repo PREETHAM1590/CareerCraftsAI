@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from . import _COMMON
+from . import _COMMON, one_line, untrusted
 
 SYSTEM_PROMPT = (
     _COMMON
@@ -67,10 +67,10 @@ def build_user_prompt(context: dict, rag_chunks: list[str] | None = None) -> str
         "the candidate must come from the candidate source; do not invent achievements or "
         "affinities. Return JSON only."
     ).format(
-        jd=jd,
-        company=company,
-        role=role,
+        jd=untrusted(jd),
+        company=one_line(company),
+        role=one_line(role),
         tone=tone,
-        research=research,
-        chunks=chunks or "NOT_PROVIDED",
+        research=untrusted(research),
+        chunks=untrusted(chunks),
     )

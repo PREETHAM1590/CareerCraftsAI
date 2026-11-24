@@ -19,3 +19,19 @@ def test_jobs_without_a_real_url_are_never_queued():
 
 def test_no_room_means_nothing_is_queued():
     assert pick_candidates([_app(99)], 0, 70) == []
+
+
+def test_india_focus_filters_before_candidate_limit_and_can_be_disabled():
+    import uuid
+
+    from app.services.auto_apply_queue import plan
+
+    foreign, india = _app(99), _app(90)
+    for app, location in ((foreign, "New York, US"), (india, "Hyderabad, India")):
+        app.id = uuid.uuid4()
+        app.location = location
+        app.job_description = ""
+    assert plan([foreign, india], set(), set(), "apply", 70, 1)["auto_apply"] == [india]
+    assert plan([foreign, india], set(), set(), "apply", 70, 1, india=False)["auto_apply"] == [
+        foreign
+    ]

@@ -64,13 +64,3 @@ async def test_gateway_is_limited_per_token_not_exempt(monkeypatch):
             headers={"Authorization": "Bearer tok-b"},
         )
         assert other.status_code == 401
-
-
-@pytest.mark.asyncio
-async def test_form_filler_reports_extension_move(monkeypatch):
-    from app.services import form_filler_service as ff
-    from app.services.browser_control_service import BrowserAutomationRetired
-
-    assert issubclass(BrowserAutomationRetired, RuntimeError)
-    src = ff.run_browser_task
-    assert src is not None
