@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Priya Sharma | LinkedIn (fixture)</title>
+<style>.hidden{display:none}</style></head>
+<body>
+<!-- LinkedIn-shaped profile for test/linkedin_sender.test.mjs. Query flags:
+     degree=1st|2nd, pending=1, nonote=1 (out of personalised notes),
+     weekly=1 (weekly limit after Send), silent=1 (Send shows nothing),
+     noconnect=1 (More holds no Connect), old=1 (thread already has the
+     message text), stuck=1 (message Send does nothing). -->
+<main>
+  <section class="top-card">
+    <h1>Priya Sharma</h1>
+    <span class="dist-value"></span>
+    <div id="actions"></div>
+    <div id="menu" class="hidden" role="menu"></div>
+  </section>
+</main>
+<aside id="messaging"></aside>
+<div id="dialogs"></div>
+<script>
+  const q = new URLSearchParams(location.search);
+  const degree = q.get("degree") || "2nd";
+  window.__sent = null;
+  document.querySelector(".dist-value").textContent = degree;
+  const actions = document.getElementById("actions");
+  const menu = document.getElementById("menu");
+  const dialogs = document.getElementById("dialogs");
+  const button = (label, aria, onclick, tag = "button") => {
+    const b = document.createElement(tag);
+    if (tag !== "button") b.setAttribute("role", "button");
+    b.textContent = label;
+    if (aria) b.setAttribute("aria-label", aria);
+    b.addEventListener("click", onclick || (() => {}));
+    return b;
+  };
+  const pending = () => { actions.querySelectorAll(".connect").forEach((b) => b.remove()); actions.append(button("Pending", "Pending, click to withdraw invitation")); };
+
+  if (degree === "1st") {
+    actions.append(button("Message", "Message Priya", openChat));
+  } else if (q.get("pending")) {
+    actions.append(button("Follow", "Follow Priya"));
+    pending();
+  } else {
+    actions.append(button("Follow", "Follow Priya"));
+    actions.append(button("More", "More actions", () => menu.classList.toggle("hidden")));
+    if (q.get("noconnect")) menu.append(button("Report or block", "Report or block", null, "div"));
+    else menu.append(button("Connect", "Invite Priya Sharma to connect", openInvite, "div"));
+  }
+
+  function openInvite() {
+    menu.classList.add("hidden");
+    const d = document.createElement("div");
+    d.setAttribute("role", "dialog");
+    d.innerHTML = "<h2>Add a note to your invitation?</h2>";
+    d.append(button("Add a note", null, () => {
+      if (q.get("nonote")) {
+        d.innerHTML = "<h2>No free personalized invitations left</h2><p>You've used all your free personalized invitations this month.</p>";
+        d.append(button("Got it", "Dismiss", () => d.remove()));
+        return;
+      }
+      d.innerHTML = "<label for='custom-message'>Your note</label>";
+      const ta = document.createElement("textarea");
+      ta.id = "custom-message"; ta.name = "message";
+      const send = button("Send", "Send invitation", () => {
+        if (q.get("silent")) return;
+        if (q.get("weekly")) {
+          d.innerHTML = "<h2>You've reached the weekly invitation limit</h2>";
+          d.append(button("Got it", "Dismiss", () => d.remove()));
+          return;
+        }
+        window.__sent = { kind: "invite", note: ta.value };
+        d.remove();
+        pending();
+      });
+      send.disabled = true;
+      ta.addEventListener("input", () => { send.disabled = !ta.value.trim(); });
+      d.append(ta, send, button("Cancel", "Dismiss", () => d.remove()));
+    }));
+    d.append(button("Send without a note", null, () => { window.__sent = { kind: "invite", note: "" }; d.remove(); pending(); }));
+    d.append(button("Dismiss", "Dismiss", () => d.remove()));
+    dialogs.append(d);
+  }
+
+  function openChat() {
+    const box = document.getElementById("messaging");
+    box.innerHTML = "<div class='msg-s-message-list'></div><form class='msg-form'><div class='msg-form__contenteditable' contenteditable='true' role='textbox'></div><button type='submit' class='msg-form__send-button' disabled>Send</button></form>";
+    const input = box.querySelector(".msg-form__contenteditable");
+    const send = box.querySelector(".msg-form__send-button");
+    input.addEventListener("input", () => { send.disabled = !input.textContent.trim(); });
+    if (q.get("old")) {
+      const prior = document.createElement("div");
+      prior.className = "msg-s-event-listitem__body";
+      prior.textContent = "Thanks for connecting, Priya!";
+      box.querySelector(".msg-s-message-list").append(prior);
+    }
+    box.querySelector("form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      if (q.get("stuck")) return;
+      window.__sent = { kind: "message", text: input.textContent };
+      const item = document.createElement("div");
+      item.className = "msg-s-event-listitem__body";
+      item.textContent = input.textContent;
+      box.querySelector(".msg-s-message-list").append(item);
+      input.textContent = "";
+      send.disabled = true;
+    });
+  }
+</script>
+</body>
+</html>

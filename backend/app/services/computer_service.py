@@ -206,35 +206,72 @@ async def computer_backend(user_id) -> dict:
     return {"mode": mode, "backend": backend, "paired": bool(devices), "device": device}
 
 
-async def send_command(device_id: str, kind: str, body=None):
-    """Queue one command for the extension and wait for its reply."""
+class CommandNotDispatched(RuntimeError):
+    """The command failed before reaching the device queue."""
+
+
+class CommandResultUnavailable(RuntimeError):
+    """The command may have run, but its reply could not be read."""
+
+
+async def send_command(device_id: str, kind: str, body=None, timeout: int | None = None):
+    """Queue one command for the extension and wait for its reply.
+
+    `timeout` (default COMMAND_TIMEOUT, read at call time) must stay under
+    redis_client.BLOCKING_SOCKET_TIMEOUT (90 s)."""
+    timeout = timeout or COMMAND_TIMEOUT
     from app.core import redis_client
 
     command_id = str(uuid.uuid4())
-    redis = redis_client.get_redis()
-    # Only this device may answer the command (checked on the result route).
-    await redis.set(f"ext:owner:{command_id}", device_id, ex=COMMAND_TIMEOUT + RESULT_TTL)
-    queue = f"ext:cmd:{device_id}"
-    raw = json.dumps(
-        {
-            "id": command_id,
-            "kind": kind,
-            "body": body or {},
-            "expires": int(time.time()) + COMMAND_TIMEOUT,
-        }
-    )
-    await redis.rpush(queue, raw)
-    await redis.expire(queue, COMMAND_TIMEOUT + 30)
-    reply = await redis_client.get_blocking_redis("result").blpop(
-        f"ext:res:{command_id}", timeout=COMMAND_TIMEOUT
-    )
+    try:
+        redis = redis_client.get_redis()
+        # Only this device may answer the command (checked on the result route).
+        await redis.set(f"ext:owner:{command_id}", device_id, ex=timeout + RESULT_TTL)
+        queue = f"ext:cmd:{device_id}"
+        raw = json.dumps(
+            {
+                "id": command_id,
+                "kind": kind,
+                "body": body or {},
+                "expires": int(time.time()) + timeout,
+            }
+        )
+    except Exception as exc:
+        if kind == "linkedin":
+            raise CommandNotDispatched from exc
+        raise
+    try:
+        # Even an error from rpush can mean Redis queued the command.
+        await redis.rpush(queue, raw)
+        await redis.expire(queue, timeout + 30)
+        reply = await redis_client.get_blocking_redis("result").blpop(
+            f"ext:res:{command_id}", timeout=timeout
+        )
+    except Exception as exc:
+        if kind == "linkedin":
+            raise CommandResultUnavailable from exc
+        raise
     if reply is None:
         # Nobody is waiting any more: a browser that reconnects later must not
         # run a command the caller was told failed. If the extension already
         # took it, it is running and its late result simply expires.
-        await redis.lrem(queue, 1, raw)
+        try:
+            await redis.lrem(queue, 1, raw)
+        except Exception as exc:
+            if kind == "linkedin":
+                raise CommandResultUnavailable from exc
+            raise
         raise HTTPException(504, "Your browser didn't respond in time.")
-    result = json.loads(reply[1])
+    try:
+        result = json.loads(reply[1])
+        if kind == "linkedin" and (
+            not isinstance(result, dict) or not isinstance(result.get("ok"), bool)
+        ):
+            raise ValueError("Invalid LinkedIn command reply")
+    except (ValueError, TypeError, IndexError) as exc:
+        if kind == "linkedin":
+            raise CommandResultUnavailable from exc
+        raise
     if not result.get("ok"):
         status = result.get("status")
         if result.get("error") == "permission_required" and result.get("origin"):
@@ -243,6 +280,8 @@ async def send_command(device_id: str, kind: str, body=None):
             status if status in RESULT_STATUSES else 502,
             str(result.get("error") or "Browser action failed")[:300],
         )
+    if kind == "linkedin":
+        return result.get("result")
     return result.get("result") or {}
 
 

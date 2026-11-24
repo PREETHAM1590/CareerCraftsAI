@@ -185,6 +185,7 @@ jobs:
           npm install --no-save --no-package-lock playwright@1.63.0
           npx playwright install --with-deps chromium
           node test/e2e_apply.mjs
+          node test/linkedin_sender.test.mjs
 
   # Cheap, no-credentials-needed guard against e2e test-file syntax/import
   # breakage (missing fixture, bad import, etc.) on every PR. Collection-only
