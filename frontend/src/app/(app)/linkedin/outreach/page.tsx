@@ -49,18 +49,38 @@ interface OutreachRun {
     // LinkedIn sending (beta): per-draft result, filled in as the extension sends.
     deliveries?: Record<string, string>;
     sending?: boolean;
+    sending_started_at?: string;
   } | null;
   started_at: string | null;
 }
 
 /* ───────────────────────────── helpers ───────────────────────────── */
 
+// A batch older than this was interrupted (the server's lock TTL): its
+// "sending" flag is stale, as linkedin_sender.sending_stale decides.
+const SENDING_STALE_MS = 30 * 60 * 1000;
+
+function isSending(run: OutreachRun): boolean {
+  const output = run.output;
+  if (!output?.sending) return false;
+  const started = Date.parse(output.sending_started_at ?? "");
+  return Number.isFinite(started) && Date.now() - started <= SENDING_STALE_MS;
+}
+
+// Drafts not sent and not possibly sent: the ones Resend would try again.
+// Includes drafts an interrupted batch never reached (no delivery yet).
+function unsentCount(run: OutreachRun): number {
+  const deliveries = run.output?.deliveries ?? {};
+  const done = new Set(["invited", "messaged", "outcome_unknown", "sending"]);
+  return (run.output?.queue_ids ?? []).filter((id) => !done.has(deliveries[id])).length;
+}
+
 // agent_runs.status can't say "sending": an approved run is "completed" at
 // once and its LinkedIn delivery lives in output. Show what really happened.
 function displayStatus(run: OutreachRun): string {
   const output = run.output;
   if (run.status !== "completed" || !output?.deliveries) return run.status;
-  if (output.sending) return "sending";
+  if (isSending(run)) return "sending";
   const results = Object.values(output.deliveries);
   const total = output.queue_ids?.length ?? results.length;
   const sent = results.filter((r) => r === "invited" || r === "messaged").length;
@@ -133,7 +153,7 @@ function deliverySummary(run: OutreachRun): string | null {
   if (waiting) parts.push(`${waiting} waiting for tomorrow's limit`);
   if (failed) parts.push(`${failed} not sent`);
   if (unknown) parts.push(`${unknown} to check on LinkedIn`);
-  return parts.join(" · ") + (run.output?.sending ? " · sending…" : "");
+  return parts.join(" · ") + (isSending(run) ? " · sending…" : "");
 }
 
 function QueueCard({ run, featured, deciding, onDecide, canSend, onResend }: QueueCardProps) {
@@ -279,8 +299,7 @@ function QueueCard({ run, featured, deciding, onDecide, canSend, onResend }: Que
       {run.output?.deliveries && (
         <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
           <span>{deliverySummary(run)}</span>
-          {canSend && onResend && !run.output.sending &&
-            Object.values(run.output.deliveries).some((r) => r === "failed" || r === "limit_reached") && (
+          {canSend && onResend && !isSending(run) && unsentCount(run) > 0 && (
               <IslandButton tone="ghost" size="sm" onClick={onResend}>Resend unsent</IslandButton>
             )}
         </div>

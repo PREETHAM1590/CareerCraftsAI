@@ -572,3 +572,14 @@ async def test_resend_refused_while_a_batch_holds_the_lock(on, redis):
             )
     assert exc.value.status_code == 409
     start.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_linkedin_commands_get_a_longer_wait_within_the_socket_timeout():
+    from app.core.redis_client import BLOCKING_SOCKET_TIMEOUT
+    from app.services import computer_service
+
+    with patch.object(computer_service, "send_command", AsyncMock(return_value={})) as send:
+        await li._command("dev1", {"op": "probe", "profile_url": URL})
+    assert send.await_args.kwargs["timeout"] == li.COMMAND_TIMEOUT
+    assert computer_service.COMMAND_TIMEOUT < li.COMMAND_TIMEOUT < BLOCKING_SOCKET_TIMEOUT

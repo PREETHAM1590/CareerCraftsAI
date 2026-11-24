@@ -39,6 +39,10 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 NOTE_LIMIT = 300
+# A send can take ~70 s in the browser (page load, then menu, dialog, note,
+# Send and the confirmation), longer than the default 60 s command wait.
+# Must stay under redis_client.BLOCKING_SOCKET_TIMEOUT (90 s).
+COMMAND_TIMEOUT = 85
 PROFILE_URL = re.compile(
     r"^https://(?:www\.|[a-z]{2}\.)?linkedin\.com/in/([A-Za-z0-9\-_%]{3,100})/?(?:\?.*)?$"
 )
@@ -123,7 +127,7 @@ async def release(user_id, kind: str) -> None:
 async def _command(device: str, body: dict) -> dict:
     from app.services import computer_service
 
-    return await computer_service.send_command(device, "linkedin", body)
+    return await computer_service.send_command(device, "linkedin", body, timeout=COMMAND_TIMEOUT)
 
 
 async def deliver(user_id, device: str, url: str, message: str) -> tuple[str, str | None]:

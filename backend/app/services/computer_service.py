@@ -206,27 +206,31 @@ async def computer_backend(user_id) -> dict:
     return {"mode": mode, "backend": backend, "paired": bool(devices), "device": device}
 
 
-async def send_command(device_id: str, kind: str, body=None):
-    """Queue one command for the extension and wait for its reply."""
+async def send_command(device_id: str, kind: str, body=None, timeout: int | None = None):
+    """Queue one command for the extension and wait for its reply.
+
+    `timeout` (default COMMAND_TIMEOUT, read at call time) must stay under
+    redis_client.BLOCKING_SOCKET_TIMEOUT (90 s)."""
+    timeout = timeout or COMMAND_TIMEOUT
     from app.core import redis_client
 
     command_id = str(uuid.uuid4())
     redis = redis_client.get_redis()
     # Only this device may answer the command (checked on the result route).
-    await redis.set(f"ext:owner:{command_id}", device_id, ex=COMMAND_TIMEOUT + RESULT_TTL)
+    await redis.set(f"ext:owner:{command_id}", device_id, ex=timeout + RESULT_TTL)
     queue = f"ext:cmd:{device_id}"
     raw = json.dumps(
         {
             "id": command_id,
             "kind": kind,
             "body": body or {},
-            "expires": int(time.time()) + COMMAND_TIMEOUT,
+            "expires": int(time.time()) + timeout,
         }
     )
     await redis.rpush(queue, raw)
-    await redis.expire(queue, COMMAND_TIMEOUT + 30)
+    await redis.expire(queue, timeout + 30)
     reply = await redis_client.get_blocking_redis("result").blpop(
-        f"ext:res:{command_id}", timeout=COMMAND_TIMEOUT
+        f"ext:res:{command_id}", timeout=timeout
     )
     if reply is None:
         # Nobody is waiting any more: a browser that reconnects later must not

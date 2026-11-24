@@ -80,11 +80,14 @@ function waitForLoad(tabId) {
       chrome.tabs.onUpdated.removeListener(listener);
       reject(new Error("LinkedIn took too long to load"));
     }, LOAD_TIMEOUT_MS);
-    function listener(id, info) {
+    function listener(id, info, tab) {
       if (id !== tabId) return;
-      if (info.status === "loading") started = true;
+      // The new tab's own about:blank load can still be reporting: only a
+      // linkedin.com page counts (a login or authwall redirect included).
+      const onLinkedIn = /^https:\/\/www\.linkedin\.com\//.test((tab && tab.url) || "");
+      if (info.status === "loading" && onLinkedIn) started = true;
       // "complete" only counts after this navigation began loading.
-      if (started && info.status === "complete") {
+      if (started && onLinkedIn && info.status === "complete") {
         clearTimeout(timer);
         chrome.tabs.onUpdated.removeListener(listener);
         resolve();
