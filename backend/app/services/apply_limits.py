@@ -31,9 +31,9 @@ def auto_submit_cap_error(auto_approved_last_24h: int, cap: int) -> str | None:
     return None
 
 
-# Their terms forbid (LinkedIn) or were not reviewed for (Naukri) automated
-# submission: always a person's click, whatever the member's setting.
-NO_AUTO_SUBMIT_HOSTS = ("linkedin.com", "naukri.com")
+# Their terms forbid (LinkedIn) or were not reviewed for (Naukri, Internshala)
+# automated submission: always a person's click, whatever the member's setting.
+NO_AUTO_SUBMIT_HOSTS = ("linkedin.com", "naukri.com", "internshala.com")
 
 
 def auto_submit_host_blocked(*hosts: str | None) -> bool:

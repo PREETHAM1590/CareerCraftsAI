@@ -891,7 +891,9 @@
       const proceed = Array.from(document.querySelectorAll("button, a[href], [role=button]")).find(
         (b) => dom.isVisible(b) && !b.disabled && INTERNSHALA_PROCEED_RE.test(buttonLabel(b))
       );
-      const apply = visibleOne("a.apply_now_button, button.apply_now_btn") || proceed || findApplyControl();
+      // On the in-between page "Proceed to application" is the step; only on the
+      // job page itself is "Apply now" the way in.
+      const apply = proceed || visibleOne("a.apply_now_button, button.apply_now_btn") || findApplyControl();
       return apply ? clickThrough(ctx, apply, () => internshalaCfg.findRoot() || internshalaCfg.signedOut()) : null;
     },
   };

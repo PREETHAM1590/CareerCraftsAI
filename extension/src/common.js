@@ -58,7 +58,7 @@ export const LOCAL_KEYS = { PAIRING: "pairing", AUTOFILL_PROFILE: "autofillProfi
 
 // Never auto-submitted, whatever the account setting: LinkedIn's terms forbid
 // automation and Naukri's were not reviewed. The server enforces this too.
-export const NO_AUTO_SUBMIT_HOSTS = ["linkedin.com", "naukri.com"];
+export const NO_AUTO_SUBMIT_HOSTS = ["linkedin.com", "naukri.com", "internshala.com"];
 
 export function autoSubmitBlockedHost(urlString) {
   let host = "";
