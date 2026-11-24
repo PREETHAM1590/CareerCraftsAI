@@ -207,6 +207,36 @@ services:
     mem_limit: 64m
     init: true
 
+  # Obscura (lightweight headless browser) renders job pages that need
+  # JavaScript, for full job descriptions (app/services/job_page.py). Never
+  # holds members' sign-ins. backend.env: OBSCURA_CDP_URL=
+  # ws://127.0.0.1:19222/devtools/browser and OBSCURA_CDP_TOKEN (same value as
+  # in obscura.env). Report: docs/reports/2026-11-24-obscura-trial.md.
+  obscura:
+    image: h4ckf0r0day/obscura:0.2.7@sha256:e70c2abc925f2194c9338762075432c69328032cae220d77393f1495e90c601a
+    # Its own bridge network, published on loopback only. Obscura refuses
+    # private and internal destinations itself (SSRF protection).
+    ports: ["127.0.0.1:19222:9222"]
+    env_file: /opt/careercraft-secrets/obscura.env  # OBSCURA_CDP_TOKEN (32+ bytes)
+    command:
+      - serve
+      - --host=0.0.0.0
+      - --port=9222
+      - --workers=2
+      - --worker-max-rss=400
+      - --worker-max-age=3600
+    # gVisor when installed (runsc), as the trial report recommends for a
+    # young engine running untrusted pages: OBSCURA_RUNTIME=runsc.
+    runtime: ${OBSCURA_RUNTIME:-runc}
+    read_only: true
+    tmpfs: ["/tmp:size=64m"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    mem_limit: 768m
+    cpus: 1.0
+    restart: unless-stopped
+
 volumes:
   redis_data:
   pgdata:

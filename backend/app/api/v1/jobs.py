@@ -24,6 +24,7 @@ from app.models.db import (
     UserPreferences,
 )
 from app.schemas.jobs import JobSearchQuerySchema
+from app.services import job_page
 from app.workflows.starters import WorkflowUnavailable
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -119,7 +120,7 @@ class JobDescriptionResponse(BaseModel):
     jd_text: str
     role: str
     company: str
-    source: Literal["application", "catalog"]
+    source: Literal["application", "catalog", "job_page"]
 
 
 class JobSearchProfileResponse(BaseModel):
@@ -1122,6 +1123,18 @@ async def get_application_jd(
             ).scalar_one_or_none()
             or ""
         ).strip()
+    if app.job_url and max(len(saved), len(catalog)) < job_page.THIN:
+        # Only a snippet so far: read the job's own page once (cached per URL).
+        try:
+            page = await asyncio.wait_for(job_page.full_description(app.job_url), 30)
+        except TimeoutError:
+            page = None
+        if page and len(page) > max(len(saved), len(catalog)):
+            app.jd_text = page
+            await db.commit()
+            return JobDescriptionResponse(
+                jd_text=page, role=app.role, company=app.company, source="job_page"
+            )
     if not saved and not catalog:
         raise HTTPException(status_code=404, detail="No job description saved for this role")
     use_catalog = len(catalog) > len(saved)

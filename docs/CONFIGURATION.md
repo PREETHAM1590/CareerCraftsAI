@@ -235,6 +235,36 @@ provider credentials; CareerCraft does not store provider OAuth tokens.
 
 ---
 
+## Full job descriptions from job pages (Obscura)
+
+Many sources only carry a snippet (hiring posts, Internshala, JobSpy). When a
+member opens a saved job whose description is under 800 characters,
+`GET /jobs/applications/{id}/jd` reads the job's own page once and saves the
+full text for tailoring and scoring.
+
+1. Plain HTTPS first, after robots.txt allows it. The page's JSON-LD
+   `JobPosting` description wins; otherwise its main text.
+2. Only if that is still thin (a JavaScript-rendered page), the page is
+   rendered in **Obscura**, a lightweight headless browser
+   (`docs/reports/2026-11-24-obscura-trial.md`).
+
+Results, including misses, are cached per URL in Redis: 7 days for a hit, 1
+day for a miss. Login-walled and bot-blocking sites (LinkedIn, X, Indeed,
+Naukri, Glassdoor, foundit) are skipped. A rate-limited or unavailable
+robots.txt counts as "not allowed" (RFC 9309).
+
+| Variable | Description |
+|---|---|
+| `OBSCURA_CDP_URL` | `ws://127.0.0.1:19222/devtools/browser` on the APP VM. Blank = plain HTTP only. |
+| `OBSCURA_CDP_TOKEN` | 32+ random bytes, the same value as in `/opt/careercraft-secrets/obscura.env`. |
+
+**Running Obscura** (`deploy/oracle-vm/compose.yml`, service `obscura`)
+- Pinned image digest, published on `127.0.0.1:19222` only, bearer token required.
+- Read-only filesystem, no Linux capabilities, non-root, 768 MB.
+- Workers recycle at 400 MB or after an hour.
+- Install gVisor and set `OBSCURA_RUNTIME=runsc` to run it under a user-space kernel.
+- It never holds anyone's sign-in.
+
 ## Development vs Production Differences
 
 | Setting | Development | Production |
