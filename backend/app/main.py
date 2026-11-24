@@ -14,6 +14,7 @@ from slowapi.errors import RateLimitExceeded
 from app.api.v1 import (
     agent_memory,
     agents,
+    apply_email,
     candidate_profile,
     company,
     computer,
@@ -33,6 +34,7 @@ from app.api.v1 import (
     rag,
     resume,
     salary,
+    telegram,
     users,
 )
 from app.api.v1.copilot_chat import mount_copilot_chat
@@ -198,6 +200,10 @@ app.include_router(leads.router, prefix="/api/v1")
 app.include_router(email.router, prefix="/api/v1")
 app.include_router(agents.router, prefix="/api/v1")
 app.include_router(computer.router, prefix="/api/v1")
+app.include_router(apply_email.router, prefix="/api/v1")
+app.include_router(apply_email.inbound_router, prefix="/api/v1")
+app.include_router(telegram.router, prefix="/api/v1")
+app.include_router(telegram.inbound_router, prefix="/api/v1")
 app.include_router(interview_prep.router, prefix="/api/v1")
 app.include_router(cover_letter.router, prefix="/api/v1")
 app.include_router(interview.router, prefix="/api/v1")

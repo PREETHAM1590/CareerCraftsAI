@@ -138,6 +138,14 @@ async def approve_or_cancel(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    return await decide_run(run_id, payload, db, current_user)
+
+
+async def decide_run(run_id: str, payload: ApproveRequest, db: AsyncSession, current_user):
+    """Approve or cancel a run awaiting approval, owned by current_user.
+
+    Shared by the approve route, Nova's private code route and the
+    application inbox, which fills an emailed code for its owner."""
     try:
         run_uuid = uuid.UUID(run_id)
     except ValueError:
@@ -207,6 +215,13 @@ async def approve_or_cancel(
         redis_action_type = payload.action_type or ""
 
     from app.services.workflow_service import validate_approval
+
+    step = (pending.get("action") or {}) if redis_action_type == "computer_action" else {}
+    if step.get("operation") == "enter_code":
+        from app.services import nova_signin
+
+        if not await nova_signin.has_code(run_uuid):
+            raise HTTPException(status_code=422, detail="Enter the code the site sent you")
 
     try:
         continuation = validate_approval(pending, payload.edits or {})
