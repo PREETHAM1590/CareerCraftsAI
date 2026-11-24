@@ -1286,13 +1286,13 @@ async def get_application_jd(
         ).strip()
     if app.job_url and max(len(saved), len(catalog)) < job_page.THIN:
         # Only a snippet so far: read the job's own page once (cached per URL).
+        # The member's saved text is never overwritten: the page text is cached
+        # per URL and served from there.
         try:
             page = await asyncio.wait_for(job_page.full_description(app.job_url), 30)
-        except TimeoutError:
-            page = None
+        except Exception:
+            page = None  # a slow or failing page never breaks the saved JD
         if page and len(page) > max(len(saved), len(catalog)):
-            app.jd_text = page
-            await db.commit()
             return JobDescriptionResponse(
                 jd_text=page, role=app.role, company=app.company, source="job_page"
             )

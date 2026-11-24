@@ -19,6 +19,7 @@ sites are skipped instead of worked around.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import html as html_lib
 import logging
@@ -36,6 +37,9 @@ THIN = 800  # characters: below this a description is a snippet
 MAX_TEXT = 12_000
 CACHE_DAYS = 7
 MISS_HOURS = 24
+# Under the endpoint's 30 s, so a slow page is cached as a miss rather than
+# re-fetched on every open.
+FETCH_BUDGET = 25
 ROBOTS_AGENT = "CareerCraftJobDiscovery"
 # Login walls and sites that block automated readers: never worked around.
 SKIP_HOSTS = (
@@ -66,22 +70,33 @@ def skipped(url: str) -> bool:
     return any(host == h or host.endswith("." + h) for h in SKIP_HOSTS)
 
 
+def _posting_text(jobs: list[dict], url: str) -> str:
+    """This page's JobPosting description. A page listing several postings
+    (similar jobs) uses the one whose url is this page, never just the longest."""
+    from app.services.job_connectors import canonical_url
+
+    def same(value) -> bool:
+        try:
+            return canonical_url(str(value)) == canonical_url(url)
+        except ValueError:
+            return False
+
+    if len(jobs) > 1:
+        jobs = [job for job in jobs if same(job.get("url"))]
+    return max((clean(str(job.get("description") or "")) for job in jobs), key=len, default="")
+
+
 def from_jsonld_blocks(blocks: list[str], url: str) -> str:
     from app.services.job_connectors import jsonld_jobs
 
     page = "".join(f'<script type="application/ld+json">{b}</script>' for b in blocks)
-    found = [clean(str(job.get("description") or "")) for job in jsonld_jobs(page, url)]
-    return max(found, key=len, default="")
+    return _posting_text(jsonld_jobs(page, url), url)
 
 
 def from_html(page: str, url: str) -> str:
     from app.services.job_connectors import jsonld_jobs
 
-    structured = max(
-        (clean(str(job.get("description") or "")) for job in jsonld_jobs(page, url)),
-        key=len,
-        default="",
-    )
+    structured = _posting_text(jsonld_jobs(page, url), url)
     if len(structured) >= THIN:
         return structured
     soup = BeautifulSoup(page, "lxml")
@@ -115,7 +130,19 @@ async def fetch_plain(url: str) -> str:
     response = await public_get(url, max_bytes=3_000_000)
     if response.status_code != 200 or "html" not in response.headers.get("content-type", ""):
         return ""
-    return from_html(response.text, url)
+    # public_get follows redirects: the page actually read must pass the
+    # same skip-host and robots.txt checks as the URL asked for.
+    try:
+        final = str(response.request.url)
+    except (AttributeError, RuntimeError):  # no request recorded: no redirect seen
+        final = url
+    if final != url and (
+        skipped(final)
+        or urlsplit(final).hostname != urlsplit(url).hostname
+        and not await robots_allow(final)
+    ):
+        return ""
+    return from_html(response.text, final)
 
 
 async def fetch_rendered(url: str) -> str:
@@ -162,21 +189,38 @@ async def full_description(url: str) -> str | None:
         return None
     if skipped(url):
         return None
-    redis = redis_client.get_redis()
-    cached = await redis.get(_key(url))
+    # The cache is an optimisation: without Redis the page is just read.
+    redis = None
+    try:
+        redis = redis_client.get_redis()
+        cached = await redis.get(_key(url))
+    except Exception as exc:
+        logger.info("job_page_cache_unavailable", extra={"error_type": type(exc).__name__})
+        redis, cached = None, None
     if cached is not None:
         cached = cached.decode() if isinstance(cached, bytes) else cached
         return cached or None
     text = ""
     try:
-        if await robots_allow(url):
-            text = await fetch_plain(url)
-            if len(text) < THIN:
-                text = max(text, await fetch_rendered(url), key=len)
+        text = await asyncio.wait_for(_read(url), FETCH_BUDGET)
     except Exception as exc:
         # Never log the URL's query or the page: just what failed.
         logger.info("job_page_fetch_failed", extra={"error_type": type(exc).__name__})
     good = text if len(text) >= THIN else ""
     ttl = CACHE_DAYS * 86400 if good else MISS_HOURS * 3600
-    await redis.set(_key(url), good, ex=ttl)
+    if redis is not None:
+        try:
+            # A miss never overwrites a description another request just found.
+            await redis.set(_key(url), good, ex=ttl, nx=not good)
+        except Exception as exc:
+            logger.info("job_page_cache_unavailable", extra={"error_type": type(exc).__name__})
     return good or None
+
+
+async def _read(url: str) -> str:
+    if not await robots_allow(url):
+        return ""
+    text = await fetch_plain(url)
+    if len(text) < THIN:
+        text = max(text, await fetch_rendered(url), key=len)
+    return text

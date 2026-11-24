@@ -27,9 +27,12 @@ class FakeRedis:
     async def get(self, key):
         return self.data.get(key)
 
-    async def set(self, key, value, ex=None):
+    async def set(self, key, value, ex=None, nx=False):
+        if nx and key in self.data:
+            return None
         self.data[key] = value
         self.ttl[key] = ex
+        return True
 
 
 @pytest.fixture
@@ -161,8 +164,9 @@ async def test_thin_saved_description_is_replaced_by_the_job_page():
     ):
         result = await jobs.get_application_jd(app.id, db=db, current_user=SimpleNamespace(id=1))
     assert result.source == "job_page" and result.jd_text == LONG
-    assert app.jd_text == LONG
-    db.commit.assert_awaited_once()
+    # The member's own saved text is kept.
+    assert app.jd_text == "We're hiring a Backend Engineer"
+    db.commit.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -179,3 +183,119 @@ async def test_full_saved_description_never_fetches():
         )
     assert result.source == "application"
     fetch.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_works_without_redis():
+    class DownRedis:
+        async def get(self, key):
+            raise ConnectionError("redis down")
+
+        async def set(self, key, value, ex=None, nx=False):
+            raise ConnectionError("redis down")
+
+    with (
+        patch("app.core.redis_client.get_redis", return_value=DownRedis()),
+        patch.object(job_page, "robots_allow", AsyncMock(return_value=True)),
+        patch.object(job_page, "fetch_plain", AsyncMock(return_value=LONG)),
+    ):
+        assert await job_page.full_description("https://jobs.example.com/1") == LONG
+
+
+@pytest.mark.asyncio
+async def test_a_slow_page_is_cached_as_a_miss(redis, monkeypatch):
+    import asyncio
+
+    async def hang(url):
+        await asyncio.sleep(5)
+        return LONG
+
+    monkeypatch.setattr(job_page, "FETCH_BUDGET", 0.05)
+    with (
+        patch.object(job_page, "robots_allow", AsyncMock(return_value=True)),
+        patch.object(job_page, "fetch_plain", hang),
+    ):
+        assert await job_page.full_description("https://jobs.example.com/slow") is None
+    [(key, value)] = redis.data.items()
+    assert value == "" and redis.ttl[key] == 24 * 3600
+
+
+@pytest.mark.asyncio
+async def test_a_failing_page_read_falls_back_to_the_saved_jd():
+    from app.api.v1 import jobs
+
+    app = saved_app("We're hiring a Backend Engineer")
+    with (
+        patch.object(jobs, "_owned_applications", AsyncMock(return_value=[app])),
+        patch.object(jobs.job_page, "full_description", AsyncMock(side_effect=RuntimeError())),
+    ):
+        result = await jobs.get_application_jd(
+            app.id, db=jd_db(app), current_user=SimpleNamespace(id=1)
+        )
+    assert result.source == "application"
+
+
+def test_a_page_listing_several_postings_uses_its_own():
+    other = "Unrelated role. " * 120
+    page = f"""<html><head><script type="application/ld+json">{json.dumps([
+        {"@type": "JobPosting", "title": "Other", "url": "https://jobs.example.com/2",
+         "description": other},
+        {"@type": "JobPosting", "title": "This", "url": "https://jobs.example.com/1",
+         "description": LONG},
+    ])}</script></head><body></body></html>"""
+    assert job_page.from_html(page, "https://jobs.example.com/1").startswith("Build reliable")
+
+
+@pytest.mark.asyncio
+async def test_a_miss_never_overwrites_a_found_description(redis):
+    key = job_page._key("https://jobs.example.com/1")
+    redis.data[key] = LONG
+    with (
+        patch.object(redis, "get", AsyncMock(return_value=None)),
+        patch.object(job_page, "robots_allow", AsyncMock(return_value=False)),
+    ):
+        await job_page.full_description("https://jobs.example.com/1")
+    assert redis.data[key] == LONG
+
+
+@pytest.mark.asyncio
+async def test_fetch_plain_reads_html_pages_only():
+    from types import SimpleNamespace as NS
+
+    html_page = NS(status_code=200, headers={"content-type": "text/html"}, text=TEXT_PAGE)
+    pdf = NS(status_code=200, headers={"content-type": "application/pdf"}, text="%PDF")
+    missing = NS(status_code=404, headers={"content-type": "text/html"}, text="")
+    for response, expected in ((html_page, "Data Analyst"), (pdf, ""), (missing, "")):
+        with patch("app.services.public_http.public_get", AsyncMock(return_value=response)):
+            text = await job_page.fetch_plain("https://jobs.example.com/2")
+        assert text.startswith(expected) if expected else text == ""
+
+
+@pytest.mark.asyncio
+async def test_redirects_to_skipped_or_disallowed_pages_read_nothing():
+    import httpx
+
+    def answer(final):
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            text=TEXT_PAGE,
+            request=httpx.Request("GET", final),
+        )
+
+    start = "https://jobs.example.com/2"
+    with patch(
+        "app.services.public_http.public_get",
+        AsyncMock(return_value=answer("https://www.linkedin.com/jobs/view/9")),
+    ):
+        assert await job_page.fetch_plain(start) == ""
+    with (
+        patch(
+            "app.services.public_http.public_get",
+            AsyncMock(return_value=answer("https://other.example.org/job")),
+        ),
+        patch.object(job_page, "robots_allow", AsyncMock(return_value=False)),
+    ):
+        assert await job_page.fetch_plain(start) == ""
+    with patch("app.services.public_http.public_get", AsyncMock(return_value=answer(start))):
+        assert (await job_page.fetch_plain(start)).startswith("Data Analyst")
