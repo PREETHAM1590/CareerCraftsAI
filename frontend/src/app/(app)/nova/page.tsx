@@ -75,7 +75,7 @@ function CopilotChatPanel() {
   );
 
   return (
-    <section className={`conversation-workspace ${hasMessages ? "has-messages" : "is-empty"}`} aria-label="Copilot conversation">
+    <section className={`conversation-workspace ${hasMessages ? "has-messages" : "is-empty"}`} aria-label="Nova conversation">
       <div className="conversation-toolbar">
         <span className="conversation-state"><span className={running ? "is-working" : ""} />{running ? "Working on your request" : "Your conversation"}</span>
         <div className="flex items-center gap-2">
@@ -120,7 +120,7 @@ export default function CopilotPage() {
   return (
     <div className={`copilot-workspace ${showComputer ? "with-computer" : ""}`}>
       <header className="copilot-page-header">
-        <div><p className="copilot-page-eyebrow">YOUR CAREER WORKSPACE</p><h1>Career Copilot<span>.</span></h1></div>
+        <div><p className="copilot-page-eyebrow">YOUR CAREER WORKSPACE</p><h1>Nova<span>.</span></h1></div>
         <div className="workspace-view-switch" aria-label="Workspace view">
           <button type="button" aria-pressed={!showComputer} onClick={() => setShowComputer(false)}><ChatCircle size={17} />Chat</button>
           <button type="button" aria-pressed={showComputer} aria-controls="copilot-computer" onClick={() => setShowComputer(true)}><Desktop size={17} />Computer</button>

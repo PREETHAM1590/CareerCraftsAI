@@ -53,6 +53,12 @@ const nextConfig = {
         destination: "/interview?tab=prep",
         permanent: false,
       },
+      // The chat agent was renamed from Copilot to Nova; keep old links working.
+      {
+        source: "/copilot/:path*",
+        destination: "/nova/:path*",
+        permanent: true,
+      },
     ];
   },
 

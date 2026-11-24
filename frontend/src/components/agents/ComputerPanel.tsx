@@ -228,7 +228,7 @@ export function ComputerPanel() {
           setSnapshot(null); setFileRef("");
         })}>Upload selected resume to portal</IslandButton>
       </div>}
-      {!resumes.length && <p className="mt-3 text-xs">Save a resume using Upload resume in Copilot or the Resume page first.</p>}
+      {!resumes.length && <p className="mt-3 text-xs">Save a resume using Upload resume in Nova or the Resume page first.</p>}
     </details>
     <details className="workspace-disclosure rounded-2xl bg-muted/30 p-4 ring-1 ring-foreground/[0.06]">
       <summary className="flex cursor-pointer items-center gap-2 text-sm font-medium"><LockKey size={18} weight="light" /> Saved portal logins <span className="ml-auto text-xs font-normal text-muted-foreground">{logins.length} saved</span><CaretDown className="disclosure-chevron" size={14} weight="light" /></summary>

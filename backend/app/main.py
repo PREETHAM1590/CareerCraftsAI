@@ -211,7 +211,7 @@ app.include_router(agent_memory.router)
 
 app.include_router(llm_gw)
 
-# AG-UI chat endpoint (Career Copilot) — guarded by the JWT middleware like
+# AG-UI chat endpoint (Nova) — guarded by the JWT middleware like
 # every other non-public path.
 mount_copilot_chat(app)
 

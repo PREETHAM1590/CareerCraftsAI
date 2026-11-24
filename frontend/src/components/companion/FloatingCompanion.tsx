@@ -52,13 +52,13 @@ export function FloatingCompanion() {
     <div ref={bounds} className="floating-companion-boundary">
     <motion.aside key={`${preferences.corner}:${preferences.size}`} drag dragListener={false} dragControls={dragControls} dragConstraints={bounds} dragElastic={0} dragMomentum={false} onDragStart={() => { setPanel({ key: activityKey, open: false }); setPopupShift({ x: 0, y: 0 }); respond("drag", "Whee! A new spot."); }} className={`floating-companion corner-${preferences.corner} size-${preferences.size} state-${activity.state}`} aria-label={`${preferences.name} companion`} onKeyDown={event => { if (event.key === "Escape") setPanel({ key: activityKey, open: false }); }}>
       {open && <section ref={popup} id={panelId} className="floating-companion-panel" style={{ transform: `translate(${popupShift.x}px, ${popupShift.y}px)` }} aria-label="Companion status">
-        <div className="flex items-center justify-between gap-3"><span className="text-xs font-medium text-muted-foreground">{preferences.name} · Career Copilot</span><button aria-label="Close companion status" className="rounded-full p-1" onClick={() => setPanel({ key: activityKey, open: false })}><X size={16} /></button></div>
+        <div className="flex items-center justify-between gap-3"><span className="text-xs font-medium text-muted-foreground">{preferences.name} · Nova</span><button aria-label="Close companion status" className="rounded-full p-1" onClick={() => setPanel({ key: activityKey, open: false })}><X size={16} /></button></div>
         <div className="companion-bubble-nav"><button aria-pressed={view === "chat"} onClick={() => setView("chat")}>Chat</button><button aria-pressed={view === "status"} onClick={() => setView("status")}>Task status{activity.state === "waiting" ? " · input needed" : ""}</button></div>
         {view === "chat" ? <CompanionChat /> : <div role="status" aria-live="polite"><h2 className="mt-3 text-sm font-semibold">{activity.title}</h2><p className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap text-xs leading-5 text-muted-foreground">{activity.detail}</p></div>}
         <div className="mt-4 flex flex-wrap items-center gap-3 text-xs">
           {run?.status === "awaiting_approval" && run.output && <button className="rounded-full bg-primary px-3 py-2 font-medium text-primary-foreground" onClick={() => setReviewing(true)}>Review action</button>}
           {run && <Link href={`/agents?run=${encodeURIComponent(run.id)}`} className="text-primary underline underline-offset-4">View task</Link>}
-          <Link href="/copilot" className="inline-flex items-center gap-1 text-primary"><ChatCircle size={16} />Open chat</Link>
+          <Link href="/nova" className="inline-flex items-center gap-1 text-primary"><ChatCircle size={16} />Open chat</Link>
           <Link href="/settings/companion" className="ml-auto inline-flex items-center gap-1 text-muted-foreground"><GearSix size={16} />Settings</Link>
         </div>
         <div className="companion-play-controls" aria-label="Play with your companion">
