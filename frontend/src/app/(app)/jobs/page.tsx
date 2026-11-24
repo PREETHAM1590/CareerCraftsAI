@@ -72,6 +72,7 @@ import {
   inputTrayClass,
   type StatusTone,
 } from "@/components/vanguard";
+import { isComposing } from "@/lib/ime";
 
 const XRAY_TEMPLATES = [
   `site:linkedin.com/jobs "Frontend Engineer" "React" "Remote"`,
@@ -434,7 +435,7 @@ function SearchIsland({
             autoComplete="off"
             value={query}
             onChange={(e) => onQueryChange(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && onSubmit()}
+            onKeyDown={(e) => e.key === "Enter" && !isComposing(e) && onSubmit()}
             placeholder="Leave blank to use resume + saved preferences, or type custom role…"
             className={control}
           />
@@ -454,7 +455,7 @@ function SearchIsland({
             name="location"
             value={location}
             onChange={onLocationChange}
-            onKeyDown={(e) => e.key === "Enter" && onSubmit()}
+            onKeyDown={(e) => e.key === "Enter" && !isComposing(e) && onSubmit()}
             placeholder="City or Remote"
             inputClassName={control}
           />

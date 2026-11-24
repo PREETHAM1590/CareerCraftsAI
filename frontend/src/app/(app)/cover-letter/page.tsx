@@ -34,6 +34,7 @@ import {
   Textarea,
   panelSwap,
 } from "@/components/vanguard";
+import { isComposing } from "@/lib/ime";
 
 const TONES = ["Professional", "Enthusiastic", "Concise", "Story-driven"] as const;
 type Tone = (typeof TONES)[number];
@@ -223,7 +224,7 @@ export default function CoverLetterPage() {
                     value={jd}
                     onChange={(e) => setJd(e.target.value)}
                     onKeyDown={(e) => {
-                      if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && canGenerate) {
+                      if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !isComposing(e) && canGenerate) {
                         e.preventDefault();
                         void generate();
                       }

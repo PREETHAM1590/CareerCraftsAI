@@ -58,6 +58,11 @@ export const LOCAL_KEYS = { PAIRING: "pairing", AUTOFILL_PROFILE: "autofillProfi
 
 // Never auto-submitted, whatever the account setting: LinkedIn's terms forbid
 // automation and Naukri's were not reviewed. The server enforces this too.
+// Scope: job applications. The one exception is LinkedIn outreach
+// (src/linkedin.js, backend linkedin_sender): off unless the server sets
+// LINKEDIN_OUTREACH_ENABLED, and only drafts the member approves and confirms
+// per batch, under daily caps. It still carries LinkedIn's ToS risk; turning
+// it on is the product owner's call.
 export const NO_AUTO_SUBMIT_HOSTS = ["linkedin.com", "naukri.com", "internshala.com"];
 
 export function autoSubmitBlockedHost(urlString) {

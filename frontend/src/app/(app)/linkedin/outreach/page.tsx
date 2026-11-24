@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion } from "motion/react";
 import { toast } from "sonner";
@@ -14,7 +14,8 @@ import {
   UsersThree,
   X,
 } from "@phosphor-icons/react";
-import { apiClient } from "@/lib/api";
+import { apiClient, getApiErrorMessage } from "@/lib/api";
+import { LinkedInSending, useLinkedInAccount } from "@/components/agents/LinkedInSending";
 import { cn } from "@/lib/utils";
 import {
   Bezel,
@@ -41,14 +42,58 @@ interface OutreachRun {
   id: string;
   status: string;
   input: { company_name?: string } | null;
-  output: { contacts?: Array<{ name: string; title: string; linkedin_url: string }>; messages?: Array<{ contact_name: string; message: string }> } | null;
+  output: {
+    contacts?: Array<{ name: string; title: string; linkedin_url: string }>;
+    messages?: Array<{ contact_name: string; message: string }>;
+    queue_ids?: string[];
+    // LinkedIn sending (beta): per-draft result, filled in as the extension sends.
+    deliveries?: Record<string, string>;
+    sending?: boolean;
+    sending_started_at?: string;
+  } | null;
   started_at: string | null;
 }
 
 /* ───────────────────────────── helpers ───────────────────────────── */
 
+// A batch older than this was interrupted: its "sending" flag is stale, as
+// linkedin_sender.sending_stale decides. The server sends the value with
+// /linkedin/account; 30 minutes only until that loads.
+let sendingStaleMs = 30 * 60 * 1000;
+
+function isSending(run: OutreachRun): boolean {
+  const output = run.output;
+  if (!output?.sending) return false;
+  const started = Date.parse(output.sending_started_at ?? "");
+  return Number.isFinite(started) && Date.now() - started <= sendingStaleMs;
+}
+
+// Drafts not sent and not possibly sent: the ones Resend would try again.
+// Includes drafts an interrupted batch never reached (no delivery yet).
+function unsentCount(run: OutreachRun): number {
+  const deliveries = run.output?.deliveries ?? {};
+  const done = new Set(["invited", "messaged", "outcome_unknown", "sending"]);
+  return (run.output?.queue_ids ?? []).filter((id) => !done.has(deliveries[id])).length;
+}
+
+// agent_runs.status can't say "sending": an approved run is "completed" at
+// once and its LinkedIn delivery lives in output. Show what really happened.
+function displayStatus(run: OutreachRun): string {
+  const output = run.output;
+  if (run.status !== "completed" || !output?.deliveries) return run.status;
+  if (isSending(run)) return "sending";
+  const results = Object.values(output.deliveries);
+  const total = output.queue_ids?.length ?? results.length;
+  const sent = results.filter((r) => r === "invited" || r === "messaged").length;
+  if (total && sent === total) return "completed";
+  if (results.includes("outcome_unknown")) return "delivery uncertain";
+  return sent ? "partly sent" : "not sent";
+}
+
 function statusTone(status: string): StatusTone {
   if (status === "completed") return "success";
+  if (status === "partly sent" || status === "delivery uncertain") return "warning";
+  if (status === "not sent") return "danger";
   if (status === "awaiting_approval") return "warning";
   if (status === "failed" || status === "cancelled") return "danger";
   return "primary";
@@ -93,9 +138,27 @@ interface QueueCardProps {
   featured: boolean;
   deciding: boolean;
   onDecide: (approved: boolean) => void;
+  canSend?: boolean;
+  onResend?: () => void;
 }
 
-function QueueCard({ run, featured, deciding, onDecide }: QueueCardProps) {
+function deliverySummary(run: OutreachRun): string | null {
+  const deliveries = run.output?.deliveries;
+  if (!deliveries) return null;
+  const results = Object.values(deliveries);
+  const total = run.output?.queue_ids?.length ?? results.length;
+  const sent = results.filter((r) => r === "invited" || r === "messaged").length;
+  const waiting = results.filter((r) => r === "limit_reached").length;
+  const unknown = results.filter((r) => r === "outcome_unknown").length;
+  const failed = results.filter((r) => r === "failed").length;
+  const parts = [`${sent} of ${total} sent on LinkedIn`];
+  if (waiting) parts.push(`${waiting} waiting for tomorrow's limit`);
+  if (failed) parts.push(`${failed} not sent`);
+  if (unknown) parts.push(`${unknown} with unknown delivery. Check LinkedIn before resending.`);
+  return parts.join(" · ") + (isSending(run) ? " · sending…" : "");
+}
+
+function QueueCard({ run, featured, deciding, onDecide, canSend, onResend }: QueueCardProps) {
   const [expanded, setExpanded] = useState(false);
   const contacts = run.output?.contacts ?? [];
   const messages = run.output?.messages ?? [];
@@ -137,8 +200,8 @@ function QueueCard({ run, featured, deciding, onDecide }: QueueCardProps) {
             ) : null}
           </div>
         </div>
-        <StatusPill tone={statusTone(run.status)} live={inFlight} className="shrink-0">
-          {run.status.replace("_", " ")}
+        <StatusPill tone={statusTone(displayStatus(run))} live={inFlight || displayStatus(run) === "sending"} className="shrink-0">
+          {displayStatus(run).replace("_", " ")}
         </StatusPill>
       </header>
 
@@ -234,11 +297,35 @@ function QueueCard({ run, featured, deciding, onDecide }: QueueCardProps) {
         <p className="mt-3 text-xs text-muted-foreground">Finding decision-makers and drafting messages…</p>
       ) : null}
 
+      {/* LinkedIn sending progress (beta) */}
+      {run.output?.deliveries && (
+        <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
+          <span>{deliverySummary(run)}</span>
+          {canSend && onResend && !isSending(run) && unsentCount(run) > 0 && (
+              <IslandButton tone="ghost" size="sm" onClick={onResend}>Resend unsent</IslandButton>
+            )}
+        </div>
+      )}
+
       {/* HITL decision */}
       {run.status === "awaiting_approval" && (
         <footer className="mt-auto flex flex-wrap gap-2 pt-6">
+          {canSend && (
+            <IslandButton
+              tone="primary"
+              size="sm"
+              disabled={deciding || !messages.length}
+              trailing={deciding ? <CircleNotch size={14} weight="light" className="animate-spin" /> : <PaperPlaneTilt size={14} weight="light" />}
+              onClick={() => {
+                const count = messages.length;
+                if (window.confirm(`Send ${count} ${count === 1 ? "draft" : "drafts"} from your LinkedIn now? Connection requests to people you’re not connected to can include a note of up to 300 characters. If a draft is too long for a connection request, it will be skipped.`)) onDecide(true);
+              }}
+            >
+              Send on LinkedIn
+            </IslandButton>
+          )}
           <IslandButton
-            tone="primary"
+            tone={canSend ? "ghost" : "primary"}
             size="sm"
             disabled={deciding}
             trailing={deciding ? <CircleNotch size={14} weight="light" className="animate-spin" /> : <Check size={14} weight="light" />}
@@ -291,10 +378,24 @@ export default function LinkedInOutreachPage() {
   const approveMutation = useMutation({
     mutationFn: ({ runId, approved }: { runId: string; approved: boolean }) =>
       apiClient.post(`/linkedin/outreach/${runId}/approve`, { approved }),
-    onSuccess: (_, { approved }) => {
-      toast.success(approved ? "Message approved for sending" : "Message discarded");
+    onSuccess: (response, { approved }) => {
+      if (!approved) {
+        toast.success("Message discarded");
+      } else {
+        toast.success("Sending from your LinkedIn in Chrome. Keep Chrome open; progress shows on the card.");
+      }
       qc.invalidateQueries({ queryKey: ["outreach-queue"] });
     },
+    onError: (error) => toast.error(getApiErrorMessage(error, "Could not process that decision.")),
+  });
+
+  const resendMutation = useMutation({
+    mutationFn: (runId: string) => apiClient.post(`/linkedin/outreach/${runId}/resend`),
+    onSuccess: () => {
+      toast.success("Sending the unsent drafts. Keep Chrome open.");
+      qc.invalidateQueries({ queryKey: ["outreach-queue"] });
+    },
+    onError: (error) => toast.error(getApiErrorMessage(error, "Could not resend.")),
   });
 
   const canSearch = company.trim().length > 0 && !identifyMutation.isPending;
@@ -304,9 +405,14 @@ export default function LinkedInOutreachPage() {
     identifyMutation.mutate();
   };
 
+  const linkedin = useLinkedInAccount();
+  const staleSeconds = linkedin.data?.sending_stale_seconds;
+  useEffect(() => {
+    if (staleSeconds) sendingStaleMs = staleSeconds * 1000;
+  }, [staleSeconds]);
   const awaitingCount = queue.filter((r) => r.status === "awaiting_approval").length;
   const inFlightCount = queue.filter((r) => r.status === "running" || r.status === "pending").length;
-  const completedCount = queue.filter((r) => r.status === "completed").length;
+  const completedCount = queue.filter((r) => displayStatus(r) === "completed").length;
 
   return (
     <Screen>
@@ -366,6 +472,7 @@ export default function LinkedInOutreachPage() {
       />
 
       <Section aria-label="Outreach Queue">
+        <div className="mb-6"><LinkedInSending /></div>
         <Reveal>
           <SectionHeading
             eyebrow="Queue"
@@ -422,6 +529,8 @@ export default function LinkedInOutreachPage() {
                   featured={index === 0}
                   deciding={approveMutation.isPending && approveMutation.variables?.runId === run.id}
                   onDecide={(approved) => approveMutation.mutate({ runId: run.id, approved })}
+                  canSend={Boolean(linkedin.data?.enabled && linkedin.data?.ready)}
+                  onResend={() => resendMutation.mutate(run.id)}
                 />
               </motion.div>
             ))}

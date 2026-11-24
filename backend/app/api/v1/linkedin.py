@@ -5,14 +5,16 @@ import uuid
 from datetime import UTC, datetime
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import get_current_user, get_db
 from app.api.v1.run_utils import queue_agent_run
+from app.core.rate_limit import limiter
 from app.models.db import AgentRun, LinkedInOutreachQueue, User
+from app.services import linkedin_sender
 
 router = APIRouter(prefix="/linkedin", tags=["linkedin"])
 logger = logging.getLogger(__name__)
@@ -216,13 +218,33 @@ async def approve_outreach(
         raise HTTPException(status_code=400, detail="Run is not awaiting approval")
 
     if body.approved:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "Automatic LinkedIn sends are unavailable. "
-                "Copy the draft and send it on LinkedIn yourself."
-            ),
+        device = (
+            await linkedin_sender.device_for(current_user.id) if linkedin_sender.enabled() else None
         )
+        if device is None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Copy the draft and send it on LinkedIn yourself, or open Chrome with the "
+                    "CareerCraft extension to send approved drafts from your LinkedIn."
+                ),
+            )
+        # The member approved these drafts: the extension sends each at most
+        # once, in the background, within today's caps.
+        # agent_runs.status has a fixed set of values: the run is approved
+        # (completed) and output.sending tracks the background send.
+        run.status = "completed"
+        run.completed_at = datetime.now(UTC)
+        run.output = {
+            **(run.output or {}),
+            "deliveries": {},
+            "sending": True,
+            "sending_started_at": datetime.now(UTC).isoformat(),
+        }
+        await db.flush()
+        await db.commit()
+        linkedin_sender.start_run(current_user.id, run.id)
+        return {"status": "completed", "sending": True, "run_id": str(run_id)}
     else:
         output = run.output or {}
         for queue_id in output.get("queue_ids") or []:
@@ -241,3 +263,67 @@ async def approve_outreach(
     run.completed_at = datetime.now(UTC)
     await db.flush()
     return {"status": run.status, "run_id": str(run_id)}
+
+
+# ── LinkedIn sending (beta) ─────────────────────────────────────
+
+
+@router.get("/account")
+async def linkedin_sending_status(current_user: User = Depends(get_current_user)):
+    """Whether approved drafts can be sent from the member's own LinkedIn."""
+    if not linkedin_sender.enabled():
+        return {"enabled": False, "ready": False}
+    return {
+        "enabled": True,
+        # Sent by the paired extension in the member's Chrome, so it must be online.
+        "ready": await linkedin_sender.device_for(current_user.id) is not None,
+        "invites_per_day": linkedin_sender.settings.LINKEDIN_INVITES_PER_DAY,
+        "messages_per_day": linkedin_sender.settings.LINKEDIN_MESSAGES_PER_DAY,
+        # The page's "still sending" window comes from here, not a copy.
+        "sending_stale_seconds": int(linkedin_sender.STALE_AFTER.total_seconds()),
+    }
+
+
+@router.post("/outreach/{run_id}/resend")
+@limiter.limit("10/minute")
+async def resend_outreach(
+    request: Request,
+    run_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Send the drafts of an approved run that failed or hit a limit."""
+    run = (
+        await db.execute(
+            select(AgentRun)
+            .where(
+                AgentRun.id == run_id,
+                AgentRun.user_id == current_user.id,
+                AgentRun.agent_type == "linkedin_outreach",
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Outreach run not found")
+    if run.status != "completed" or not (run.output or {}).get("queue_ids"):
+        raise HTTPException(status_code=409, detail="Only approved outreach can be resent")
+    if not linkedin_sender.enabled() or await linkedin_sender.device_for(current_user.id) is None:
+        raise HTTPException(
+            status_code=409, detail="Open Chrome with the CareerCraft extension, then resend."
+        )
+    # A batch interrupted by a restart never clears its flag: past the lock
+    # TTL it is stale and the drafts can be resent.
+    if await linkedin_sender.batch_running(run.id) or (
+        (run.output or {}).get("sending") and not linkedin_sender.sending_stale(run.output)
+    ):
+        raise HTTPException(status_code=409, detail="These drafts are being sent right now")
+    run.output = {
+        **(run.output or {}),
+        "sending": True,
+        "sending_started_at": datetime.now(UTC).isoformat(),
+    }
+    await db.commit()
+    # Items already sent, or maybe sent, are skipped by send_item.
+    linkedin_sender.start_run(current_user.id, run.id)
+    return {"status": "completed", "sending": True, "run_id": str(run_id)}
