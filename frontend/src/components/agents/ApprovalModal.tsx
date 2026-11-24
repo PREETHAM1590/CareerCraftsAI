@@ -116,6 +116,22 @@ function EditToggle({ editing, onClick }: { editing: boolean; onClick: () => voi
   );
 }
 
+const asStrings = (value: unknown): string[] =>
+  Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item !== "") : [];
+
+/** Every caution the backend attached to a draft, as plain sentences. */
+function collectWarnings(action: Record<string, unknown>): string[] {
+  const unvetted = asStrings(action.unvetted_destinations);
+  const found = [
+    ...asStrings(action.warnings),
+    ...(unvetted.length > 0
+      ? [`Links or addresses you did not provide: ${unvetted.slice(0, 5).join(", ")}. Check them before approving.`]
+      : []),
+    ...asStrings([action.context_warning, action.persist_warning]),
+  ];
+  return Array.from(new Set(found));
+}
+
 export function ApprovalModal({ runId, action, onApprove, onCancel }: Props) {
   const [loading, setLoading] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -126,9 +142,7 @@ export function ApprovalModal({ runId, action, onApprove, onCancel }: Props) {
   // Nova is waiting for a one-time code: the code goes to its own private
   // route (sealed, read once) and never travels in the approval payload.
   const needsCode = actionType === "computer_action" && action.input_required === "code";
-  const warnings = Array.isArray(action.warnings)
-    ? action.warnings.filter((warning): warning is string => typeof warning === "string")
-    : [];
+  const warnings = collectWarnings(action);
   const ActionIcon = ACTION_ICON[actionType] ?? ShieldCheck;
 
   const decide = async (approved: boolean) => {

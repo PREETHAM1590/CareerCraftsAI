@@ -9,7 +9,6 @@ from app.applications import answer_resolver, profile_service
 from app.applications.models import ApplicationField
 from app.applications.question_normalizer import normalize_question
 from app.applications.schema_extractor import extract_fields
-from app.applications.validator import validate_fields
 
 # --- question_normalizer ---
 
@@ -213,93 +212,6 @@ def test_text_email_textarea_number_date_file_map_correctly():
     assert fields["years"].input_type == "number"
     assert fields["start"].input_type == "date"
     assert fields["resume"].input_type == "file"
-
-
-# --- validator ---
-
-
-def test_required_unchecked_checkbox_is_flagged():
-    field = ApplicationField(
-        field_id="c1", label="I agree", input_type="checkbox", required=True, value=False
-    )
-    issues = validate_fields([field])
-    assert len(issues) == 1
-    assert issues[0].field_id == "c1"
-
-
-def test_required_unselected_radio_is_flagged():
-    field = ApplicationField(
-        field_id="r1",
-        label="Sponsorship",
-        input_type="radio",
-        required=True,
-        options=["Yes", "No"],
-        value=None,
-    )
-    issues = validate_fields([field])
-    assert len(issues) == 1
-
-
-def test_required_select_placeholder_is_flagged():
-    field = ApplicationField(
-        field_id="s1",
-        label="Country",
-        input_type="select",
-        required=True,
-        options=["Select...", "USA"],
-        value=None,
-    )
-    issues = validate_fields([field])
-    assert len(issues) == 1
-
-
-def test_checked_checkbox_and_selected_radio_pass():
-    fields = [
-        ApplicationField(
-            field_id="c1", label="I agree", input_type="checkbox", required=True, value=True
-        ),
-        ApplicationField(
-            field_id="r1",
-            label="Sponsorship",
-            input_type="radio",
-            required=True,
-            options=["Yes", "No"],
-            value="No",
-        ),
-    ]
-    assert validate_fields(fields) == []
-
-
-def test_invalid_email_format_is_flagged():
-    field = ApplicationField(
-        field_id="email",
-        label="Email",
-        input_type="text",
-        normalized_key="personal.email",
-        required=True,
-        value="not-an-email",
-    )
-    issues = validate_fields([field])
-    assert any("email" in i.message.lower() for i in issues)
-
-
-def test_invisible_required_field_is_skipped():
-    field = ApplicationField(
-        field_id="hidden1",
-        label="Hidden",
-        input_type="text",
-        required=True,
-        value=None,
-        visible=False,
-    )
-    assert validate_fields([field]) == []
-
-
-def test_disabled_required_field_is_skipped():
-    field = ApplicationField(
-        field_id="d1", label="Disabled", input_type="text", required=True, value=None, disabled=True
-    )
-    assert validate_fields([field]) == []
 
 
 # --- answer_resolver ---

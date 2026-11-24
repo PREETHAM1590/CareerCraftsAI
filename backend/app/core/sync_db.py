@@ -98,6 +98,9 @@ def _get_sync_factory():
                     pool_size=settings.SYNC_DB_POOL_SIZE,
                     max_overflow=settings.SYNC_DB_MAX_OVERFLOW,
                     pool_pre_ping=True,
+                    # Fail fast instead of blocking a worker thread forever
+                    # when the database host is unreachable.
+                    connect_args={"connect_timeout": 10},
                 )
                 event.listen(_sync_engine, "connect", _set_lock_timeout)
                 _sync_factory = sessionmaker(_sync_engine, class_=Session, expire_on_commit=False)

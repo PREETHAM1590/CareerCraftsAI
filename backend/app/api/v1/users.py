@@ -498,13 +498,76 @@ async def test_model(
 
 
 # ---------------------------------------------------------------------------
-# LinkedIn Credentials (encrypted) + Auto-mode toggle
+# Saved screening answers
 # ---------------------------------------------------------------------------
 
 
-class LinkedInCredentialsRequest(BaseModel):
-    email: str
-    password: str
+class SavedAnswerRequest(BaseModel):
+    value: str | bool | list[str]
+
+
+def _saved_answer_key(question_key: str) -> str:
+    from app.applications import saved_answers
+
+    if not saved_answers.valid_key(question_key):
+        raise HTTPException(status_code=404, detail="Unknown question")
+    return question_key
+
+
+@router.get("/me/saved-answers")
+async def list_saved_answers(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Reusable answers to screening questions. The extension fills these
+    as the member's own answers (never drafted), so only these and profile
+    data let an application be submitted without review."""
+    from app.applications import saved_answers
+
+    return {"answers": await saved_answers.list_answers(db, current_user.id)}
+
+
+@router.put("/me/saved-answers/{question_key}")
+@limiter.limit("60/minute")
+async def put_saved_answer(
+    request: Request,
+    question_key: str,
+    payload: SavedAnswerRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from app.applications import saved_answers
+
+    key = _saved_answer_key(question_key)
+    value = payload.value
+    texts = value if isinstance(value, list) else [value] if isinstance(value, str) else []
+    if len(texts) > 20 or any(len(t) > saved_answers.MAX_VALUE_CHARS for t in texts):
+        raise HTTPException(status_code=422, detail="Answer is too long")
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            raise HTTPException(status_code=422, detail="Answer is empty; delete it instead")
+    await saved_answers.save_answer(db, current_user.id, key, value)
+    await db.flush()
+    return {"question_key": key, "value": value}
+
+
+@router.delete("/me/saved-answers/{question_key}", status_code=204)
+async def delete_saved_answer(
+    question_key: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from app.applications import saved_answers
+
+    await saved_answers.delete_answer(db, current_user.id, _saved_answer_key(question_key))
+    await db.flush()
+    return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------------
+# LinkedIn credentials (no longer collected) + Auto-mode toggle
+# ---------------------------------------------------------------------------
 
 
 class AutoModeRequest(BaseModel):
@@ -516,29 +579,14 @@ class ConnectedAccountsResponse(BaseModel):
     gmail_send: bool
 
 
-@router.post("/me/linkedin-credentials")
-@limiter.limit("5/minute")
-async def save_linkedin_credentials(
-    request: Request,
-    payload: LinkedInCredentialsRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Store LinkedIn credentials encrypted (AES-256-GCM, same as API keys)."""
-    from app.core.security import encrypt_api_key
-
-    current_user.linkedin_email_enc = encrypt_api_key(payload.email, settings.APP_SECRET_KEY)
-    current_user.linkedin_password_enc = encrypt_api_key(payload.password, settings.APP_SECRET_KEY)
-    await db.flush()
-    return {"status": "saved", "message": "LinkedIn credentials stored encrypted"}
-
-
+# LinkedIn sign-in happens in the member's own browser; passwords are no
+# longer accepted. DELETE stays so anyone who stored one can still erase it.
 @router.delete("/me/linkedin-credentials")
 async def delete_linkedin_credentials(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Remove stored LinkedIn credentials."""
+    """Erase LinkedIn credentials stored by older versions."""
     current_user.linkedin_email_enc = None
     current_user.linkedin_password_enc = None
     await db.flush()

@@ -30,7 +30,7 @@ from app.models.db import (
     UserModelSettings,
     UserPreferences,
 )
-from app.services import apply_limits
+from app.services import apply_limits, india_focus
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +98,7 @@ async def load_rule(user_id: uuid.UUID) -> dict | None:
         "tone": prefs.resume_tone,
         # "New" jobs: found after the rule was last switched on, never the backlog.
         "since": prefs.auto_rule_enabled_at,
+        "india_focus": prefs.india_focus is not False,
     }
 
 
@@ -108,10 +109,13 @@ def plan(
     action: str,
     minimum: int,
     room: int,
+    india: bool = True,
 ) -> dict[str, list[JobApplication]]:
     """Per rule step, the jobs still to handle: at/above the threshold, not
-    already logged for that step (apply also not already attempted)."""
+    already logged for that step (apply also not already attempted). With
+    India focus on, roles open only outside India are never queued."""
     out: dict[str, list[JobApplication]] = {}
+    saved, _ = india_focus.eligible_listings(saved, india_focus=india)
     for step in RULE_ACTIONS[action]:
         pool = [
             a
@@ -178,7 +182,15 @@ async def _candidates(
             .scalars()
             .all()
         )
-    return plan(saved, logged, attempted, rule["action"], rule["min_match"], room)
+    return plan(
+        saved,
+        logged,
+        attempted,
+        rule["action"],
+        rule["min_match"],
+        room,
+        india=rule.get("india_focus", True),
+    )
 
 
 async def _log(user_id: uuid.UUID, application_id: uuid.UUID, action: str, detail: dict) -> None:

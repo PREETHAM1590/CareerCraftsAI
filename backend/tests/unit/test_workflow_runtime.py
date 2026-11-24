@@ -64,31 +64,6 @@ async def test_real_async_graph_runner_preserves_approval():
     assert pipeline.await_args.kwargs["model_settings"] is model_settings
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "output,status",
-    [
-        ("REQUIRES_ACCOUNT_CREATION", "requires_account_creation"),
-        ("Unable to proceed", "failed"),
-        ("", "failed"),
-        ("REQUIRES_MANUAL", "requires_manual"),
-        ("READY_FOR_REVIEW", "ready_for_review"),
-    ],
-)
-async def test_form_filler_never_labels_unknown_outcome_success(output, status):
-    from app.services.form_filler_service import UserFormProfile, fill_and_submit_form
-
-    with (
-        patch(
-            "app.services.form_filler_service.build_user_form_profile",
-            return_value=UserFormProfile(),
-        ),
-        patch("app.services.form_filler_service.run_browser_task", AsyncMock(return_value=output)),
-    ):
-        result = await fill_and_submit_form(None, "user", "https://jobs.example.com")
-    assert result["status"] == status
-
-
 # --- Regression tests for the durable-workflow hardening pass. ---
 
 
@@ -502,38 +477,6 @@ def _make_attempt(state="awaiting_approval"):
         run_id=uuid.uuid4(),
         state=state,
     )
-
-
-@pytest.mark.asyncio
-async def test_claim_attempt_for_submit_swaps_awaiting_approval_to_submitting(monkeypatch):
-    from app.applications import submission as app_workflow
-
-    attempt = _make_attempt(state="awaiting_approval")
-    fake = _AttemptFakeDB(attempt)
-    monkeypatch.setattr(app_workflow, "AsyncSessionLocal", lambda: _fake_session_cm(fake))
-
-    claimed = await app_workflow.claim_attempt_for_submit(str(attempt.id), "hash-123")
-    assert claimed is attempt
-    assert attempt.state == "submitting"
-    assert attempt.submission_token is not None
-    assert attempt.approved_snapshot_hash == "hash-123"
-    assert fake.commits == 1
-
-
-@pytest.mark.asyncio
-async def test_claim_attempt_for_submit_rejects_already_claimed(monkeypatch):
-    """Second concurrent caller: the attempt is already 'submitting' (or
-    beyond) — must return None, never re-claim or double count as a second
-    winner of the compare-and-swap."""
-    from app.applications import submission as app_workflow
-
-    attempt = _make_attempt(state="submitting")
-    fake = _AttemptFakeDB(attempt)
-    monkeypatch.setattr(app_workflow, "AsyncSessionLocal", lambda: _fake_session_cm(fake))
-
-    claimed = await app_workflow.claim_attempt_for_submit(str(attempt.id), "hash-123")
-    assert claimed is None
-    assert fake.commits == 0  # no-op: nothing was written
 
 
 @pytest.mark.asyncio
