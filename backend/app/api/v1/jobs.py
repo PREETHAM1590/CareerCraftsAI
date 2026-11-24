@@ -1289,7 +1289,9 @@ async def get_application_jd(
         # The member's saved text is never overwritten: the page text is cached
         # per URL and served from there.
         try:
-            page = await asyncio.wait_for(job_page.full_description(app.job_url), 30)
+            page = await asyncio.wait_for(
+                job_page.full_description(app.job_url, current_user.id), 30
+            )
         except Exception:
             page = None  # a slow or failing page never breaks the saved JD
         if page and len(page) > max(len(saved), len(catalog)):

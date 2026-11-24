@@ -214,9 +214,13 @@ services:
   # in obscura.env). Report: docs/reports/2026-11-24-obscura-trial.md.
   obscura:
     image: h4ckf0r0day/obscura:0.2.7@sha256:e70c2abc925f2194c9338762075432c69328032cae220d77393f1495e90c601a
-    # Its own bridge network, published on loopback only. Obscura refuses
+    # Its own "obscura" bridge network, published on loopback only. Obscura refuses
     # private and internal destinations itself (SSRF protection).
     ports: ["127.0.0.1:19222:9222"]
+    networks: [obscura]
+    # Optional: started only with `docker compose --profile obscura up -d obscura`,
+    # so a VM without obscura.env still runs every other service.
+    profiles: [obscura]
     env_file: /opt/careercraft-secrets/obscura.env  # OBSCURA_CDP_TOKEN (32+ bytes)
     command:
       - serve
@@ -241,3 +245,9 @@ volumes:
   redis_data:
   pgdata:
   docstore:
+
+networks:
+  # Obscura only: nothing else joins it, so a page it renders can't reach
+  # another container by name.
+  obscura:
+    driver: bridge

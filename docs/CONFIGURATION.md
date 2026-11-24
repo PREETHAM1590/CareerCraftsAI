@@ -215,7 +215,9 @@ robots.txt counts as "not allowed" (RFC 9309).
 | `OBSCURA_CDP_URL` | `ws://127.0.0.1:19222/devtools/browser` on the APP VM. Blank = plain HTTP only. |
 | `OBSCURA_CDP_TOKEN` | 32+ random bytes, the same value as in `/opt/careercraft-secrets/obscura.env`. |
 
-**Running Obscura** (`deploy/oracle-vm/compose.yml`, service `obscura`)
+**Running Obscura** (`deploy/oracle-vm/compose.yml`, service `obscura`, profile `obscura`)
+- Start it with `docker compose --profile obscura up -d obscura` once `obscura.env` exists; plain `docker compose up -d` leaves it off.
+- Runs on its own `obscura` bridge network; no other container joins it.
 - Pinned image digest, published on `127.0.0.1:19222` only, bearer token required.
 - Read-only filesystem, no Linux capabilities, non-root, 768 MB.
 - Workers recycle at 400 MB or after an hour.

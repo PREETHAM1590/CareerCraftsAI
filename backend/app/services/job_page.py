@@ -174,12 +174,18 @@ async def fetch_rendered(url: str) -> str:
     return max((structured, clean(result.get("text") or "")), key=len)
 
 
-def _key(url: str) -> str:
-    return "jobpage:" + hashlib.sha256(url.encode()).hexdigest()
+def _key(url: str, owner=None) -> str:
+    # A URL with a query may carry something personal (an invite or tracking
+    # token): its cached page belongs to that member only. Path-only job URLs
+    # are shared, so a popular job is still read once for everyone.
+    scope = f"{owner}:" if urlsplit(url).query else ""
+    return "jobpage:" + hashlib.sha256(f"{scope}{url}".encode()).hexdigest()
 
 
-async def full_description(url: str) -> str | None:
-    """The job page's description, or None when nothing usable was found."""
+async def full_description(url: str, owner=None) -> str | None:
+    """The job page's description, or None when nothing usable was found.
+
+    owner: the member asking; scopes the cache for URLs with a query string."""
     from app.core import redis_client
     from app.services.job_connectors import canonical_url
 
@@ -193,7 +199,7 @@ async def full_description(url: str) -> str | None:
     redis = None
     try:
         redis = redis_client.get_redis()
-        cached = await redis.get(_key(url))
+        cached = await redis.get(_key(url, owner))
     except Exception as exc:
         logger.info("job_page_cache_unavailable", extra={"error_type": type(exc).__name__})
         redis, cached = None, None
@@ -211,7 +217,7 @@ async def full_description(url: str) -> str | None:
     if redis is not None:
         try:
             # A miss never overwrites a description another request just found.
-            await redis.set(_key(url), good, ex=ttl, nx=not good)
+            await redis.set(_key(url, owner), good, ex=ttl, nx=not good)
         except Exception as exc:
             logger.info("job_page_cache_unavailable", extra={"error_type": type(exc).__name__})
     return good or None

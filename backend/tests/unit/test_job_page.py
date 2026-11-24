@@ -299,3 +299,10 @@ async def test_redirects_to_skipped_or_disallowed_pages_read_nothing():
         assert await job_page.fetch_plain(start) == ""
     with patch("app.services.public_http.public_get", AsyncMock(return_value=answer(start))):
         assert (await job_page.fetch_plain(start)).startswith("Data Analyst")
+
+
+def test_urls_with_a_query_are_cached_per_member():
+    plain = "https://jobs.example.com/1"
+    query = "https://jobs.example.com/1?invite=abc123"
+    assert job_page._key(plain, "member-a") == job_page._key(plain, "member-b")
+    assert job_page._key(query, "member-a") != job_page._key(query, "member-b")
