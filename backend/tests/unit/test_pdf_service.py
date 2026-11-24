@@ -227,7 +227,12 @@ def test_unicode_candidates_include_linux_liberation_and_dejavu():
     assert serif[0] == tuple(f"LiberationSerif-{s}.ttf" for s in _STYLES)
     assert sans[1][:2] == ("DejaVuSans.ttf", "DejaVuSans-Bold.ttf")
     assert serif[1][:2] == ("DejaVuSerif.ttf", "DejaVuSerif-Bold.ttf")
-    assert sans[-1][0] == "arial.ttf" and serif[-1][0] == "times.ttf"
+    assert sans[3][0] == "arial.ttf" and serif[2][0] == "times.ttf"
+    # Indic families come after the Latin candidates so pure-Latin resumes
+    # keep DejaVu/Liberation and Indic text falls through to a covering font.
+    assert sans[-1][0] == "NotoSansMalayalam-Regular.ttf"
+    assert any("Devanagari" in files[0] for files in sans)
+    assert any("Devanagari" in files[0] for files in serif)
 
 
 def test_liberation_fonts_in_linux_layout_render_cyrillic(font_lookup, tmp_path):

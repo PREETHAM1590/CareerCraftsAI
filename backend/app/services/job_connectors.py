@@ -948,6 +948,56 @@ def _join(*parts) -> str:
     return ", ".join(str(p) for p in parts if p)
 
 
+_BODIES_MAX = 25  # descriptions fetched per refresh; the rest stay empty
+
+
+async def _fill_bamboohr_bodies(tenant: str, rows: list[dict]) -> None:
+    """BambooHR's list endpoint has no bodies; each posting's JSON does.
+    Best effort, bounded: the first _BODIES_MAX postings per refresh."""
+    from html import unescape
+
+    todo = [r for r in rows if not r.get("description")][:25]
+    if not todo:
+        return
+    try:
+        text = await _polite_get(
+            f"https://{tenant}.bamboohr.com/careers/job_ads",
+            headers={"Accept": "application/json"},
+        )
+        text.raise_for_status()
+        bodies = {
+            j.get("id"): re.sub(r"<[^>]+>", " ", str(j.get("description") or ""))
+            for j in json.loads(text.text)
+        }
+        bodies = {k: " ".join(plain(v).split()) for k, v in bodies.items()}
+    except Exception:  # noqa: BLE001, S110 - the body is optional
+        return
+    for r in todo:
+        r["description"] = bodies.get(r["id"], "")
+
+
+async def _fill_rippling_bodies(tenant: str, rows: list[dict]) -> None:
+    """Rippling's board API lists without bodies; each job's `url` serves the
+    posting HTML. Best effort, bounded, plain-text extraction only."""
+    todo = [r for r in rows if not r.get("description")][:25]
+    for r in todo:
+        url = r.get("url")
+        if not url:
+            continue
+        try:
+            res = await _polite_get(url)
+            res.raise_for_status()
+            match = re.search(
+                r"<(?:div|section)[^>]*(?:job[-_]?description|description)[^>]*>(.*?)</(?:div|section)>",
+                res.text,
+                re.I | re.S,
+            )
+            if match:
+                r["description"] = " ".join(plain(match.group(1)).split())[:8000]
+        except Exception:  # noqa: BLE001, S110 - the body is optional
+            continue
+
+
 async def _fetch_ats_board(source: Source, tenant: str, page: int) -> Page:
     """Keyless one-request boards. Each returns the whole board (Teamtailor is
     paged by cursor). BambooHR, Breezy and Rippling list without descriptions:
@@ -1021,6 +1071,7 @@ async def _fetch_ats_board(source: Source, tenant: str, page: int) -> Page:
             }
             for j in response.json().get("result", [])
         ]
+        await _fill_bamboohr_bodies(tenant, rows)
     elif family == "breezy":
         rows = [
             {
@@ -1073,6 +1124,7 @@ async def _fetch_ats_board(source: Source, tenant: str, page: int) -> Page:
             }
             for j in (data if isinstance(data, list) else data.get("items", []))
         ]
+        await _fill_rippling_bodies(tenant, rows)
     elif family == "jobscore":
         data = response.json()
         rows = [

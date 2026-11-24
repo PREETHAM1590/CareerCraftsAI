@@ -239,6 +239,57 @@ _UNICODE_FONTS = {
             "NotoSans-BoldItalic.ttf",
         ),
         ("arial.ttf", "arialbd.ttf", "ariali.ttf", "arialbi.ttf"),
+        # Indic scripts (Devanagari, Tamil, ...): tried last, so Latin text
+        # keeps DejaVu/Noto and Devanagari/Tamil text falls through to the
+        # first family whose glyphs actually cover it.
+        (
+            "NotoSansDevanagari-Regular.ttf",
+            "NotoSansDevanagari-Bold.ttf",
+            "NotoSansDevanagari-Regular.ttf",
+            "NotoSansDevanagari-Bold.ttf",
+        ),
+        (
+            "NotoSansTamil-Regular.ttf",
+            "NotoSansTamil-Bold.ttf",
+            "NotoSansTamil-Regular.ttf",
+            "NotoSansTamil-Bold.ttf",
+        ),
+        (
+            "NotoSansTelugu-Regular.ttf",
+            "NotoSansTelugu-Bold.ttf",
+            "NotoSansTelugu-Regular.ttf",
+            "NotoSansTelugu-Bold.ttf",
+        ),
+        (
+            "NotoSansKannada-Regular.ttf",
+            "NotoSansKannada-Bold.ttf",
+            "NotoSansKannada-Regular.ttf",
+            "NotoSansKannada-Bold.ttf",
+        ),
+        (
+            "NotoSansGurmukhi-Regular.ttf",
+            "NotoSansGurmukhi-Bold.ttf",
+            "NotoSansGurmukhi-Regular.ttf",
+            "NotoSansGurmukhi-Bold.ttf",
+        ),
+        (
+            "NotoSansGujarati-Regular.ttf",
+            "NotoSansGujarati-Bold.ttf",
+            "NotoSansGujarati-Regular.ttf",
+            "NotoSansGujarati-Bold.ttf",
+        ),
+        (
+            "NotoSansBengali-Regular.ttf",
+            "NotoSansBengali-Bold.ttf",
+            "NotoSansBengali-Regular.ttf",
+            "NotoSansBengali-Bold.ttf",
+        ),
+        (
+            "NotoSansMalayalam-Regular.ttf",
+            "NotoSansMalayalam-Bold.ttf",
+            "NotoSansMalayalam-Regular.ttf",
+            "NotoSansMalayalam-Bold.ttf",
+        ),
     ],
     "serif": [
         (
@@ -254,6 +305,56 @@ _UNICODE_FONTS = {
             "DejaVuSerif-BoldItalic.ttf",
         ),
         ("times.ttf", "timesbd.ttf", "timesi.ttf", "timesbi.ttf"),
+        # Same Indic tail as the sans list, with serif filenames where they
+        # ship; sans-Noto files are the realistic fallback on Linux.
+        (
+            "NotoSerifDevanagari-Regular.ttf",
+            "NotoSerifDevanagari-Bold.ttf",
+            "NotoSansDevanagari-Regular.ttf",
+            "NotoSansDevanagari-Bold.ttf",
+        ),
+        (
+            "NotoSerifTamil-Regular.ttf",
+            "NotoSerifTamil-Bold.ttf",
+            "NotoSansTamil-Regular.ttf",
+            "NotoSansTamil-Bold.ttf",
+        ),
+        (
+            "NotoSerifTelugu-Regular.ttf",
+            "NotoSerifTelugu-Bold.ttf",
+            "NotoSansTelugu-Regular.ttf",
+            "NotoSansTelugu-Bold.ttf",
+        ),
+        (
+            "NotoSerifKannada-Regular.ttf",
+            "NotoSerifKannada-Bold.ttf",
+            "NotoSansKannada-Regular.ttf",
+            "NotoSansKannada-Bold.ttf",
+        ),
+        (
+            "NotoSerifGurmukhi-Regular.ttf",
+            "NotoSerifGurmukhi-Bold.ttf",
+            "NotoSansGurmukhi-Regular.ttf",
+            "NotoSansGurmukhi-Bold.ttf",
+        ),
+        (
+            "NotoSerifGujarati-Regular.ttf",
+            "NotoSerifGujarati-Bold.ttf",
+            "NotoSansGujarati-Regular.ttf",
+            "NotoSansGujarati-Bold.ttf",
+        ),
+        (
+            "NotoSerifBengali-Regular.ttf",
+            "NotoSerifBengali-Bold.ttf",
+            "NotoSansBengali-Regular.ttf",
+            "NotoSansBengali-Bold.ttf",
+        ),
+        (
+            "NotoSerifMalayalam-Regular.ttf",
+            "NotoSerifMalayalam-Bold.ttf",
+            "NotoSansMalayalam-Regular.ttf",
+            "NotoSansMalayalam-Bold.ttf",
+        ),
     ],
 }
 
