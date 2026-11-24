@@ -83,7 +83,9 @@ async def upsert_jobs(db, jobs: list[dict], source_id: str) -> None:
               THEN job_catalog.data->'description'
               ELSE coalesce(EXCLUDED.data->'description',to_jsonb(''::text)) END),
             title=EXCLUDED.title,
-            company=EXCLUDED.company,posted_at=EXCLUDED.posted_at,last_seen_at=now()"""),
+            company=EXCLUDED.company,last_seen_at=now(),
+            -- A sighting without a date never erases a known one.
+            posted_at=COALESCE(EXCLUDED.posted_at,job_catalog.posted_at)"""),
             {
                 "id": job["job_id"],
                 "url": job["url"],

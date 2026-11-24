@@ -601,14 +601,18 @@ async def get_connected_accounts(
     """Return the Nango-managed Gmail connection state."""
     from app.models.db import IntegrationConnection
 
-    result = await db.execute(
-        select(IntegrationConnection.status).where(
+    rows = await db.execute(
+        select(IntegrationConnection.provider).where(
             IntegrationConnection.user_id == current_user.id,
-            IntegrationConnection.provider == "gmail",
+            IntegrationConnection.provider.in_(("gmail", "gmail_send")),
+            IntegrationConnection.status == "connected",
         )
     )
-    gmail_connected = result.scalar_one_or_none() == "connected"
-    return ConnectedAccountsResponse(google=gmail_connected, gmail_send=gmail_connected)
+    connected = set(rows.scalars().all())
+    # A send-only connection can send outreach but cannot read the inbox.
+    return ConnectedAccountsResponse(
+        google="gmail" in connected, gmail_send=bool(connected & {"gmail", "gmail_send"})
+    )
 
 
 @router.patch("/me/auto-mode")

@@ -7,6 +7,7 @@ import { motion } from "motion/react";
 import { fadeUp, stagger } from "@/lib/motion-variants";
 import { apiClient } from "@/lib/api";
 import { Loader2, MapPin, Search, ExternalLink } from "lucide-react";
+import { isComposing } from "@/lib/ime";
 
 type DemoJob = {
   title: string;
@@ -112,7 +113,7 @@ export function DemoSection() {
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+              onKeyDown={(e) => e.key === "Enter" && !isComposing(e) && handleSearch()}
               placeholder="Job title, e.g. Backend Engineer"
               maxLength={100}
               disabled={outOfSearches || state === "loading"}
@@ -121,7 +122,7 @@ export function DemoSection() {
             <input
               value={location}
               onChange={(e) => setLocation(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+              onKeyDown={(e) => e.key === "Enter" && !isComposing(e) && handleSearch()}
               placeholder="Location"
               maxLength={100}
               disabled={outOfSearches || state === "loading"}
