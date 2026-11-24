@@ -100,8 +100,11 @@ def test_internship_mode_keeps_only_internships():
         ("Bengaluru, Karnataka", "bangalore"),
         ("Gurugram", "gurgaon"),
         ("Pune, Maharashtra, India", "pune"),
-        ("Remote", "remote"),
+        # Job search's default when no location is given: not India.
+        ("Remote", None),
+        ("Remote, India", "remote"),
         ("Work from home", "remote"),
+        ("WFH", "remote"),
         ("India", ""),
         ("", ""),
         ("Navi Mumbai", "navi-mumbai"),
@@ -213,3 +216,10 @@ def test_registered_as_default_live_source():
     assert job["url"].startswith("https://internshala.com/job/detail/")
     assert job["salary_text"] == "₹ 3,00,000 - 4,50,000"
     assert job["platform"] == "internshala"
+
+
+def test_search_without_a_location_makes_no_request():
+    # job_search_service passes "Remote" when the member gave no location.
+    with patch.object(internshala, "fetch") as fetch:
+        assert internshala.search("python developer", "Remote", 20) == []
+    fetch.assert_not_called()

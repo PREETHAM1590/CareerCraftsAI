@@ -49,7 +49,9 @@ INDIA_CITIES = {
     "surat", "thiruvananthapuram", "mysore", "visakhapatnam", "bhopal", "patna",
     "ghaziabad", "faridabad", "navi mumbai", "thane", "mohali", "dehradun",
 }  # fmt: skip
-REMOTE_WORDS = {"remote", "work from home", "wfh", "anywhere"}
+# Indian phrasing for remote work. A bare "Remote" is also what job search
+# uses when a member gives no location, so it alone never means India.
+REMOTE_WORDS = {"work from home", "wfh"}
 
 
 def slug(value: str) -> str:
@@ -61,10 +63,12 @@ def place(location: str | None) -> str | None:
     text = (location or "").strip().lower()
     if not text or text in {"india", "anywhere in india"}:
         return ""
+    parts = {part.strip() for part in text.split(",")}
     if text in REMOTE_WORDS or "work from home" in text:
         return "remote"
+    if parts & {"remote", "anywhere"}:
+        return "remote" if "india" in parts else None
     city = CITY_ALIASES.get(text.split(",")[0].strip(), text.split(",")[0].strip())
-    parts = {part.strip() for part in text.split(",")}
     if city in INDIA_CITIES or "india" in parts:
         return "" if city == "india" else slug(city)
     return None
