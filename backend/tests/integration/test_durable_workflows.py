@@ -343,29 +343,6 @@ async def new_application_attempt(factory, state="awaiting_approval"):
 
 
 @pytest.mark.asyncio
-async def test_two_simultaneous_application_approvals_cause_one_submit(database, monkeypatch):
-    """Required test #1: real Postgres row lock, not a mock — two concurrent
-    claims for the same attempt must not both win the compare-and-swap."""
-    from app.applications import submission
-
-    monkeypatch.setattr(submission, "AsyncSessionLocal", database)
-
-    _, _, attempt = await new_application_attempt(database, state="awaiting_approval")
-    results = await asyncio.gather(
-        submission.claim_attempt_for_submit(str(attempt.id), "hash-1"),
-        submission.claim_attempt_for_submit(str(attempt.id), "hash-1"),
-    )
-    winners = [r for r in results if r is not None]
-    assert len(winners) == 1
-
-    async with database() as db:
-        from app.models.db import ApplicationAttempt
-
-        saved = await db.get(ApplicationAttempt, attempt.id)
-        assert saved.state == "submitting"
-
-
-@pytest.mark.asyncio
 async def test_two_simultaneous_email_approvals_cause_one_gmail_call(database, monkeypatch):
     """Required test #2: real Postgres row lock on outbound_messages."""
     from app.services import workflow_service

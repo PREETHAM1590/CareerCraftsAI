@@ -25,6 +25,7 @@ import { ApplicationList, type ApplicationItem, type AppStage } from "@/componen
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { deleteApplications, applicationFilterParams, fetchApplications, restoreApplications, type ApplicationFilters, type ApplicationRecord, type ApplicationSort } from "@/lib/applications-api";
 import { ApplicationDrawer } from "@/components/apps/ApplicationDrawer";
+import type { Submission } from "@/components/apps/SubmissionEvidence";
 import {
   Bezel,
   EmptyPanel,
@@ -193,6 +194,12 @@ function ApplicationsView() {
       const { data } = await apiClient.get("/agents/runs", { params: { application_id: selectedId, limit: 10 } });
       return (Array.isArray(data) ? data : data.runs ?? []) as AgentRun[];
     },
+  });
+
+  const { data: submission = null } = useQuery<Submission | null>({
+    queryKey: ["application-submission", selectedId],
+    enabled: !!selectedId,
+    queryFn: async () => (await apiClient.get(`/extension/applications/${selectedId}/submission`)).data.submission ?? null,
   });
 
   const statusMutation = useMutation({
@@ -523,6 +530,7 @@ function ApplicationsView() {
         onClose={() => setSelectedId(null)}
         onStageChange={(stage) => selected && statusMutation.mutate({ id: selected.id, newStage: stage })}
         activityRuns={activityRuns}
+        submission={submission}
       />
 
       <Dialog open={pendingDelete !== null} onOpenChange={(open) => { if (!open && !deleteMutation.isPending) setPendingDelete(null); }}>

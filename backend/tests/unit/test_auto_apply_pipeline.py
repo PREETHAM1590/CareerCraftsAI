@@ -1,4 +1,5 @@
 """Unit tests for Auto Apply Pipeline — multi-step flow, HITL checkpoints, error handling."""
+
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -42,7 +43,10 @@ def test_score_job_quick_returns_0_100():
         platform="linkedin",
     )
 
-    with patch("app.agents.thinking.think_about_job_match", return_value={"match_level": "HIGH", "decision": "YES"}):
+    with patch(
+        "app.agents.thinking.think_about_job_match",
+        return_value={"match_level": "HIGH", "decision": "YES"},
+    ):
         score = _score_job_quick(mock_llm, job, "Profile text")
 
     assert isinstance(score, int)
@@ -57,7 +61,15 @@ def test_generate_cold_email_structure():
         content="Subject: Following up\n\nDear team,\n\nI'm reaching out..."
     )
 
-    result = _generate_cold_email(mock_llm, "Recruiter Name", "recruiter@stripe.com", "Stripe", "Engineer", "Job desc", "My profile")
+    result = _generate_cold_email(
+        mock_llm,
+        "Recruiter Name",
+        "recruiter@stripe.com",
+        "Stripe",
+        "Engineer",
+        "Job desc",
+        "My profile",
+    )
     assert isinstance(result, dict)
     assert "subject" in result
     assert "body" in result
@@ -71,16 +83,28 @@ async def test_get_or_create_job_application_reuses_existing_row_by_url():
     from contextlib import asynccontextmanager
 
     user_id = str(uuid.uuid4())
-    job = JobListing(title="Engineer", company="Acme", location="Remote",
-                     description="desc", job_url="https://acme.test/apply", platform="linkedin")
-    existing = JobApplication(id=uuid.uuid4(), user_id=uuid.UUID(user_id),
-                              company="Acme", role="Engineer", job_url=job.job_url)
+    job = JobListing(
+        title="Engineer",
+        company="Acme",
+        location="Remote",
+        description="desc",
+        job_url="https://acme.test/apply",
+        platform="linkedin",
+    )
+    existing = JobApplication(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(user_id),
+        company="Acme",
+        role="Engineer",
+        job_url=job.job_url,
+    )
 
     class _FakeDB:
         async def execute(self, *a, **k):
             class _R:
                 def scalar_one_or_none(self):
                     return existing
+
             return _R()
 
         def add(self, obj):
@@ -99,13 +123,76 @@ async def test_get_or_create_job_application_reuses_existing_row_by_url():
     assert job_application_id == str(existing.id)
 
 
-def test_generate_linkedin_note_within_limit():
-    from app.agents.auto_apply_pipeline import _generate_linkedin_note
+@pytest.mark.asyncio
+async def test_attach_resume_sets_resume_id_only_for_the_owners_document():
+    from app.agents.auto_apply_pipeline import _attach_resume
+    from app.models.db import UserDocument
 
-    mock_llm = MagicMock()
-    mock_llm.invoke.return_value = MagicMock(content="Hi, I'm interested in the Engineer role at Stripe. Let's connect!")
+    owner, other = uuid.uuid4(), uuid.uuid4()
+    app_row = MagicMock(user_id=owner, resume_id=None)
+    own_doc = MagicMock(id=uuid.uuid4(), user_id=owner)
+    foreign_doc = MagicMock(id=uuid.uuid4(), user_id=other)
+    docs = {own_doc.id: own_doc, foreign_doc.id: foreign_doc}
 
-    note = _generate_linkedin_note(mock_llm, "Stripe", "Engineer", "Profile")
-    assert isinstance(note, str)
-    assert len(note) <= 300  # LinkedIn limit
-    assert "Stripe" in note
+    db = MagicMock()
+    db.commit = AsyncMock()
+    db.get = AsyncMock(
+        side_effect=lambda model, pk: docs.get(pk) if model is UserDocument else app_row
+    )
+    session = MagicMock()
+    session.__aenter__ = AsyncMock(return_value=db)
+    session.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("app.core.database.AsyncSessionLocal", return_value=session):
+        assert not await _attach_resume(str(owner), str(uuid.uuid4()), str(foreign_doc.id))
+        assert app_row.resume_id is None
+        assert await _attach_resume(str(owner), str(uuid.uuid4()), str(own_doc.id))
+    assert app_row.resume_id == own_doc.id
+
+
+@pytest.mark.asyncio
+async def test_scoring_runs_off_the_event_loop_thread():
+    import threading
+
+    from app.agents.auto_apply_pipeline import run_auto_apply_pipeline
+    from app.services.job_platforms_service import JobListing
+
+    job = JobListing(
+        title="Engineer",
+        company="Acme",
+        location="Remote",
+        description="Build things",
+        job_url="https://acme.example/jobs/1",
+        platform="linkedin",
+    )
+    loop_thread = threading.get_ident()
+    seen: list[int] = []
+
+    def fake_score(*_args):
+        seen.append(threading.get_ident())
+        return 80
+
+    session = MagicMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=lambda: None))
+
+    with (
+        patch("app.agents.auto_apply_pipeline.scrape_jobs", return_value=[job]),
+        patch("app.agents.auto_apply_pipeline.fetch_user_profile_text", return_value=""),
+        patch("app.agents.auto_apply_pipeline.build_agent_llm", return_value=MagicMock()),
+        patch("app.agents.auto_apply_pipeline._score_job_quick", side_effect=fake_score),
+        patch("app.agents.auto_apply_pipeline._apply_to_job", AsyncMock(return_value={})),
+        patch("app.core.database.AsyncSessionLocal", return_value=session),
+    ):
+        await run_auto_apply_pipeline(
+            user_id=str(uuid.uuid4()),
+            search_query="Engineer",
+            location="Remote",
+            max_applications=1,
+            model_settings=MagicMock(),
+            india_focus=False,
+        )
+
+    assert seen
+    assert seen[0] != loop_thread

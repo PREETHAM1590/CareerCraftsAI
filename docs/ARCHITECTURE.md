@@ -92,7 +92,7 @@ subgraph External["External Services"]
   Clerk["Clerk<br/>RS256 JWKS auth"]
   LLMProv["BYOK Providers<br/>OpenAI, Anthropic,<br/>Google, Ollama,<br/>Nvidia NIM, DeepSeek,<br/>OpenRouter"]
   Gmail["Gmail + Drive API<br/>via Nango"]
-  JobBoards["Job Boards<br/>LinkedIn, Indeed, Naukri,<br/>Shine, Adzuna, Remotive,<br/>Arbeitnow, Jobicy"]
+  JobBoards["Job Boards<br/>ATS career boards via job_connectors,<br/>JobSpy (LinkedIn, Indeed),<br/>Remotive, RemoteOK, Arbeitnow"]
   Enrich["Enrichment<br/>Hunter, ProxyCurl,<br/>Exa, Tavily/Brave/Serp,<br/>YouTube, Resend"]
   DecisionSvc["TypeSafe Jev (hosted)<br/>or self-hosted Laya"]
 end
@@ -201,7 +201,7 @@ apiErrorMessage(err, fallback) // prefers FastAPI `detail`, handles 422 list
 | `/users` | `api/v1/users.py` | `GET /users/me`, `PUT /users/profile`, model-settings CRUD |
 | `/rag` | `api/v1/rag.py` | `POST /rag/upload`, `POST /rag/search` |
 | `/resume` | `api/v1/resume.py` | `POST /resume/optimize`, `GET /resume/download/{id}` |
-| `/jobs` | `api/v1/jobs.py` | `GET /jobs/search`, applications CRUD, `POST /jobs/apply` |
+| `/jobs` | `api/v1/jobs.py` | `POST /jobs/search`, `POST /jobs/portal-search`, saved boards CRUD, applications CRUD, `POST /jobs/applications/{id}/prepare-apply` |
 | `/leads` | `api/v1/leads.py` | `GET /leads`, `POST /leads/{id}/action` |
 | `/email` | `api/v1/email.py` | `GET /email/threads`, `POST /email/compose`, `POST /email/approve/{id}` (only send path) |
 | `/agents` | `api/v1/agents.py` | `POST /agents/run`, `GET /agents/{id}/stream` (SSE), `POST /agents/{id}/approve`, `GET /agents/runs/{id}` |
@@ -274,9 +274,9 @@ graph TD
 
 | Agent | File | Tools / Services | Input → Output | Timeout / Budget |
 |---|---|---|---|---|
-| **JobSearchAgent** | `agents/job_search.py` | `BrowserUseTool`, `JobPlatformsService`, `IndianPlatformsService`, `RAGService.retrieve()` | `{query, location, salary_min, experience_years, platforms[]} → {jobs[{id,title,company,location,salary,match_score 0-100,url,platform}]}` — keyword+location+experience scoring | 120s / 3000 |
+| **JobSearchAgent** | `agents/job_search.py` | `job_search_service` (catalog-first via `job_connectors`, live adapters), saved boards, `RAGService.retrieve()` | `{query, location, salary_min, experience_years, platforms[]} → {jobs[{id,title,company,location,salary,match_score 0-100,url,platform}]}` — keyword+location+experience scoring | 120s / 3000 |
 | **ResumeAgent** | `agents/resume_agent.py` | `RAGService.retrieve()`, `app.services.ats_service`, `app.services.pdf_service` | `{job_description, persona_id?, tone?} → {resume_text, ats_score, ats_suggestions[], document_id, download_url}`; RAG `{user}_resume` + `{user}_achievements` | 60s / 4000 |
-| **LinkedInAgent** | `agents/linkedin_agent.py` | `RAGService.retrieve()`, `ProxyCurlService.get_profile()` | target role → `{headline, about, experience_bullets[3]}` suggestions only | 60s / 3000 |
+| **LinkedInAgent** | `agents/linkedin_agent.py` | `RAGService.retrieve()` | target role → `{headline, about, experience_bullets[3]}` suggestions only | 60s / 3000 |
 | **CoverLetterAgent** | `agents/cover_letter_agent.py` | `RAGService.retrieve()`, `ThinkingWrapper` (extended thinking) | `{job_description, tone} → {cover_letter, document_id}` | 90s / 6000 |
 | **EmailAgent** | `agents/email_agent.py` | `GmailService.get_threads()`, `HunterService.find_email()`, `RAGService.retrieve()` | thread context → recruiter draft; send **only** via `/email/approve/{id}` | 60s / 3000 |
 | **FollowUpAgent** | `agents/followup_agent.py` | `start_followups()` (Temporal `FollowupWorkflow`), `GmailService.get_threads()`, `RAGService.retrieve()` | application → day-5 + day-12 draft timers; auto-cancel on reply | 60s / 3000 |
@@ -287,7 +287,7 @@ graph TD
 | **SalaryAgent** | `agents/salary_agent.py` | `EXAService.search()`, `ThinkingWrapper` | `{role, location, experience_years, current_salary?, offer_amount?} → {percentiles{p25,p50,p75,p90}, total_comp, negotiation_script, report_id}` | 90s / 6000 |
 | **NLSearchAgent** | `agents/nl_search_agent.py` | delegates to JobSearchAgent | `"senior backend at climate startup, remote, $150k+"` → structured query → job search | 60s / 3000 |
 | **LinkedInOutreachAgent** | `agents/linkedin_outreach_agent.py` | `LinkedInOutreachService` | company/contact → queued message (`linkedin_outreach_queue`, `pending_approval`) | 60s / 3000 |
-| **AutoApplyPipeline** | `agents/auto_apply_pipeline.py` | orchestrates JobSearch+Resume+CoverLetter+ATS+FormFiller+BrowserControl+Applications+FollowUp | 10 steps, **2 mandatory HITL checkpoints** (review resume+CL, review filled form); platforms: LinkedIn Easy Apply, Indeed, Naukri, Shine, Freshersworld, Glassdoor, generic | 300s |
+| **AutoApplyPipeline** | `agents/auto_apply_pipeline.py` | drafts resume, cover letter, and recruiter outreach; submission is not server-side (see §16) | Approval checkpoints before any email is sent; server-side browser steps raise `BrowserAutomationRetired` | 300s |
 | **RAG Memory** | `agents/memory/`, `services/rag_service.py`, `agents/semantic_memory.py` | `PGVector` (langchain-postgres) | ingest: PDF/DOCX → 500/50 chunks → embeddings → pgvector `{user}_{doc}` | — |
 
 All agents: model resolved from `user_model_settings` via `llm_gateway.py` (never hardcoded); RAG context injected by harness; every LLM call logged to `agent_runs.tokens_used`; max 2 concurrent runs/user.
@@ -506,9 +506,9 @@ BE->>T: signal_agent_decision() — `decide` signal
 
 ## 12. End-to-End Flows
 
-**Auto-Apply (10 steps):** click → `POST /agents/run {auto_apply, job_url}` → `agent_run` + SSE → `JobSearchAgent.get_job_details` (Playwright) → `ResumeAgent.tailor` + PDF → `CoverLetterAgent.generate` → `app.services.ats_service` → **HITL#1** (resume+CL review) → `FormFillerService.fill` (BrowserUse) → **HITL#2** (form review) → `BrowserControlService.submit` → `ApplicationsService.create` → `FollowUpAgent.schedule` (Temporal `FollowupWorkflow`, day-5/12 timers) → `complete`.
+**Auto-apply:** the `auto_apply` agent prepares resume, cover letter, and outreach drafts for approval. Submitting an application happens only through the extension flow described below.
 
-**Job search:** `POST /jobs/search` → `start_job_search()` starts `JobSearchWorkflow(id=job-search/{run_id})` → `run_job_search_activity` → waterfall Remotive/Arbeitnow/Jobicy/JobSpy or live Chromium if `prefer_live_browser` → score → persist `match_score≥50` → `complete {matches[]}`.
+**Job search:** `POST /jobs/search` → `start_job_search()` starts `JobSearchWorkflow(id=job-search/{run_id})` → `run_job_search_activity` → `search_all_platforms` reads the shared catalog first (`job_connectors`), then live adapters (JobSpy, RemoteOK, Remotive, Arbeitnow, ATS boards) fill any shortfall → score → `complete {matches[]}`. No browser is used.
 
 **Job application (extension mode):** click Apply → `start_auto_apply()` starts `AutoApplyWorkflow(id=auto-apply/{user}/{application})` → `reserve_application_attempt` → `create_extension_task_activity` (an `extension_tasks` row) → the user's browser polls, claims it (`POST /extension/device/tasks/claim`), fills the form, and shows a review panel → user presses Submit → the extension reports `submitted` (`POST /extension/device/tasks/{id}/events`), relayed as an `extension_update` signal to the workflow → `finish_extension_task_activity` → `schedule_followup_activity` starts the `FollowupWorkflow`. See §16.
 
@@ -518,12 +518,13 @@ BE->>T: signal_agent_decision() — `decide` signal
 
 ## 13. Security & Guardrails
 
-- **HITL gates (mandatory, non-bypassable):** every email send, job application submit, LinkedIn outreach, and both AutoApply checkpoints emit `checkpoint` + `awaiting_approval`; Browser/LinkedIn automation uses human-like delays (`BROWSER_DELAY_*_MS`); ToS warning for LinkedIn/Naukri automation.
+- **HITL gates (mandatory, non-bypassable):** every email send, LinkedIn outreach, and AutoApply checkpoint emits `checkpoint` + `awaiting_approval`. Application submits need the member's click in the extension, except when auto-submit is enabled: the server then approves within the daily cap and never on LinkedIn or Naukri.
 - **Secrets:** `api_key_enc`, `linkedin_*_enc`, `google_*_token_enc`, `state_enc` all AES-256 (`security.py`, `APP_SECRET_KEY`); plaintext never in `user_model_settings`; gateway session-token pattern (above).
 - **Isolation:** RLS everywhere; JWT verified per-request (Clerk RS256 JWKS or Supabase HS256); `agent_runs` audit of every run (input/output/tokens/duration); client only ever sees `"Agent failed"`.
 - **Transport/limits:** TLS via nginx + HSTS; exact-origin CORS; SlowAPI (`60/min` default, `10/min` agent-run, `5/min` upload, `100/min` strict); 2 concurrent runs/user; token budgets per agent (table §5, overridable `user_model_settings.token_budget`); timeouts per agent (table §5).
-- **Infra:** there is no HTTP route that runs a background job outside Temporal — activities call `scheduled_jobs.py` in-process; nginx still returns 404 for `/internal/*` as defense in depth. Browser `mem 2.5g/shm 256m`, session caps (`BROWSER_USE_MAX_CONCURRENT_SESSIONS=4`); Bandit SAST on CI.
+- **Infra:** there is no HTTP route that runs a background job outside Temporal — activities call `scheduled_jobs.py` in-process; nginx still returns 404 for `/internal/*` as defense in depth. Bandit SAST on CI.
 - **Extension device tokens:** `ccx_`-prefixed, only their SHA-256 hash is stored (`extension_devices.token_hash`); revocable per-device in Settings; rate-limited per device (`rate_limit.py` keys on the token hash), separate from per-user limits.
+- **Untrusted content:** prompts fence job, email, and document text with `untrusted()`/`fenced()` (`agents/prompts/__init__.py`); inbound email changes application status only from a trusted sender domain. See [SECURITY.md](SECURITY.md).
 
 ---
 
@@ -538,7 +539,7 @@ BE->>T: signal_agent_decision() — `decide` signal
 | Nango (Gmail / Drive) | EmailAgent, EmailMonitor, Drive | Nango environment key + provider config keys |
 | Resend | transactional email | `RESEND_API_KEY` |
 | YouTube | InterviewPrep videos | `YOUTUBE_API_KEY` (optional) |
-| Playwright / BrowserUse / AgentQL / Firecrawl | AutoApply, JobSearch, FormFiller, BrowserControl | `AGENTQL_API_KEY`, `FIRECRAWL_API_KEY`; Ollama controller (`BROWSER_USE_OLLAMA_URL/MODEL`) |
+| Playwright / BrowserUse | none: server-side browser execution is retired (`BrowserAutomationRetired`) | `BROWSER_USE_OLLAMA_URL/MODEL` are defined in config but no code uses them |
 | Clerk | identity, JWT verification | `CLERK_ISSUER` / `CLERK_JWKS_URL`, `CLERK_SECRET_KEY` |
 | CareerCraft browser extension | Application flow — fills and submits in the user's own signed-in browser | device token (`ccx_…`), see §13 |
 | TypeSafe Jev / self-hosted Laya | decision engine for in-page choices the extension can't resolve by exact text match | `TYPESAFE_API_KEY` or `LAYA_URL` (`deploy/laya/`); falls back to built-in heuristics |

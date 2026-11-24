@@ -18,6 +18,9 @@ from app.models.db import Notification, NotificationDelivery, User, UserDocument
 from app.services.document_lifecycle import is_text_artifact
 from app.services.memory_lifecycle import MEMORY_DELETES
 
+# Raw-SQL tables with no ORM model; erased by ON DELETE CASCADE on users.
+EXTRA_EXPORT_TABLES = ("public.saved_job_boards",)
+
 
 def _json_safe(value: object) -> object:
     if isinstance(value, datetime | date):
@@ -65,9 +68,9 @@ async def build_user_data_export(db: AsyncSession, user: User) -> bytes:
             if rows:
                 zf.writestr(f"{model.__tablename__}.json", json.dumps(rows, indent=2))
 
-        # Standalone memory tables are not ORM models. Use the same fixed table
-        # ownership registry as erasure; SQL names never come from user input.
-        for table in MEMORY_DELETES:
+        # Standalone tables are not ORM models. Names come from fixed registries,
+        # never from user input.
+        for table in (*MEMORY_DELETES, *EXTRA_EXPORT_TABLES):
             exists = (
                 await db.execute(text("SELECT to_regclass(:table)"), {"table": table})
             ).scalar()

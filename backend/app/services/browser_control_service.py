@@ -81,36 +81,3 @@ async def run_browser_task(
 ) -> str:
     """Server browser execution is retired; never bypass the paired extension."""
     raise BrowserAutomationRetired("Use a public job connector or the paired browser extension")
-
-
-async def apply_to_job(
-    llm: BaseChatModel,
-    user_id: str,
-    job_url: str,
-    applicant_info: str,
-    submit: bool = False,
-    live_browser: bool = False,
-    run_id: str | None = None,
-) -> str:
-    """Autonomously fill any job application form via the browser agent.
-
-    submit=False: fill through to the final review screen and stop (READY_FOR_REVIEW).
-    submit=True: fill and click the final Submit/Apply button (SUBMITTED).
-    """
-    final = (
-        "Click the final Submit/Apply button to submit the application, then confirm SUBMITTED."
-        if submit
-        else "Stop before the final Submit/Apply button and report READY_FOR_REVIEW with what was filled."
-    )
-    task = (
-        f"Go to {job_url}. Click the Apply / Easy Apply / Apply now button. "
-        f"Fill every required field of the application form using this applicant profile:\n{applicant_info[:1500]}\n"
-        f"Use reasonable, truthful answers; leave optional fields blank if unknown. "
-        f"Upload a resume only if a file picker requires it and a file is available, otherwise skip. "
-        f"Proceed through multi-step forms. {final} "
-        f"If login, CAPTCHA, OTP, payment, account creation, or missing required personal data blocks "
-        f"progress, stop and report REQUIRES_MANUAL."
-    )
-    return await run_browser_task_with_captcha_retry(
-        llm, task, user_id, max_steps=25, live_browser=live_browser, run_id=run_id
-    )
