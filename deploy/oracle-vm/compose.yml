@@ -194,7 +194,10 @@ services:
   searxng:
     image: searxng/searxng:2026.11.23-a7163d091@sha256:a7fc607aa6723f5a8982105bcc5ffba4d1b9fc7c6922a31a88d6e4cba49ef12a
     network_mode: host
-    env_file: /opt/careercraft-secrets/searxng.env
+    # Optional feature: a VM without searxng.env still runs every other service.
+    env_file:
+      - path: /opt/careercraft-secrets/searxng.env
+        required: false
     environment:
       SEARXNG_SETTINGS_PATH: /etc/searxng/settings.yml
       SEARXNG_BIND_ADDRESS: 127.0.0.1

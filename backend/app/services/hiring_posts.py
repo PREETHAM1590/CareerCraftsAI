@@ -29,25 +29,32 @@ from app.core.config import settings
 X_SEARCH = "https://api.x.com/2/tweets/search/recent"
 X_HIRING_TERMS = (
     '"we\'re hiring" OR "we are hiring" OR "is hiring" OR "now hiring" OR "join our team"'
+    ' OR "hiring for" OR #hiring'
 )
 LINKEDIN_HIRING_TERMS = 'hiring OR "we\'re hiring" OR "join our team"'
 
 HIRING = re.compile(
-    r"\b(we(?:'|’)?re hiring|we are hiring|(?:is|are|now) hiring|hiring (?:for|an?|our)\b"
-    r"|#hiring|join (?:our|my|the) (?:\w+ )?team|open (?:roles?|positions?)|job openings?"
-    r"|vacanc(?:y|ies)|looking for (?:an?|experienced|talented|passionate) )",
+    r"(?:#hiring\b|\b(?:we(?:'|’)?re hiring|we are hiring|(?:is|are|now) hiring"
+    r"|hiring (?:for|an?|our)\b|join (?:our|my|the) (?:\w+ )?team|open (?:roles?|positions?)"
+    r"|job openings?|vacanc(?:y|ies)))",
     re.I,
 )
+# "Looking for a ..." alone reads the same from an employer and a job seeker:
+# it counts as hiring only next to "we"/"our"/"team".
+LOOKING = re.compile(r"\blooking for (?:an?|experienced|talented|passionate) ", re.I)
+EMPLOYER_VOICE = re.compile(r"\b(?:we|we(?:'|’)re|our|us|my team|the team)\b", re.I)
 SEEKER = re.compile(
-    r"(#?open ?to ?work|i(?:'|’)?m (?:actively )?(?:looking|searching) for (?:a |new )?"
-    r"(?:job|role|position|opportunit)|seeking (?:a |new )?(?:job|role|opportunit)"
+    r"(#?open ?to ?work|\bi(?:'|’)?m (?:actively |currently )?(?:looking|searching|seeking)\b"
+    r"|\bi am (?:actively |currently )?(?:looking|searching|seeking)\b"
+    r"|\bi (?:have|bring) \d+\+? years?\b|seeking (?:a |new )?(?:job|role|opportunit)"
     r"|looking for (?:new )?(?:job )?opportunities|hire me\b|please refer me|need a referral)",
     re.I,
 )
 SCAM = re.compile(
-    r"(registration fee|processing fee|joining fee|training fee|security deposit"
+    r"(registration fee|processing fee|joining fee|training fee|application fee|security deposit"
     r"|refundable deposit|pay (?:a |the )?(?:small )?fee|telegram|t\.me/|wa\.me/"
-    r"|whatsapp (?:me|only|number|us)|dm (?:me )?on whatsapp|crypto|usdt|bitcoin|forex"
+    r"|whatsapp(?:[- ]only| me| number| us)|(?:apply|contact|message|reach|dm)(?: us| me)?"
+    r"(?: only)? (?:via|on|through) whatsapp|crypto|usdt|bitcoin|forex"
     r"|earn (?:rs\.?|₹|\$|inr)?\s?\d[\d,]*\s?(?:/|per |a )(?:day|hour|week)"
     r"|no interview|guaranteed (?:job|placement|income))",
     re.I,
@@ -60,7 +67,8 @@ ROLE = re.compile(
     r"|business|hr|content)\s+)"
     r"(engineers?|developers?|scientists?|analysts?|designers?|managers?|interns?|architects?"
     r"|executives?|writers?|specialists?)\b"
-    r"|\b(sdes?(?:[- ](?:i{1,3}|[123]))?|(?:software|data|ml|ai|product|design) interns?)\b",
+    r"|\b(sdes?(?:[- ](?:i{1,3}|[123]))?"
+    r"|(?:software|data|ml|ai|product|design)(?: engineering| science)? interns?)\b",
     re.I,
 )
 _UPPER = {"ml": "ML", "ai": "AI", "ui": "UI", "ux": "UX", "qa": "QA", "ios": "iOS", "hr": "HR",
@@ -86,7 +94,6 @@ _SOCIAL_HOSTS = (
     "x.com", "twitter.com", "t.co", "linkedin.com", "lnkd.in", "t.me", "wa.me",
     "whatsapp.com", "telegram.me", "bit.ly", "tinyurl.com", "instagram.com", "facebook.com",
 )  # fmt: skip
-_JOB_PATH = re.compile(r"/(careers?|jobs?|positions?|openings?|apply|vacanc|join)", re.I)
 _URL = re.compile(r"https://[^\s<>\"')\]]+")
 _HANDLE = re.compile(r"[A-Za-z0-9_]{1,15}")
 
@@ -138,21 +145,33 @@ def location(text: str) -> str:
     return "Remote" if remote else ""
 
 
+# A specific posting on an ATS has an id in its path (/jobs/4123456,
+# /acme/1b2c3d4e-...); a bare /careers page is shared by every role.
+_POSTING_ID = re.compile(r"\d{3,}|[0-9a-f]{8}-[0-9a-f]{4}", re.I)
+
+
 def apply_link(links: list[str]) -> str | None:
-    """An employer careers or ATS link from the post, never a social or short link."""
+    """A specific posting on a known ATS from the post, or None.
+
+    Any other host is untrusted (a post can link a look-alike or phishing
+    site), and a generic careers page would give different roles one URL,
+    so both fall back to the post itself."""
     from app.services.job_connectors import ATS_HOSTS
 
     for link in links:
-        parts = urlsplit(link)
-        host = (parts.hostname or "").lower()
+        try:
+            parts = urlsplit(link)
+            host = (parts.hostname or "").lower()
+        except ValueError:
+            continue  # malformed link in untrusted text
         if parts.scheme != "https" or not host or parts.username or parts.password:
             continue
-        if any(host == h or host.endswith("." + h) for h in _SOCIAL_HOSTS):
-            continue
-        if any(host == h or host.endswith("." + h) for h in ATS_HOSTS) or _JOB_PATH.search(
+        if len(link) > 2000:
+            continue  # never cut a URL: a truncated one is broken
+        if any(host == h or host.endswith("." + h) for h in ATS_HOSTS) and _POSTING_ID.search(
             parts.path
         ):
-            return link[:2000]
+            return link
     return None
 
 
@@ -166,12 +185,13 @@ def post_to_job(
 ) -> dict | None:
     """One job from one post, or None when it isn't a genuine hiring post."""
     text = re.sub(r"\s+", " ", text or "").strip()[:5000]
-    if not text or not HIRING.search(text) or SEEKER.search(text) or SCAM.search(text):
+    hiring = HIRING.search(text) or (LOOKING.search(text) and EMPLOYER_VOICE.search(text))
+    if not text or not hiring or SEEKER.search(text) or SCAM.search(text):
         return None
     title = role(text)
     if not title:
         return None
-    links = [*(links or []), *_URL.findall(text)]
+    links = [*(links or []), *(u.rstrip(".,;:!?") for u in _URL.findall(text))]
     employer = company(text)
     credit = f"Posted by {poster} on {network}: {post_url}"
     return {
@@ -222,7 +242,7 @@ async def fetch_x(roles: str) -> list[dict]:
     from app.services.public_http import public_get
 
     if not settings.X_BEARER_TOKEN:
-        raise ValueError("X API is not configured")
+        return []  # optional source, off: not a failure
     if not roles:
         raise ValueError("X hiring source needs role terms")
     params = {
@@ -264,7 +284,6 @@ def parse_searxng(data: dict) -> list[dict]:
         url = str(item.get("url") or "").split("?")[0]
         if not _LINKEDIN_POST.match(url) or url in seen:
             continue
-        seen.add(url)
         title = str(item.get("title") or "")
         posted = item.get("publishedDate")
         job = post_to_job(
@@ -275,13 +294,14 @@ def parse_searxng(data: dict) -> list[dict]:
             posted if isinstance(posted, str) else None,
         )
         if job:
+            seen.add(url)  # a later, fuller result for the same post still counts
             jobs.append(job)
     return jobs
 
 
 async def fetch_linkedin_posts(roles: str) -> list[dict]:
     if not settings.SEARXNG_URL:
-        raise ValueError("SearXNG is not configured")
+        return []  # optional source, off: not a failure
     if not roles:
         raise ValueError("LinkedIn posts source needs role terms")
     # Our own SearXNG on loopback: a trusted, configured address, so not

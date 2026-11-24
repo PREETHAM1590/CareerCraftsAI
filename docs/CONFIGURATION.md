@@ -212,14 +212,15 @@ everyone, not per member search. The 4 role groups are in
 4. Check it with `curl 'http://127.0.0.1:18188/search?q=hiring&format=json'`.
 
 The search engines SearXNG queries may rate-limit a server IP, so expect some
-refreshes to come back empty. The catalog backs off and keeps the previous
-results.
+refreshes to come back empty. That is not a failure: hiring-post sources never
+remove jobs on refresh (each search sees only a recent window), so earlier posts
+stay in the catalog until they age out with the catalog's freshness window.
 
 **What gets through**
 - Posts are untrusted text. A post becomes a job only when it reads as an employer hiring and names a role.
 - Job-seeker posts (#OpenToWork, "looking for a job") are dropped.
 - Scam signals drop a post: fees or deposits, Telegram or WhatsApp-only contact, crypto, "earn per day", "no interview".
-- Links are never opened. An employer careers or ATS link in the post becomes the job URL; otherwise the post itself is the link.
+- Links are never opened. A link to a specific posting on a known ATS (Greenhouse, Lever, Workday...) becomes the job URL; any other link, or a generic careers page, leaves the post itself as the link.
 - Every job credits the post: "Posted by @handle on X: <link>".
 
 ## Development vs Production Differences

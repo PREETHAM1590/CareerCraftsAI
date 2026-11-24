@@ -1,5 +1,6 @@
 """Hiring posts from X and LinkedIn: filtering, parsing and fetch wiring (no network)."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -108,11 +109,18 @@ def test_social_and_short_links_never_become_the_job_url():
     assert job["url"] == "https://x.com/jane_dev/status/1859000000000000001"
 
 
-def test_careers_page_link_is_used():
+def test_links_off_known_ats_hosts_never_become_the_job_url():
+    # Any host could be a look-alike or phishing site: the post stays the link.
+    for link in ("https://acme.example/careers/42", "https://acme-jobs.xyz/apply/form"):
+        [job] = hp.parse_x(x_page(x_post(f"We're hiring a Data Engineer, apply at {link}")))
+        assert job["url"] == "https://x.com/jane_dev/status/1859000000000000001"
+
+
+def test_a_generic_ats_careers_page_is_not_a_posting():
     [job] = hp.parse_x(
-        x_page(x_post("We're hiring a Data Engineer, apply at https://acme.example/careers/42"))
+        x_page(x_post("We're hiring a Data Engineer: https://boards.greenhouse.io/acme"))
     )
-    assert job["url"] == "https://acme.example/careers/42"
+    assert job["url"] == "https://x.com/jane_dev/status/1859000000000000001"
 
 
 def test_malformed_authors_and_ids_are_skipped():
@@ -179,10 +187,11 @@ def test_linkedin_poster_from_url_when_title_has_none():
 async def test_sources_stay_inert_without_configuration(monkeypatch):
     monkeypatch.setattr(settings, "X_BEARER_TOKEN", "")
     monkeypatch.setattr(settings, "SEARXNG_URL", None)
-    with pytest.raises(ValueError):
-        await hp.fetch_x('"software engineer"')
-    with pytest.raises(ValueError):
-        await hp.fetch_linkedin_posts('"software engineer"')
+    # Off is not a failure: nothing is requested and the source stays healthy.
+    with patch.object(hp, "httpx") as client:
+        assert await hp.fetch_x('"software engineer"') == []
+        assert await hp.fetch_linkedin_posts('"software engineer"') == []
+    client.AsyncClient.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -248,3 +257,130 @@ def test_role_groups_are_registered_for_both_networks():
         assert ids[f"x:{group}"].family == "x_hiring"
         assert ids[f"x:{group}"].refresh_hours == 24
         assert ids[f"linkedin-posts:{group}"].family == "linkedin_posts"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "I'm looking for a Backend Engineer role in Bengaluru",
+        "I am looking for a Data Analyst position in Pune. Freshers welcome to connect!",
+        "Looking for a Senior Backend Engineer? I have 5 years of experience, DM me",
+    ],
+)
+def test_job_seekers_naming_a_role_are_dropped(text):
+    assert hp.post_to_job(text, "https://x.com/a/status/1", "@a", "X") is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "We're hiring a Backend Engineer. Application fee Rs 499.",
+        "We are hiring a Python Developer! Apply via WhatsApp only.",
+        "We're hiring a QA Engineer, WhatsApp-only applications",
+        "Now hiring a Data Analyst - contact us on WhatsApp",
+    ],
+)
+def test_fee_and_whatsapp_only_posts_are_dropped(text):
+    assert hp.post_to_job(text, "https://x.com/a/status/1", "@a", "X") is None
+
+
+@pytest.mark.parametrize(
+    ("text", "title"),
+    [
+        ("#Hiring Backend Engineers at Acme", "Backend Engineer"),
+        ("We're looking for a talented Frontend Developer to join us", "Frontend Developer"),
+        ("We are hiring a Software Engineering Intern for summer", "Software Engineering Intern"),
+    ],
+)
+def test_real_hiring_posts_are_kept(text, title):
+    job = hp.post_to_job(text, "https://x.com/a/status/1", "@a", "X")
+    assert job is not None and job["title"] == title
+
+
+def test_malformed_and_trailing_punctuation_links():
+    job = hp.post_to_job(
+        "We're hiring a Backend Engineer: https://[broken then "
+        "https://boards.greenhouse.io/acme/jobs/4123456.",
+        "https://x.com/a/status/1",
+        "@a",
+        "X",
+    )
+    assert job["url"] == "https://boards.greenhouse.io/acme/jobs/4123456"
+
+
+def test_a_fuller_result_for_the_same_linkedin_post_still_counts():
+    url = "https://www.linkedin.com/posts/acme_hiring-activity-1"
+    data = {
+        "results": [
+            {"url": url, "title": "Acme on LinkedIn", "content": "Acme is hiring"},
+            {
+                "url": url,
+                "title": "Acme on LinkedIn",
+                "content": "Acme is hiring a Backend Engineer",
+            },
+        ]
+    }
+    [job] = hp.parse_searxng(data)
+    assert job["title"] == "Backend Engineer"
+
+
+# ── Catalog refresh of hiring-post sources ──────────────────────
+
+
+class _HealthDb:
+    def __init__(self):
+        self.statements = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def execute(self, statement, params=None):
+        self.statements.append(str(statement))
+        health = {"next_allowed_at": None, "cached_jobs": [], "warning": None, "failures": 0}
+        return SimpleNamespace(mappings=lambda: SimpleNamespace(one=lambda: health))
+
+    async def commit(self):
+        return None
+
+
+def _hiring_source(family="x_hiring"):
+    from app.services.job_catalog import Source
+
+    return Source(id=f"{family}:t", family=family, tenant="", url='"developer"')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("family", ["x_hiring", "linkedin_posts"])
+async def test_a_refresh_never_removes_earlier_hiring_posts(monkeypatch, family):
+    from app.services import job_catalog
+    from app.services.job_connectors import Page
+
+    db = _HealthDb()
+
+    async def fetch(source, query, cursor):
+        return Page([], None)
+
+    monkeypatch.setattr(job_catalog, "AsyncSessionLocal", lambda: db)
+    monkeypatch.setattr(job_catalog, "fetch_page", fetch)
+    monkeypatch.setattr(job_catalog, "upsert_jobs", AsyncMock())
+    await job_catalog.refresh_source(_hiring_source(family))
+    assert not any("DELETE FROM job_source_occurrences" in s for s in db.statements)
+
+
+@pytest.mark.asyncio
+async def test_an_x_timeout_is_not_retried(monkeypatch):
+    from app.services import job_catalog
+
+    calls = []
+
+    async def fetch(source, query, cursor):
+        calls.append(1)
+        raise TimeoutError()
+
+    monkeypatch.setattr(job_catalog, "AsyncSessionLocal", lambda: _HealthDb())
+    monkeypatch.setattr(job_catalog, "fetch_page", fetch)
+    await job_catalog.refresh_source(_hiring_source("x_hiring"))
+    assert calls == [1]
