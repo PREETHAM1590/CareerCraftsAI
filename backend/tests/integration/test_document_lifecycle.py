@@ -358,14 +358,14 @@ def test_all_dimensions_indexed_and_deleted_documents_excluded(vector_db):
             db.commit()
 
         for provider, dimension in service.EMBEDDING_DIMENSIONS.items():
-            assert service._search_live_documents(
+            remaining = service._search_live_documents(
                 str(owner), "jd", provider, FakeEmbedding(dimension), "Python", 5
-            ) == [
-                Document(
-                    page_content="retained",
-                    metadata={"user_id": str(owner), "document_id": str(retained_id)},
-                )
-            ]
+            )
+            assert [doc.page_content for doc in remaining] == ["retained"]
+            metadata = dict(remaining[0].metadata)
+            distance = metadata.pop("distance")
+            assert isinstance(distance, float) and distance >= 0
+            assert metadata == {"user_id": str(owner), "document_id": str(retained_id)}
     finally:
         with engine.begin() as conn:
             conn.execute(
