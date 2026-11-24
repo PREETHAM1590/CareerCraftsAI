@@ -103,6 +103,11 @@ class Settings(BaseSettings):
     YOUTUBE_API_KEY: str = ""
     FIRECRAWL_API_KEY: str | None = None
     SEARXNG_URL: str | None = None
+    # Hiring posts on X (official API v2, pay per post read). Blank = off.
+    X_BEARER_TOKEN: str = ""
+    # Posts read per X source refresh (10-100). 4 role groups x 50 a day is
+    # about 200 posts, roughly $1 a day at $0.005 a post.
+    X_HIRING_POSTS_PER_REFRESH: int = 50
     RAPIDAPI_KEY: str | None = None
     JOOBLE_API_KEY: str | None = None
     CAREERJET_API_KEY: str | None = None

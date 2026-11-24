@@ -235,6 +235,36 @@ provider credentials; CareerCraft does not store provider OAuth tokens.
 
 ---
 
+## Hiring posts on X and LinkedIn
+
+Jobs that people announce in posts ("we're hiring a Backend Engineer...") come
+from two catalog source families. Each is fetched once per role group for
+everyone, not per member search. The 4 role groups are in
+`backend/app/services/job_sources.json` (`x:*`, `linkedin-posts:*`).
+
+| Variable | Description |
+|---|---|
+| `X_BEARER_TOKEN` | X API v2 app bearer token. X bills $0.005 per post read; blank turns X off. |
+| `X_HIRING_POSTS_PER_REFRESH` | Posts per X source refresh, 10 to 100 (default 50). 4 sources daily at 50 is about 200 posts, roughly $1 a day. Also set a spending limit in the X Developer Console. |
+| `SEARXNG_URL` | Our own SearXNG, used to find public `linkedin.com/posts` pages that search engines have indexed. LinkedIn itself is never contacted. |
+
+**SearXNG on the APP VM**
+1. Create `/opt/careercraft-secrets/searxng.env` containing `SEARXNG_SECRET=<openssl rand -hex 32>`.
+2. Start it with `docker compose up -d searxng` in `deploy/oracle-vm`. It listens on `127.0.0.1:18188` only.
+3. Set `SEARXNG_URL=http://127.0.0.1:18188` in `backend.env`.
+4. Check it with `curl 'http://127.0.0.1:18188/search?q=hiring&format=json'`.
+
+The search engines SearXNG queries may rate-limit a server IP, so expect some
+refreshes to come back empty. The catalog backs off and keeps the previous
+results.
+
+**What gets through**
+- Posts are untrusted text. A post becomes a job only when it reads as an employer hiring and names a role.
+- Job-seeker posts (#OpenToWork, "looking for a job") are dropped.
+- Scam signals drop a post: fees or deposits, Telegram or WhatsApp-only contact, crypto, "earn per day", "no interview".
+- Links are never opened. An employer careers or ATS link in the post becomes the job URL; otherwise the post itself is the link.
+- Every job credits the post: "Posted by @handle on X: <link>".
+
 ## Development vs Production Differences
 
 | Setting | Development | Production |

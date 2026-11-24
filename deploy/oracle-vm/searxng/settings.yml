@@ -1,0 +1,28 @@
+# Private SearXNG for the backend only (hiring posts on LinkedIn, job dorks).
+# Listens on loopback; nothing outside this VM can reach it, so the public
+# limiter/bot detection is off. The secret comes from SEARXNG_SECRET in
+# /opt/careercraft-secrets/searxng.env.
+use_default_settings: true
+
+general:
+  instance_name: "CareerCraft internal search"
+  enable_metrics: false
+
+server:
+  bind_address: "127.0.0.1"
+  port: 18188
+  limiter: false
+  public_instance: false
+  image_proxy: false
+  method: "GET"
+
+search:
+  safe_search: 1
+  # The backend reads JSON; html stays for a manual check over an SSH tunnel.
+  formats:
+    - html
+    - json
+
+outgoing:
+  request_timeout: 6.0
+  max_request_timeout: 12.0

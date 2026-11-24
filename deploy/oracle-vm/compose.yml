@@ -189,6 +189,22 @@ services:
         condition: service_healthy
       frontend:
         condition: service_healthy
+  # Private meta-search for the backend (backend.env: SEARXNG_URL=
+  # http://127.0.0.1:18188). Loopback only; see searxng/settings.yml.
+  searxng:
+    image: searxng/searxng:2026.11.23-a7163d091@sha256:a7fc607aa6723f5a8982105bcc5ffba4d1b9fc7c6922a31a88d6e4cba49ef12a
+    network_mode: host
+    env_file: /opt/careercraft-secrets/searxng.env
+    environment:
+      SEARXNG_SETTINGS_PATH: /etc/searxng/settings.yml
+      SEARXNG_BIND_ADDRESS: 127.0.0.1
+      SEARXNG_PORT: "18188"
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+    cpus: 0.5
+    restart: unless-stopped
   # SSH tunnel to the computers host (deploy/computers). Publishes its relay on
   # this VM's loopback, where backend.env's SANDBOX_RELAY_URL points
   # (http://127.0.0.1:14312). sandboxtunnel on that host may only open a local
