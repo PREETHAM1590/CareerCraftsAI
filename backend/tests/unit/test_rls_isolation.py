@@ -193,9 +193,14 @@ def test_approve_endpoint_rejects_other_users_run():
     import inspect
     from app.api.v1 import agents
 
-    source = inspect.getsource(agents.approve_or_cancel)
+    # The route delegates to decide_run, which Nova's code route and the
+    # application inbox also call; the owner filter must live there.
+    assert "decide_run(run_id, payload, db, current_user)" in inspect.getsource(
+        agents.approve_or_cancel
+    )
+    source = inspect.getsource(agents.decide_run)
     assert "AgentRun.user_id == current_user.id" in source, (
-        "approve_or_cancel MUST filter by current_user.id — "
+        "decide_run MUST filter by current_user.id — "
         "without this, any user can approve any run"
     )
 

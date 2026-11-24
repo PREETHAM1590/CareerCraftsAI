@@ -43,7 +43,7 @@ source = source.replace(anchor, `
         const actor = request.headers.get("x-careercraft-actor");
         if (actor !== "human" && actor !== "nova") return json({error:"Private credential path"},403);
         try {
-        const body = await request.json() as {origin:string;username:string;password:string;usernameRef:string;passwordRef:string;snapshotId:number;submit?:boolean};
+        const body = await request.json() as {origin:string;username:string;password:string;usernameRef:string;passwordRef:string;confirmRef?:string;snapshotId:number;submit?:boolean};
         const target = await currentPage(botId);
         if (new URL(target.url()).origin !== body.origin) return json({error:"Credential origin mismatch"},403);
         const userField = locateRef(session, target, body.usernameRef, body.snapshotId);
@@ -51,11 +51,16 @@ source = source.replace(anchor, `
         if (await userField.evaluate(el=>el.ownerDocument.location.origin) !== body.origin ||
             await passField.evaluate(el=>el.ownerDocument.location.origin) !== body.origin) return json({error:"Credential field origin mismatch"},403);
         if (await passField.getAttribute("type") !== "password") return json({error:"A password input is required"},422);
+        // Sign-up forms that repeat the password (Nova creating an account).
+        const confirmField = body.confirmRef ? locateRef(session, target, body.confirmRef, body.snapshotId) : null;
+        if (confirmField && (await confirmField.evaluate(el=>el.ownerDocument.location.origin) !== body.origin ||
+            await confirmField.getAttribute("type") !== "password")) return json({error:"Confirm field must be a password input on this site"},422);
         const userType = await userField.getAttribute("type");
         if (![null,"text","email"].includes(userType)) return json({error:"Use a username or email input"},422);
         await writeFile(privateMarker,privatePageKey(target.url()));
         await userField.fill(body.username,{timeout:ACTION_TIMEOUT_MS});
         await passField.fill(body.password,{timeout:ACTION_TIMEOUT_MS});
+        if (confirmField) await confirmField.fill(body.password,{timeout:ACTION_TIMEOUT_MS});
         // Only CareerCraft's server (Nova, with member consent or approval)
         // submits; a member filling by hand still presses Sign in themselves.
         if (actor !== "nova" || body.submit !== true) return json({filled:true,submitted:false});

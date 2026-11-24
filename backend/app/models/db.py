@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -217,8 +218,67 @@ class PortalCredential(Base):
     auto_signin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     consent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     consent_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Nova created this account (with the member's per-site consent).
+    created_by_nova: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     __table_args__ = (UniqueConstraint("user_id", "origin", name="portal_credentials_user_origin"),)
+
+
+class PortalAccountConsent(Base):
+    """A site where the member lets Nova create an account for them."""
+
+    __tablename__ = "portal_account_consents"
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    origin: Mapped[str] = mapped_column(String(255), primary_key=True)
+    consent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    consent_version: Mapped[str] = mapped_column(String(20), nullable=False)
+
+
+class ApplyEmailAlias(Base):
+    """The member's application address: <local_part>@APPLY_EMAIL_DOMAIN."""
+
+    __tablename__ = "apply_email_aliases"
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    local_part: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ApplyInboxMessage(Base):
+    """Portal mail received at the member's application address."""
+
+    __tablename__ = "apply_inbox_messages"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    provider_email_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    sender: Mapped[str] = mapped_column(String(320), nullable=False)
+    subject: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    text_body: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    codes: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    links: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    filled_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    __table_args__ = (
+        UniqueConstraint("provider_email_id", "user_id", name="apply_inbox_messages_provider_user"),
+    )
+
+
+class TelegramLink(Base):
+    """The member's private Telegram chat for Nova's code requests."""
+
+    __tablename__ = "telegram_links"
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False, unique=True)
+    linked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class CoverLetterVersion(Base):
