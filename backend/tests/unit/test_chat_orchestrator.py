@@ -98,6 +98,8 @@ async def test_start_agent_run_happy_path_queues_and_returns_run_id(as_user, mon
     assert result["run_id"] == "run-123"
     assert result["status"] == "queued"
     assert captured["task_type"] == "job_search"
+    # The job search agent reads search_query; "query" alone made every run fail.
+    assert captured["context"]["search_query"] == "python"
 
 
 async def test_start_agent_run_surfaces_concurrency_429(as_user, monkeypatch):
