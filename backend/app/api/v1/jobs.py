@@ -1284,27 +1284,29 @@ async def get_application_jd(
             ).scalar_one_or_none()
             or ""
         ).strip()
-    if app.job_url and max(len(saved), len(catalog)) < job_page.THIN:
+    role, company, job_url = app.role, app.company, app.job_url
+    if job_url and max(len(saved), len(catalog)) < job_page.THIN:
         # Only a snippet so far: read the job's own page once (cached per URL).
         # The member's saved text is never overwritten: the page text is cached
-        # per URL and served from there.
+        # per URL and served from there. The reads above are done, so end the
+        # transaction first: the page read can take up to 30 s and must not
+        # hold a pooled DB connection meanwhile.
+        await db.rollback()
         try:
-            page = await asyncio.wait_for(
-                job_page.full_description(app.job_url, current_user.id), 30
-            )
+            page = await asyncio.wait_for(job_page.full_description(job_url, current_user.id), 30)
         except Exception:
             page = None  # a slow or failing page never breaks the saved JD
         if page and len(page) > max(len(saved), len(catalog)):
             return JobDescriptionResponse(
-                jd_text=page, role=app.role, company=app.company, source="job_page"
+                jd_text=page, role=role, company=company, source="job_page"
             )
     if not saved and not catalog:
         raise HTTPException(status_code=404, detail="No job description saved for this role")
     use_catalog = len(catalog) > len(saved)
     return JobDescriptionResponse(
         jd_text=catalog if use_catalog else saved,
-        role=app.role,
-        company=app.company,
+        role=role,
+        company=company,
         source="catalog" if use_catalog else "application",
     )
 

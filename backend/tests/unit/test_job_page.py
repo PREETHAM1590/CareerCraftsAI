@@ -139,6 +139,7 @@ def jd_db(app, catalog=""):
     db.execute = AsyncMock(return_value=MagicMock())
     db.execute.return_value.scalar_one_or_none.return_value = catalog
     db.commit = AsyncMock()
+    db.rollback = AsyncMock()
     return db
 
 
@@ -306,3 +307,80 @@ def test_urls_with_a_query_are_cached_per_member():
     query = "https://jobs.example.com/1?invite=abc123"
     assert job_page._key(plain, "member-a") == job_page._key(plain, "member-b")
     assert job_page._key(query, "member-a") != job_page._key(query, "member-b")
+
+
+@pytest.mark.asyncio
+async def test_the_db_transaction_ends_before_the_page_is_read():
+    from app.api.v1 import jobs
+
+    app = saved_app("We're hiring a Backend Engineer")
+    db = jd_db(app)
+    order = []
+    db.rollback = AsyncMock(side_effect=lambda: order.append("released"))
+
+    async def read(url, owner):
+        order.append("read")
+        return LONG
+
+    with (
+        patch.object(jobs, "_owned_applications", AsyncMock(return_value=[app])),
+        patch.object(jobs.job_page, "full_description", read),
+    ):
+        result = await jobs.get_application_jd(app.id, db=db, current_user=SimpleNamespace(id=1))
+    assert order == ["released", "read"]
+    assert result.role == "R" and result.company == "C"
+
+
+def _fake_playwright(final_url):
+    class Page:
+        url = final_url
+
+        async def goto(self, url, **kw):
+            return None
+
+        async def wait_for_timeout(self, ms):
+            return None
+
+        async def evaluate(self, js):
+            return {"blocks": [], "text": LONG}
+
+    class Context:
+        async def new_page(self):
+            return Page()
+
+    class Browser:
+        async def new_context(self):
+            return Context()
+
+        async def close(self):
+            return None
+
+    class Chromium:
+        async def connect_over_cdp(self, *a, **kw):
+            return Browser()
+
+    class PW:
+        chromium = Chromium()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    return lambda: PW()
+
+
+@pytest.mark.asyncio
+async def test_rendered_redirects_to_skipped_or_disallowed_pages_read_nothing(monkeypatch):
+    import playwright.async_api as pw
+
+    monkeypatch.setattr(job_page.settings, "OBSCURA_CDP_URL", "ws://127.0.0.1:19222/x")
+    start = "https://jobs.example.com/1"
+    monkeypatch.setattr(pw, "async_playwright", _fake_playwright("https://www.linkedin.com/x"))
+    assert await job_page.fetch_rendered(start) == ""
+    monkeypatch.setattr(pw, "async_playwright", _fake_playwright("https://other.example.org/j"))
+    with patch.object(job_page, "robots_allow", AsyncMock(return_value=False)):
+        assert await job_page.fetch_rendered(start) == ""
+    monkeypatch.setattr(pw, "async_playwright", _fake_playwright(start))
+    assert (await job_page.fetch_rendered(start)).startswith("Build reliable")

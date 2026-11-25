@@ -165,6 +165,15 @@ async def fetch_rendered(url: str) -> str:
             page = await context.new_page()
             await page.goto(url, wait_until="domcontentloaded", timeout=20_000)
             await page.wait_for_timeout(2500)
+            # The browser follows redirects itself: the page it landed on must
+            # pass the same skip-host and robots.txt checks as plain HTTP.
+            final = page.url
+            if final != url and (
+                skipped(final)
+                or urlsplit(final).hostname != urlsplit(url).hostname
+                and not await robots_allow(final)
+            ):
+                return ""
             result = await page.evaluate(RENDER_JS)
         finally:
             await browser.close()
