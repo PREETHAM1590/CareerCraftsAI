@@ -88,7 +88,9 @@ function ApplicationsView() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [search, setSearch] = useState(params.get("q") ?? "");
-  useEffect(() => { setSearch(params.get("q") ?? ""); }, [params]);
+  // Only a changed ?q= resets the box; other filters must not wipe what was typed.
+  const urlQuery = params.get("q") ?? "";
+  useEffect(() => { setSearch(urlQuery); }, [urlQuery]);
   const [query, setQuery] = useState(params.get("q") ?? "");
   useEffect(() => {
     const timer = setTimeout(() => setQuery(search.trim()), 300);
@@ -112,19 +114,33 @@ function ApplicationsView() {
   const sortParam = params.get("sort") as ApplicationSort | null;
   const sort: ApplicationSort = sortParam && SORTS.includes(sortParam) ? sortParam : "found_desc";
 
+  const region = params.get("region") === "all" ? "all" : "auto";
+  const pendingParams = useRef(params.toString());
+  const issuedParams = useRef<string[]>([]);
+  useEffect(() => {
+    // An earlier change of ours landing must not rewind a later one still in flight.
+    const at = issuedParams.current.indexOf(params.toString());
+    issuedParams.current = at === -1 ? [] : issuedParams.current.slice(at + 1);
+    if (!issuedParams.current.length) pendingParams.current = params.toString();
+  }, [params]);
+
   const setParams = (patch: Record<string, string | null>) => {
-    const next = new URLSearchParams(params.toString());
+    // Two quick changes (blurring the city field by opening a select) must both land.
+    const next = new URLSearchParams(pendingParams.current);
     for (const [key, value] of Object.entries(patch)) {
       if (value) next.set(key, value);
       else next.delete(key);
     }
     const qs = next.toString();
+    if (qs === pendingParams.current) return;
+    pendingParams.current = qs;
+    issuedParams.current.push(qs);
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
   };
 
   // Memoised on URL params so relative ranges ("7d") don't change the query key every render.
   const filters = useMemo<ApplicationFilters>(() => {
-    const f: ApplicationFilters = { sort };
+    const f: ApplicationFilters = { sort, region };
     if (source) f.source = source;
     if (status && ["saved", "applied", "viewed", "interview", "offer", "rejected"].includes(status)) f.status = status;
     if (postedWithinDays) f.postedWithinDays = postedWithinDays;
@@ -140,8 +156,8 @@ function ApplicationsView() {
     if (query) f.q = query;
     if (cities.length) f.location = cities.join(",");
     return f;
-  }, [sort, minMatch, found, from, to, query, cities, source, status, postedWithinDays]);
-  const filtersActive = minMatch > 0 || found !== "any" || cities.length > 0;
+  }, [sort, minMatch, found, from, to, query, cities, source, status, postedWithinDays, region]);
+  const filtersActive = minMatch > 0 || found !== "any" || cities.length > 0 || !!query || !!source || !!status || postedWithinDays > 0;
   const setCities = (next: string[]) => setParams({ city: next.length ? next.join(",") : null });
   const addCity = (picked: string) => {
     const name = picked.split(",")[0].trim(); // "Bengaluru, India" -> "Bengaluru"
@@ -157,6 +173,7 @@ function ApplicationsView() {
       return {
         total: page.total,
         stageCounts: page.stageCounts,
+        hiddenOutsideIndia: page.hiddenOutsideIndia,
         next: pageParam + page.items.length,
         items: page.items.map((application: ApplicationRecord): ApplicationItem => ({
           id: String(application.id),
@@ -185,6 +202,7 @@ function ApplicationsView() {
   });
   const items = useMemo(() => data?.pages.flatMap((page) => page.items) ?? [], [data]);
   const total = data?.pages[0]?.total ?? 0;
+  const hiddenOutsideIndia = data?.pages[0]?.hiddenOutsideIndia ?? 0;
   // Whole-list stage counts from the server, so stats stay right while paging.
   const stageCounts = data?.pages[0]?.stageCounts ?? {};
 
@@ -334,7 +352,11 @@ function ApplicationsView() {
       ? "Roles unavailable"
       : `${total} ${query ? "matching " : ""}${total === 1 ? "job" : "jobs"}`;
 
-  const clearFilters = () => setParams({ min: null, found: null, from: null, to: null, city: null });
+  const clearFilters = () => {
+    setSearch("");
+    setCityDraft("");
+    setParams({ min: null, found: null, from: null, to: null, city: null, q: null, source: null, status: null, posted: null });
+  };
   const matchOptions = MATCH_OPTIONS.includes(minMatch) ? MATCH_OPTIONS : [...MATCH_OPTIONS, minMatch].sort((a, b) => a - b);
   const pendingCount = pendingDelete?.length ?? 0;
 
@@ -356,7 +378,7 @@ function ApplicationsView() {
 
       <StatStrip
         items={[
-          { label: "All roles", value: total },
+          { label: filtersActive ? "Matching roles" : "All roles", value: total },
           { label: "In progress", value: activeCount },
           { label: "Interviews", value: interviewCount },
           { label: "Offers", value: offerCount },
@@ -372,7 +394,7 @@ function ApplicationsView() {
             <ExportMenu open={showExportMenu} onOpenChange={setShowExportMenu} onDownloadCsv={exportToCSV} onExportSheets={exportToSheets} />
           </div>
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1fr)_minmax(0,1.4fr)]">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,1.1fr)]">
             <Field label="Match">
               {(id) => (
                 <Select id={id} value={minMatch} onChange={(event) => setParams({ min: Number(event.target.value) > 0 ? event.target.value : null })}>
@@ -398,6 +420,7 @@ function ApplicationsView() {
                     id={id}
                     value={cityDraft}
                     onChange={setCityDraft}
+                    onPick={addCity}
                     onKeyDown={(event) => {
                       if (event.key === "Enter" && !isComposing(event) && cityDraft.trim()) {
                         event.preventDefault();
@@ -411,7 +434,30 @@ function ApplicationsView() {
                 </div>
               )}
             </Field>
+            <Field label="Region">
+              {(id) => (
+                <Select id={id} value={region} onChange={(event) => setParams({ region: event.target.value === "all" ? "all" : null })}>
+                  <option value="auto">My India first setting</option>
+                  <option value="all">Every country</option>
+                </Select>
+              )}
+            </Field>
           </div>
+
+          {status || source || postedWithinDays > 0 ? (
+            <div className="flex flex-wrap items-center gap-2">
+              {[
+                status ? { key: "status", label: `Stage: ${status}` } : null,
+                source ? { key: "source", label: `Source: ${source}` } : null,
+                postedWithinDays > 0 ? { key: "posted", label: `Posted: last ${postedWithinDays} days` } : null,
+              ].filter((chip) => chip !== null).map((chip) => (
+                <button key={chip.key} type="button" onClick={() => setParams({ [chip.key]: null })} aria-label={`Remove ${chip.label}`} className="inline-flex h-8 items-center gap-1.5 rounded-full bg-primary/10 px-3 text-xs font-medium text-primary ring-1 ring-primary/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  {chip.label}
+                  <X size={12} weight="light" aria-hidden />
+                </button>
+              ))}
+            </div>
+          ) : null}
 
           {found === "custom" || cities.length > 0 ? (
             <div className="flex flex-wrap items-center gap-2">
@@ -447,6 +493,14 @@ function ApplicationsView() {
                 Clear filters
               </button>
             ) : null}
+            {hiddenOutsideIndia > 0 ? (
+              <span>
+                · {hiddenOutsideIndia} outside India hidden{" "}
+                <button type="button" onClick={() => setParams({ region: "all" })} className="text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  Show
+                </button>
+              </span>
+            ) : null}
           </p>
           {checkedIds.length > 0 ? (
             <IslandButton tone="danger" size="sm" icon={<Trash size={14} />} onClick={() => setPendingDelete(checkedIds)}>
@@ -476,6 +530,8 @@ function ApplicationsView() {
               />
             </Bezel>
           </Reveal>
+        ) : items.length === 0 && hiddenOutsideIndia > 0 ? (
+          <Bezel><EmptyPanel compact title="Only roles outside India here" description={`India first is hiding ${hiddenOutsideIndia} saved ${hiddenOutsideIndia === 1 ? "role" : "roles"}.`} action={<IslandButton tone="ghost" size="sm" onClick={() => setParams({ region: "all" })}>Show every country</IslandButton>} /></Bezel>
         ) : items.length === 0 && filtersActive ? (
           <Bezel><EmptyPanel compact title="No jobs match these filters" description="Loosen the match or found-date filter." action={<IslandButton tone="ghost" size="sm" onClick={clearFilters}>Clear filters</IslandButton>} /></Bezel>
         ) : items.length === 0 ? (

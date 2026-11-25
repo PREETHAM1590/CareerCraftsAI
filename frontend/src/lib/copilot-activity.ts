@@ -30,6 +30,10 @@ export function conversationRunIds(messages: readonly ActivityMessage[]): string
 }
 export type ActivityRun = { id: string; status: string; agent_type: string; output: Record<string, unknown> | null; error?: string | null };
 export type CompanionActivity = { state: "idle" | "running" | "waiting" | "failed" | "review"; title: string; detail: string; run?: ActivityRun };
+/** The panel opens by itself only for a task that cannot go on without the member. A chat reply that ends in a question shows on the pet's label instead. */
+export function opensByItself(activity: CompanionActivity): boolean {
+  return activity.state === "waiting" && Boolean(activity.run);
+}
 export function companionActivity(runs: ActivityRun[], running: boolean, error: string | null, messages: readonly ActivityMessage[]): CompanionActivity {
   const waiting = runs.findLast(run => run.status === "awaiting_approval");
   if (waiting) return { state: "waiting", title: "Your review is needed", detail: typeof waiting.output?.summary === "string" ? waiting.output.summary : "Review the proposed action before the assistant continues.", run: waiting };

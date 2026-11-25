@@ -10,6 +10,7 @@ export function applicationFilterParams(filters: ApplicationFilters): Record<str
   if (filters.location) params.location = filters.location;
   if (filters.source) params.source = filters.source;
   if (filters.postedWithinDays) params.posted_within_days = filters.postedWithinDays;
+  if (filters.region) params.region = filters.region;
   if (filters.q?.trim()) params.q = filters.q.trim();
   return params;
 }

@@ -313,3 +313,35 @@ def test_log_filter_removes_pii_from_records(caplog):
     text = caplog.text
     assert "ananya" not in text and not re.search(r"9876543210", text)
     assert "[EMAIL]" in text and "[PHONE]" in text
+
+
+def test_scrub_keeps_record_ids():
+    for uid in ("0f54bf29-cb6a-43e9-8cd8-9876543210cd", "0f54bf29-cb6a-43e9-8cd8-009876543210"):
+        assert scrub(f"account {uid} failed") == f"account {uid} failed"
+    assert scrub("call 9876543210") == "call [PHONE]"
+
+
+def test_access_log_lines_survive_scrubbing():
+    from uvicorn.logging import AccessFormatter
+
+    record = logging.LogRecord(
+        "uvicorn.access",
+        logging.INFO,
+        __file__,
+        1,
+        '%s - "%s %s HTTP/%s" %d',
+        ("127.0.0.1:1", "GET", "/x/9876543210", "1.1", 200),
+        None,
+    )
+    PiiLogFilter().filter(record)
+    line = AccessFormatter("%(client_addr)s %(request_line)s %(status_code)s").format(record)
+    assert "[PHONE]" in line and "9876543210" not in line and "200" in line
+
+
+def test_access_record_without_args_is_scrubbed():
+    for args in ((), None):
+        record = logging.LogRecord(
+            "uvicorn.access", logging.INFO, __file__, 1, "from ananya.rao@acme.in", args, None
+        )
+        PiiLogFilter().filter(record)
+        assert "ananya" not in record.getMessage()

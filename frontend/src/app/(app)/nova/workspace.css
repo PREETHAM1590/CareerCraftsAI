@@ -96,8 +96,12 @@
 .is-empty .welcome-mark { width: 36px; height: 36px; margin-bottom: 12px; border-radius: 12px; }
 .is-empty .welcome-description { margin-top: 12px; }
 .is-empty .copilot-chat-host { flex: none; height: 340px; }
-.copilot-chat-host [data-testid="copilot-chat-input"] { background: hsl(var(--muted) / .55); border: 1px solid var(--workspace-border); border-radius: 16px; box-shadow: none; }
-.copilot-chat-host [data-testid="copilot-chat-input"]:focus-within { border-color: hsl(var(--primary) / .6); box-shadow: 0 0 0 3px hsl(var(--primary) / .08); }
+/* The composer floats over the messages, so it and its disclaimer must be opaque.
+   Vendor variables hold full colours in here: hsl(var(--muted) / x) would be invalid. */
+.copilot-chat-host [data-copilotkit]:has(> * > [data-testid="copilot-chat-input"]) { background: var(--workspace-card); }
+.copilot-chat-host [data-testid="copilot-assistant-message"] code::before, .copilot-chat-host [data-testid="copilot-assistant-message"] code::after { content: none; }
+.copilot-chat-host [data-testid="copilot-chat-input"] { background: color-mix(in srgb, var(--workspace-muted) 55%, var(--workspace-card)); border: 1px solid var(--workspace-border); border-radius: 16px; box-shadow: none; }
+.copilot-chat-host [data-testid="copilot-chat-input"]:focus-within { border-color: color-mix(in srgb, var(--workspace-primary) 60%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--workspace-primary) 8%, transparent); }
 .copilot-chat-host [data-testid="copilot-chat-textarea"]::placeholder { color: var(--workspace-muted-foreground); }
 .copilot-chat-host [data-testid="copilot-chat-textarea"] { min-height: 50px; }
 @media (max-width: 640px) {

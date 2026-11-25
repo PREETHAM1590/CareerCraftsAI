@@ -173,8 +173,51 @@ def posted(value):
         return None
 
 
-def plain(value) -> str:
-    return html.unescape(re.sub(r"<[^>]*>", " ", str(value or "")))[:16000].strip()
+# Real HTML tags only, so "<5 years" or "List<String>" in a posting survive.
+_HTML_TAG = re.compile(
+    r"<!--.*?-->|</?(?:a|abbr|address|article|aside|b|big|blockquote|body|br|button|caption|center"
+    r"|cite|code|col|colgroup|dd|del|details|div|dl|dt|em|figcaption|figure|font|footer|form|h[1-6]"
+    r"|head|header|hr|html|i|iframe|img|input|ins|kbd|label|li|link|main|mark|meta|nav|noscript|ol"
+    r"|p|path|picture|pre|q|s|script|section|small|source|span|strike|strong|style|sub|summary|sup"
+    r"|svg|table|tbody|td|tfoot|th|thead|tr|tt|u|ul|video|wbr|[a-z][a-z0-9]*[:-][a-z0-9:-]+)"
+    r"(?=[\s/>])[^>]*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_LINE_TAG = re.compile(
+    r"\s*</?(?:article|blockquote|br|div|h[1-6]|hr|ol|p|pre|section|table|tr|ul)(?=[\s/>])[^>]*>\s*",
+    re.IGNORECASE,
+)
+_LIST_ITEM = re.compile(r"\s*<li(?=[\s/>])[^>]*>\s*", re.IGNORECASE)
+
+
+def plain(value, breaks: bool = False) -> str:
+    """Text of an HTML value. `breaks` keeps paragraphs and list items on lines."""
+    raw = str(value or "")
+    if not _HTML_TAG.search(raw):
+        # Some APIs (Greenhouse) send the whole body entity-escaped, so its
+        # tags only appear, and can only be stripped, after one unescape.
+        unescaped = html.unescape(raw)
+        if _HTML_TAG.search(unescaped):
+            raw = unescaped
+    if breaks and _HTML_TAG.search(raw):
+        raw = _LINE_TAG.sub("\n", _LIST_ITEM.sub("\n- ", raw))
+        raw = re.sub(r"[ \t]{2,}", " ", _HTML_TAG.sub(" ", raw))
+        raw = re.sub(r"\s*\n\s*", "\n", raw)
+    return html.unescape(_HTML_TAG.sub(" ", raw))[:16000].strip()
+
+
+def clean_description(value: str | None) -> str:
+    """Text for a description that may have been saved with its HTML still in
+    it. Text without HTML tags is returned as it is."""
+    text = value or ""
+    if not _HTML_TAG.search(text):
+        unescaped = html.unescape(text)
+        if not _HTML_TAG.search(unescaped):
+            return text
+        text = unescaped
+    # Saved copies are capped in length, which can cut the last tag in half.
+    text = re.sub(r"</?[a-zA-Z][^<>]*$", "", text)
+    return re.sub(r"[ \t]{2,}", " ", _HTML_TAG.sub(" ", plain(text, breaks=True))).strip()
 
 
 def normalize(raw: dict, source: Source) -> dict | None:
@@ -217,7 +260,7 @@ def normalize(raw: dict, source: Source) -> dict | None:
         "first_seen_at": now.isoformat(),
         "last_seen_at": now.isoformat(),
         "expires_at": expires.isoformat() if expires else None,
-        "description": plain(raw.get("description")),
+        "description": plain(raw.get("description"), breaks=True),
         "occurrences": [{"source_id": source.id, "url": url}],
     }
 
@@ -460,7 +503,7 @@ def parse_hn_post(comment_html: str) -> dict | None:
         "title": parts[1],
         "location": next((p for p in rest if p and "remote" not in p.lower()), ""),
         "remote": any("remote" in p.lower() for p in parts),
-        "description": plain(comment_html),
+        "description": plain(comment_html, breaks=True),
     }
 
 

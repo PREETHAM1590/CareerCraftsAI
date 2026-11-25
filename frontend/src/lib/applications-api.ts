@@ -40,6 +40,7 @@ export type ApplicationFilters = {
   location?: string;
   source?: string;
   postedWithinDays?: number; // 1-90, filters on the employer's posting date
+  region?: "auto" | "india" | "all"; // auto follows the India first switch
   q?: string; // company / role / location contains
 };
 
@@ -48,6 +49,7 @@ export type ApplicationPage = {
   items: ApplicationRecord[];
   total: number;
   stageCounts: Partial<Record<AppStage, number>>;
+  hiddenOutsideIndia: number; // matching saved roles the region filter left out
 };
 
 export async function fetchApplications(
@@ -65,7 +67,7 @@ export async function fetchApplications(
   } catch {
     // Older backend: callers fall back to counting the loaded rows.
   }
-  return { items: res.data, total, stageCounts };
+  return { items: res.data, total, stageCounts, hiddenOutsideIndia: Number(res.headers["x-hidden-outside-india"] ?? 0) };
 }
 
 /** Soft delete; undo with restoreApplications(ids). */

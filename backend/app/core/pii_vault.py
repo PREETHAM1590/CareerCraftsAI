@@ -95,6 +95,9 @@ _PHONES = (
     # (415) 555-0100 / 415-555-0100 / 415.555.0100
     re.compile(r"(?<!\w)(?:\(\d{3}\)\s?|\d{3}[\s.-])\d{3}[\s.-]\d{4}(?!\d)"),
 )
+_UUID = re.compile(
+    r"(?<![0-9a-zA-Z-])[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}(?![0-9a-zA-Z-])", re.IGNORECASE
+)
 _AADHAAR = re.compile(r"(?<![\w])[2-9]\d{3}([\s-]?)\d{4}\1\d{4}(?![\w])")
 _PAN = re.compile(r"(?<![A-Za-z0-9])[A-Z]{3}[ABCFGHJLPT][A-Z]\d{4}[A-Z](?![A-Za-z0-9])")
 _PASSPORT = re.compile(
@@ -202,13 +205,19 @@ def _pattern_spans(text: str) -> list[_Span]:
         surface = text[start:end]
         spans.append(_Span(start, end, kind, _norm_key(kind, surface), surface, 1))
 
+    # Digit runs inside a record ID are not phone, Aadhaar or card numbers.
+    uuids = [m.span() for m in _UUID.finditer(text)]
+
+    def in_uuid(start: int, end: int) -> bool:
+        return any(a <= start and end <= b for a, b in uuids)
+
     for m in _EMAIL.finditer(text):
         if not _ROLE_MAILBOX.match(m.group().split("@", 1)[0]):
             add(m.start(), m.end(), "EMAIL")
     for m in _UPI.finditer(text):
         add(m.start(), m.end(), "UPI")
     for m in _AADHAAR.finditer(text):
-        if verhoeff_valid(_digits(m.group())):
+        if verhoeff_valid(_digits(m.group())) and not in_uuid(*m.span()):
             add(m.start(), m.end(), "AADHAAR")
     for m in _PAN.finditer(text):
         add(m.start(), m.end(), "PAN")
@@ -218,11 +227,11 @@ def _pattern_spans(text: str) -> list[_Span]:
         add(m.start("v"), m.end("v"), "DOB")
     for m in _CARD.finditer(text):
         digits = _digits(m.group())
-        if 13 <= len(digits) <= 19 and luhn_valid(digits):
+        if 13 <= len(digits) <= 19 and luhn_valid(digits) and not in_uuid(*m.span()):
             add(m.start(), m.end(), "CARD")
     for pattern in _PHONES:
         for m in pattern.finditer(text):
-            if _phone_ok(m.group()):
+            if _phone_ok(m.group()) and not in_uuid(*m.span()):
                 add(m.start(), m.end(), "PHONE")
     for m in _PROFILE_URL.finditer(text):
         add(m.start(), m.end(), "URL")
@@ -535,7 +544,12 @@ def _scrub_record(record: logging.LogRecord) -> None:
         return
     cleaned = scrub(message)
     if cleaned != message:
-        record.msg, record.args = cleaned, None
+        if record.name == "uvicorn.access" and record.args and isinstance(record.args, tuple):
+            # uvicorn's formatter builds the line from these args, so they
+            # must keep their count and order.
+            record.args = tuple(scrub(a) if isinstance(a, str) else a for a in record.args)
+        else:
+            record.msg, record.args = cleaned, None
     if record.exc_info and not record.exc_text:
         # Formatters reuse exc_text, so the traceback text is scrubbed too.
         record.exc_text = scrub(logging.Formatter().formatException(record.exc_info))

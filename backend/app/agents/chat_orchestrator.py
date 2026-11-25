@@ -145,7 +145,7 @@ async def start_agent_run(task_type: str, context: dict | None = None) -> str:
             cover_letter, interview_prep, interview_coach, company_research,
             salary_intelligence, email, email_monitor, linkedin_optimize,
             linkedin_outreach, computer_task.
-        context: task context, e.g. {"query": "Senior Python Engineer",
+        context: task context, e.g. {"search_query": "Senior Python Engineer",
             "location": "Remote"} for job_search. Keep it small.
     """
     user_id = _user_id()
@@ -161,6 +161,9 @@ async def start_agent_run(task_type: str, context: dict | None = None) -> str:
     context = context or {}
     if not isinstance(context, dict):
         return json.dumps({"error": "context must be an object."})
+    if task_type == "job_search" and not context.get("search_query") and context.get("query"):
+        # The model still sends the older key at times; the agent reads search_query.
+        context = {**context, "search_query": context["query"]}
     if len(json.dumps(context, default=str)) > _MAX_CONTEXT_CHARS:
         return json.dumps({"error": "context is too large."})
     from app.api.v1.run_utils import queue_agent_run
