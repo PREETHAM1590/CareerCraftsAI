@@ -272,7 +272,7 @@ export default function DashboardPage() {
   const { data: jobMatches = [], isSuccess: jobsLoaded } = useQuery<JobApplication[]>({
     queryKey: ["dashboard-jobs"],
     queryFn: async () => {
-      const { data } = await apiClient.get("/jobs/applications?status=saved&limit=3");
+      const { data } = await apiClient.get("/jobs/applications?status=saved&limit=3&region=auto");
       return data;
     },
   });

@@ -40,6 +40,7 @@ export type ApplicationFilters = {
   location?: string;
   source?: string;
   postedWithinDays?: number; // 1-90, filters on the employer's posting date
+  region?: "auto" | "india" | "all"; // auto follows the India first switch
   q?: string; // company / role / location contains
 };
 

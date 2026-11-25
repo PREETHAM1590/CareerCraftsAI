@@ -1316,7 +1316,7 @@ export default function JobsPage() {
   const { data: jobsPage, isLoading } = useQuery<ApplicationPage>({
     queryKey: ["jobs-saved", Array.from(activeFilters).sort().join(","), jobSource, postedDays, minMatch],
     queryFn: () => {
-      const filters: ApplicationFilters = { status: "saved", sort: "match_desc" };
+      const filters: ApplicationFilters = { status: "saved", sort: "match_desc", region: "auto" };
       if (jobSource) filters.source = jobSource;
       if (minMatch > 0) filters.minMatch = minMatch;
       filters.postedWithinDays = effectivePostedDays;

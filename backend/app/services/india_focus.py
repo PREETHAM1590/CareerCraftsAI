@@ -250,7 +250,60 @@ _FOREIGN = (
     "karachi",
     "lahore",
     "islamabad",
+    "deutschland",
+    "nederland",
+    "schweiz",
+    "luxembourg",
+    "slovenia",
+    "slovakia",
+    "cyprus",
+    "méxico",
+    "munich",
+    "münchen",
+    "hamburg",
+    "frankfurt",
+    "cologne",
+    "stuttgart",
+    "bavaria",
+    "zurich",
+    "zürich",
+    "geneva",
+    "lausanne",
+    "vienna",
+    "rotterdam",
+    "eindhoven",
+    "brussels",
+    "stockholm",
+    "copenhagen",
+    "oslo",
+    "helsinki",
+    "prague",
+    "budapest",
+    "bucharest",
+    "milan",
+    "rome",
+    "manchester",
+    "edinburgh",
+    "bristol",
+    "new jersey",
+    "kansas",
+    "colorado",
+    "arizona",
+    "massachusetts",
+    "illinois",
+    "pennsylvania",
+    "ohio",
+    "michigan",
+    "virginia",
+    "north carolina",
+    "san jose",
+    "san diego",
+    "mountain view",
+    "palo alto",
 )
+# Boards that only list roles in Europe, where a bare town name ("Delft") or no
+# location at all still means Europe.
+_EUROPE_BOARDS = {"arbeitnow"}
 _US_STATE = re.compile(
     r",\s*(A[KLRZ]|C[AOT]|D[CE]|FL|GA|HI|I[ADLN]|K[SY]|LA|M[ADEINOST]|N[CDEHJMVY]|O[HKR]|PA"
     r"|RI|S[CD]|T[NX]|UT|V[AT]|W[AIVY])(?:\s+\d{5})?\s*(?:,|$|\))"
@@ -404,6 +457,8 @@ def classify(job: dict) -> tuple[str, str]:
         return "remote_global", "Remote, no country restriction stated"
     if foreign or us_state or cities:
         return "foreign", "Located outside India"
+    if str(job.get("platform") or "").lower() in _EUROPE_BOARDS:
+        return "foreign", "Listed on a Europe-only job board"
     return "unknown", "No location given"
 
 

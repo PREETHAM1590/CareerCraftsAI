@@ -125,7 +125,10 @@ def test_bamboohr_body_fill_stops_at_the_budget_and_keeps_partial_rows(monkeypat
 
 
 def test_plain_strips_entity_escaped_bodies():
-    raw = "&lt;div class=&quot;content-intro&quot;&gt;&lt;p&gt;R&amp;amp;D&amp;nbsp;team&lt;/p&gt;&lt;/div&gt;"
+    raw = (
+        "&lt;div class=&quot;content-intro&quot;&gt;&lt;p&gt;"
+        "R&amp;amp;D&amp;nbsp;team&lt;/p&gt;&lt;/div&gt;"
+    )
     assert jc.plain(raw) == "R&D\xa0team"
     assert jc.plain("<p>Use List&lt;String&gt;</p>") == "Use List<String>"
     assert jc.plain("Under &lt;5 years") == "Under <5 years"

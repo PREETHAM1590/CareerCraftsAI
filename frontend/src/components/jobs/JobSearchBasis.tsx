@@ -19,7 +19,9 @@ export function JobSearchBasis(p: Props) {
   });
   const indiaFocus = useMutation({
     mutationFn: async (next: boolean) => (await apiClient.patch("/users/me/preferences", { india_focus: next })).data,
-    onSuccess: () => client.invalidateQueries({ queryKey: ["preferences"] }),
+    onSuccess: () => {
+      for (const key of ["preferences", "jobs-saved", "applications", "auto-apply-jobs"]) void client.invalidateQueries({ queryKey: [key] });
+    },
   });
   const indiaOn = indiaFocus.isPending ? indiaFocus.variables !== false : prefs.data?.india_focus !== false;
   const save = useMutation({

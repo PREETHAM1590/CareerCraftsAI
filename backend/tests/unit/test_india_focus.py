@@ -178,3 +178,57 @@ def test_inr_salary(text, low, high):
 def test_non_inr_salary_is_not_guessed():
     assert india.parse_inr_salary("USD 120000–150000") is None
     assert india.parse_inr_salary("") is None
+
+
+@pytest.mark.parametrize("location", ["Delft", "", "Munich, Bavaria", "Zürich"])
+def test_europe_only_board_is_foreign(location):
+    assert india.classify({"location": location, "platform": "arbeitnow"})[0] == "foreign"
+    assert india.classify({"location": "Pune", "platform": "arbeitnow"})[0] == "india"
+    assert india.classify({"location": "", "platform": "jobspy"})[0] == "unknown"
+
+
+class _Rows:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def all(self):
+        return self.rows
+
+    def scalar_one_or_none(self):
+        return self.rows
+
+
+class _Db:
+    def __init__(self, *results):
+        self.results = list(results)
+
+    async def execute(self, *_):
+        return _Rows(self.results.pop(0))
+
+
+async def test_saved_roles_abroad_are_hidden_by_the_india_first_switch():
+    import uuid
+
+    from sqlalchemy.dialects import postgresql
+
+    from app.api.v1.jobs import _application_query, _outside_india
+
+    uid, blocked, open_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    pairs = [("San Mateo, CA", "greenhouse"), ("Bengaluru", "ashby"), ("Remote", "ashby")]
+    remote = [
+        (blocked, "Remote", "ashby", "You must be based in the US."),
+        (open_id, "Remote", "ashby", "Work from anywhere."),
+    ]
+    hidden = await _outside_india(_Db(None, pairs, remote), uid, "auto", None)
+    sql = str(
+        _application_query(uid, hidden=hidden).compile(
+            dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}
+        )
+    )
+    assert "San Mateo" in sql and str(blocked) in sql
+    assert "Bengaluru" not in sql and str(open_id) not in sql
+
+    assert await _outside_india(_Db(False), uid, "auto", None) is None
+    assert await _outside_india(_Db(), uid, "all", None) is None
+    assert await _outside_india(_Db(True), uid, "auto", "London") is None
+    assert await _outside_india(_Db(pairs, remote), uid, "india", "Remote,Onsite") is not None

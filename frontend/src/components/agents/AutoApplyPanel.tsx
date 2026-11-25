@@ -61,7 +61,7 @@ export function AutoApplyPanel() {
   );
   const jobsQuery = useQuery({
     queryKey: ["auto-apply-jobs", minMatch, within],
-    queryFn: () => fetchApplications({ status: "saved", sort: "match_desc", minMatch, foundAfter }, { limit: 100 }),
+    queryFn: () => fetchApplications({ status: "saved", sort: "match_desc", minMatch, foundAfter, region: "auto" }, { limit: 100 }),
   });
   const items = useMemo(() => jobsQuery.data?.items ?? [], [jobsQuery.data]);
   const chosen = items.filter((a) => selected.has(a.id));

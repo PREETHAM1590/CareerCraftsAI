@@ -9,7 +9,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import func, or_, select, text, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import get_current_user, get_db
@@ -1007,6 +1007,7 @@ def _application_query(
     found_before: datetime | None = None,
     sort: str | None = None,
     q: str | None = None,
+    hidden=None,
 ):
     """Filters owned rows in SQL for paging, counts and exports."""
     if status and status not in VALID_STATUSES:
@@ -1036,6 +1037,8 @@ def _application_query(
         )
     if filters:
         query = query.where(JobApplication.location.is_not(None), JobApplication.location != "")
+    if hidden is not None:
+        query = query.where(~hidden)
     if status:
         query = query.where(JobApplication.status == status)
     if source:
@@ -1072,6 +1075,58 @@ def _application_query(
     return query.order_by(*order, JobApplication.id.asc())
 
 
+async def _outside_india(db: AsyncSession, user_id: uuid.UUID, region: str, location: str | None):
+    """SQL condition for saved roles open only outside India, or None to show
+    everything. "auto" follows the member's India first switch. Only roles still
+    "saved" are hidden: anything the member acted on always stays in the list.
+    A location filter naming a place abroad shows that place."""
+    from app.services.india_focus import classify, wants_india
+
+    if region == "all":
+        return None
+    if region == "auto":
+        focus = (
+            await db.execute(
+                select(UserPreferences.india_focus).where(UserPreferences.user_id == user_id)
+            )
+        ).scalar_one_or_none()
+        if focus is False:
+            return None
+    places = [p.strip() for p in (location or "").split(",") if p.strip()]
+    places = [p for p in places if p.lower() not in {"remote", "hybrid", "onsite"}]
+    if places and not wants_india({"locations": places}):
+        return None
+    saved = (JobApplication.user_id == user_id, JobApplication.status == "saved")
+    place = func.coalesce(JobApplication.location, "")
+    source = func.coalesce(JobApplication.source, "")
+    pairs = (await db.execute(select(place, source).where(*saved).distinct())).all()
+    foreign, open_remote = [], []
+    for loc, src in pairs:
+        fit, _ = classify({"location": loc, "platform": src})
+        if fit == "foreign":
+            foreign.append((loc, src))
+        elif fit == "remote_global":
+            open_remote.append(loc)
+    restricted = []
+    if open_remote:
+        # A remote role can still ask for residency abroad in its description.
+        rows = await db.execute(
+            select(JobApplication.id, place, source, func.left(JobApplication.jd_text, 6000)).where(
+                *saved, place.in_(open_remote)
+            )
+        )
+        restricted = [
+            app_id
+            for app_id, loc, src, jd in rows.all()
+            if classify({"location": loc, "platform": src, "description": jd})[0] == "foreign"
+        ]
+    if not foreign and not restricted:
+        return None
+    return (JobApplication.status == "saved") & or_(
+        tuple_(place, source).in_(foreign), JobApplication.id.in_(restricted)
+    )
+
+
 async def _filtered_applications(
     db: AsyncSession, user_id: uuid.UUID, **filters
 ) -> list[JobApplication]:
@@ -1092,6 +1147,7 @@ async def list_applications(
     found_before: datetime | None = None,
     sort: Literal["found_desc", "found_asc", "match_desc", "match_asc"] | None = None,
     q: str | None = Query(None, max_length=200),
+    region: Literal["auto", "india", "all"] = "all",
     offset: int = Query(0, ge=0),
     limit: int | None = Query(None, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
@@ -1112,6 +1168,7 @@ async def list_applications(
         found_before=found_before,
         sort=sort,
         q=q,
+        hidden=await _outside_india(db, current_user.id, region, location),
     )
     counts = (
         await db.execute(
@@ -1149,6 +1206,7 @@ async def export_applications_sheet(
     found_before: datetime | None = None,
     sort: Literal["found_desc", "found_asc", "match_desc", "match_asc"] | None = None,
     q: str | None = Query(None, max_length=200),
+    region: Literal["auto", "india", "all"] = "all",
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -1169,6 +1227,7 @@ async def export_applications_sheet(
         found_before=found_before,
         sort=sort,
         q=q,
+        hidden=await _outside_india(db, current_user.id, region, location),
     )
     rows = [["Company", "Role", "Location", "Match", "Status", "Found", "URL", "Source"]]
     rows += [

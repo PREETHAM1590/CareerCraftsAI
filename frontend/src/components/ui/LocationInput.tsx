@@ -9,6 +9,8 @@ import { isComposing } from "@/lib/ime";
 type Props = Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "onChange"> & {
   value: string;
   onChange: (value: string) => void;
+  /** Called with a chosen suggestion instead of onChange (a field that adds each pick). */
+  onPick?: (option: string) => void;
   /** Comma-separated list: suggestions complete the last entry and append ", ". */
   multiple?: boolean;
   /** Classes for the <input>. Callers supply the field styling (bare or tray). */
@@ -21,7 +23,7 @@ type Props = Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "onChange"> &
  * Location field with a dropdown of matching cities (ARIA combobox). Free text
  * is always accepted; the list only helps. Works single or comma-separated.
  */
-export function LocationInput({ value, onChange, multiple = false, inputClassName, className, onKeyDown, ...rest }: Props) {
+export function LocationInput({ value, onChange, onPick, multiple = false, inputClassName, className, onKeyDown, ...rest }: Props) {
   const listId = useId();
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
@@ -34,7 +36,8 @@ export function LocationInput({ value, onChange, multiple = false, inputClassNam
   const showList = open && options.length > 0;
 
   function choose(option: string) {
-    onChange(multiple ? [...picked, option].join(", ") + ", " : option);
+    if (onPick) onPick(option);
+    else onChange(multiple ? [...picked, option].join(", ") + ", " : option);
     setActive(0);
     if (!multiple) setOpen(false);
   }
