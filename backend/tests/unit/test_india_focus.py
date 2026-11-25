@@ -206,6 +206,11 @@ class _Db:
         return _Rows(self.results.pop(0))
 
 
+@pytest.mark.parametrize("location", ["México", "Zürich", "München", "Frankfurt am Main"])
+def test_accented_foreign_places_are_foreign(location):
+    assert india.classify({"location": location})[0] == "foreign"
+
+
 async def test_saved_roles_abroad_are_hidden_by_the_india_first_switch():
     import uuid
 

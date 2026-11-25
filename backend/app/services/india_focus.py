@@ -8,6 +8,7 @@ location text second; strong residency phrases in a remote posting's body last.
 from __future__ import annotations
 
 import re
+import unicodedata
 
 # Canonical city -> spellings seen on boards (the canonical name is included).
 CITY_ALIASES: dict[str, tuple[str, ...]] = {
@@ -257,16 +258,14 @@ _FOREIGN = (
     "slovenia",
     "slovakia",
     "cyprus",
-    "méxico",
     "munich",
-    "münchen",
+    "munchen",
     "hamburg",
     "frankfurt",
     "cologne",
     "stuttgart",
     "bavaria",
     "zurich",
-    "zürich",
     "geneva",
     "lausanne",
     "vienna",
@@ -324,7 +323,9 @@ FITS = ("india", "india_remote", "remote_global", "unknown", "foreign")
 
 
 def _norm(text: str) -> str:
-    return " " + re.sub(r"[^a-z0-9.+]+", " ", str(text or "").lower()).strip() + " "
+    # "México" and "Zürich" compare as plain letters.
+    folded = unicodedata.normalize("NFKD", str(text or "")).encode("ascii", "ignore").decode()
+    return " " + re.sub(r"[^a-z0-9.+]+", " ", folded.lower()).strip() + " "
 
 
 def _has(hay: str, words) -> list[str]:
