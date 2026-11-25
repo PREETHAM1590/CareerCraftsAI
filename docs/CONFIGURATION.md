@@ -311,6 +311,20 @@ stay in the catalog until they age out with the catalog's freshness window.
 - Links are never opened. A link to a specific posting on a known ATS (Greenhouse, Lever, Workday...) becomes the job URL; any other link, or a generic careers page, leaves the post itself as the link.
 - Every job credits the post: "Posted by @handle on X: <link>".
 
+## Saving job listings from Naukri, Instahyre and LinkedIn (extension)
+
+The popup's **Save this job to CareerCraft** reads the listing open in the
+member's own tab and saves it to their tracker (`POST /extension/device/collect-job`).
+It runs only when the member presses the button, reads one page, and never
+clicks, types or submits. Hosts: any `*.naukri.com`, `www.instahyre.com`,
+`www.linkedin.com/jobs/*`.
+
+> **LinkedIn:** LinkedIn's User Agreement restricts automated access. This
+> capture is member-initiated and read-only, which is lower risk than the
+> crawling CareerCraft otherwise avoids, but it is still a product decision to
+> keep LinkedIn here. Remove `linkedin.com` from `COLLECTABLE_HOSTS` and the
+> manifest's `collect.js` matches to turn it off.
+
 ## LinkedIn sending (beta, off by default)
 
 Sends approved LinkedIn outreach from the member's own LinkedIn, through

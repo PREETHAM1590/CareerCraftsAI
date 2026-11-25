@@ -196,4 +196,47 @@ $("autofill").addEventListener("click", async () => {
   }
 });
 
+// Same hosts the backend accepts (extension_service.normalize_collected_job).
+const COLLECT_PAGE = /^https:\/\/([a-z0-9-]+\.)*naukri\.com\/|^https:\/\/www\.instahyre\.com\/|^https:\/\/www\.linkedin\.com\/jobs\//;
+
+async function scrapeJob(tabId) {
+  const ask = () => chrome.tabs.sendMessage(tabId, { type: "CC_SCRAPE_JOB" }, { frameId: 0 });
+  try {
+    return await ask();
+  } catch (e) {
+    // Single-page boards (LinkedIn) can reach a job page without a reload,
+    // so the content script may not be there yet: inject it, then ask again.
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["src/content/collect.js"] });
+    return ask();
+  }
+}
+
+$("collect-job").addEventListener("click", async () => {
+  showError("");
+  const out = $("collect-result");
+  out.textContent = "";
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab || !COLLECT_PAGE.test(tab.url || "")) return showError("Open a Naukri, Instahyre or LinkedIn job page first.");
+  $("collect-job").disabled = true;
+  out.textContent = "Saving…";
+  try {
+    const scraped = await scrapeJob(tab.id);
+    if (!scraped || !scraped.ok) {
+      out.textContent = "";
+      return showError((scraped && scraped.error) || "No job listing found on this page.");
+    }
+    const res = await send({ type: "CC_COLLECT_JOB", job: scraped.job });
+    if (res.error) {
+      out.textContent = "";
+      return showError(res.error === "not_paired" ? "Connect the extension to CareerCraft first." : `Could not save this job: ${res.error}`);
+    }
+    out.textContent = res.data && res.data.created ? "Saved to your tracker." : "Already in your tracker.";
+  } catch (e) {
+    out.textContent = "";
+    showError(`Could not read this page: ${e.message}`);
+  } finally {
+    $("collect-job").disabled = false;
+  }
+});
+
 render();

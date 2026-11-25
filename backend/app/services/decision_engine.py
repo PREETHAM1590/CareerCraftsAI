@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from typing import Any
 
 import httpx
@@ -83,14 +84,17 @@ def validate_questions(questions: dict) -> None:
             raise ValueError(f"question {name!r}: score needs 2-10 levels")
 
 
-async def decide(state: Any, questions: dict) -> dict:
+async def decide(user_id: str | None, state: Any, questions: dict) -> dict:
     """Answer `questions` about `state`. Returns
-    {"provider": str, "answers": {name: {...}}} in the Jev answer shape."""
+    {"provider": str, "answers": {name: {...}}} in the Jev answer shape.
+
+    ``user_id`` loads the member's known PII so the outbound form state is
+    redacted exactly like a gateway chat call."""
     validate_questions(questions)
     chosen = provider()
     if chosen in {"jev", "laya"}:
         try:
-            answers = await _remote(chosen, state, questions)
+            answers = await _remote(user_id, chosen, state, questions)
             return {"provider": chosen, "answers": answers}
         except Exception as exc:
             logger.warning(
@@ -102,7 +106,7 @@ async def decide(state: Any, questions: dict) -> dict:
     }
 
 
-async def _remote(chosen: str, state: Any, questions: dict) -> dict:
+async def _remote(user_id: str | None, chosen: str, state: Any, questions: dict) -> dict:
     if chosen == "jev":
         url = settings.TYPESAFE_BASE_URL.rstrip("/") + "/v1/systemone"
         headers = {"Authorization": f"Bearer {settings.TYPESAFE_API_KEY}"}
@@ -113,6 +117,9 @@ async def _remote(chosen: str, state: Any, questions: dict) -> dict:
             {"Authorization": f"Bearer {settings.LAYA_API_KEY}"} if settings.LAYA_API_KEY else {}
         )
         body = {"state": state, "questions": questions}
+    body["state"], body["questions"] = await _redact_payload(
+        user_id, body["state"], body["questions"]
+    )
     async with httpx.AsyncClient(timeout=settings.DECISION_ENGINE_TIMEOUT_S) as client:
         response = await client.post(url, json=body, headers=headers)
         response.raise_for_status()
@@ -120,6 +127,55 @@ async def _remote(chosen: str, state: Any, questions: dict) -> dict:
     if not isinstance(answers, dict):
         raise ValueError("decision engine returned no answers")
     return answers
+
+
+# One form plan matches many select/radio fields in a row; reuse the member's
+# privacy context briefly instead of reloading the profile for each one.
+_PRIVACY_TTL_S = 60.0
+_PRIVACY_MAX = 256
+_privacy_cache: dict[str, tuple[float, Any, Any]] = {}
+
+
+async def _privacy_context(user_id: str | None):
+    from app.services import pii_profile
+
+    key = str(user_id)
+    now = time.monotonic()
+    hit = _privacy_cache.get(key)
+    if hit and hit[0] > now:
+        return hit[1], hit[2]
+    policy, known = await pii_profile.load_privacy_context(user_id)
+    if len(_privacy_cache) >= _PRIVACY_MAX:
+        _privacy_cache.clear()
+    _privacy_cache[key] = (now + _PRIVACY_TTL_S, policy, known)
+    return policy, known
+
+
+async def _redact_payload(user_id: str | None, state: Any, questions: dict) -> tuple[Any, dict]:
+    """Swap the member's personal values for placeholders before the form
+    state leaves for the decision provider — the same privacy boundary every
+    chat-model path goes through. Mirrors the gateway's _privacy_vault: a
+    loading failure stops the call in strict mode, and a member's disabled
+    privacy policy turns redaction off."""
+    from app.core.config import settings as s
+    from app.core.pii_vault import PiiVault
+
+    if not s.PII_REDACTION_ENABLED:
+        return state, questions
+    try:
+        policy, known = await _privacy_context(user_id)
+        if not policy.enabled:
+            return state, questions
+        vault = PiiVault(known, detect_patterns=policy.detect_patterns)
+    except Exception as exc:
+        logger.warning("decision_engine_pii_unavailable error_type=%s", type(exc).__name__)
+        if s.PII_REDACTION_STRICT:
+            raise
+        return state, questions
+    redacted_state, redacted_questions = vault.redact_obj(state), vault.redact_obj(questions)
+    if vault.summary():
+        logger.info("decision_engine_pii_redacted counts=%s", vault.summary())
+    return redacted_state, redacted_questions
 
 
 # ── Heuristic fallback ──────────────────────────────────────────────
@@ -183,7 +239,12 @@ def _heuristic(state: Any, question: dict) -> dict:
 
 
 async def match_option(
-    value: Any, options: list[str], label: str = "", *, local_only: bool = False
+    value: Any,
+    options: list[str],
+    label: str = "",
+    *,
+    local_only: bool = False,
+    user_id: str | None = None,
 ) -> tuple[str | None, float]:
     """Pick the option of a select/radio group that means `value`.
     Returns (option, confidence); option is None below the threshold.
@@ -208,7 +269,7 @@ async def match_option(
     if local_only:
         result = {"answers": {"option": _heuristic(state, question)}}
     else:
-        result = await decide(state, {"option": question})
+        result = await decide(str(user_id) if user_id else None, state, {"option": question})
     answer = result["answers"].get("option") or {}
     key, confidence = answer.get("choice"), float(answer.get("confidence") or 0.0)
     if key not in criteria or confidence < settings.DECISION_ENGINE_MIN_CONFIDENCE:

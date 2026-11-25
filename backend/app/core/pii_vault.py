@@ -411,6 +411,21 @@ class PiiVault:
                     function["arguments"] = self.redact(function["arguments"])
         return redacted
 
+    def redact_obj(self, obj):
+        """Redact every string inside arbitrary JSON-like data (form state)."""
+        if isinstance(obj, str):
+            return self.redact(obj)
+        if isinstance(obj, list):
+            return [self.redact_obj(item) for item in obj]
+        if isinstance(obj, dict):
+            # Keys too: form state can key a radio group by an option's text,
+            # which may be the member's own name or city.
+            return {
+                (self.redact(key) if isinstance(key, str) else key): self.redact_obj(value)
+                for key, value in obj.items()
+            }
+        return obj
+
     # ── inbound ──
 
     def _lookup(self, kind: str, n: str) -> str | None:

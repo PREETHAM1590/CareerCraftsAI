@@ -34,6 +34,9 @@ def test_provider_selection(monkeypatch, configured, key, url, expected):
 async def test_jev_request_shape_and_answers(monkeypatch):
     monkeypatch.setattr(settings, "DECISION_ENGINE_PROVIDER", "jev")
     monkeypatch.setattr(settings, "TYPESAFE_API_KEY", "tk_test")
+    monkeypatch.setattr(
+        decision_engine, "_redact_payload", AsyncMock(side_effect=lambda u, s, q: (s, q))
+    )
     seen = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -49,7 +52,9 @@ async def test_jev_request_shape_and_answers(monkeypatch):
         lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw),
     )
     result = await decision_engine.decide(
-        "Thank you for applying", {"ok": {"type": "noul", "instructions": "Confirmed?"}}
+        None,
+        "Thank you for applying",
+        {"ok": {"type": "noul", "instructions": "Confirmed?"}},
     )
 
     assert result == {"provider": "jev", "answers": {"ok": {"type": "noul", "noul": 0.97}}}
@@ -70,7 +75,7 @@ async def test_provider_outage_falls_back_to_heuristics(monkeypatch):
             transport=httpx.MockTransport(lambda r: httpx.Response(503)), **kw
         ),
     )
-    result = await decision_engine.decide("x", {"ok": {"type": "noul", "instructions": "?"}})
+    result = await decision_engine.decide(None, "x", {"ok": {"type": "noul", "instructions": "?"}})
     assert result["provider"] == "heuristic"
     assert result["answers"]["ok"] == {"type": "noul", "noul": 0.5}  # "unknown", never acted on
 
@@ -242,6 +247,46 @@ async def test_saved_custom_answers_are_reused_but_new_questions_get_drafts(monk
     }
 
 
+@pytest.mark.parametrize("error_status", [None, 400, 429])
+async def test_llm_fallback_uses_live_session_and_preserves_plan_on_router_error(
+    monkeypatch, error_status
+):
+    from fastapi import HTTPException
+
+    from app.applications import saved_answers
+    from app.core import model_router
+
+    db = MagicMock()
+    task = SimpleNamespace(user_id=uuid.uuid4())
+    entry = {
+        "field_id": "tools",
+        "label": "Tell us about your programming experience",
+        "value": None,
+        "source": "unresolved",
+    }
+    original = entry.copy()
+    answers = AsyncMock(return_value=[{"question_key": "custom.tools", "value": "Python"}])
+    invoke = MagicMock(return_value=SimpleNamespace(content="I use Python."))
+    router = AsyncMock(return_value=SimpleNamespace(invoke=invoke))
+    if error_status is not None:
+        router.side_effect = HTTPException(status_code=error_status)
+    monkeypatch.setattr(saved_answers, "list_answers", answers)
+    monkeypatch.setattr(model_router, "get_llm", router)
+
+    await extension_service._llm_fallback(db, task, [entry], ["tools"])
+
+    answers.assert_awaited_once_with(db, task.user_id)
+    router.assert_awaited_once_with(str(task.user_id), db, task_type="auto_apply")
+    if error_status is not None:
+        assert entry == original
+        invoke.assert_not_called()
+    else:
+        assert "Python" in invoke.call_args.args[0][-1].content
+        assert entry["value"] == "I use Python."
+        assert entry["source"] == "ai_draft"
+        assert entry["requires_review"] is True
+
+
 def test_answer_keys_prefer_canonical_rules():
     assert (
         extension_service.answer_key("Do you need visa sponsorship?")
@@ -314,3 +359,63 @@ async def test_claim_locks_device_row_first_and_flags_redelivery():
     assert await extension_service.claim_next_task(db, device) is task
     assert "FOR UPDATE" in str(db.execute.await_args_list[0].args[0])
     assert task.redelivered is True
+
+
+async def test_llm_fallback_drafts_concurrently_within_the_budget(monkeypatch):
+    import asyncio
+    import time
+
+    from app.applications import saved_answers
+    from app.core import model_router
+
+    def slow_invoke(messages):
+        time.sleep(0.3)
+        return SimpleNamespace(content="Yes, I can.")
+
+    monkeypatch.setattr(
+        saved_answers,
+        "list_answers",
+        AsyncMock(return_value=[{"question_key": "custom.notes", "value": "Flexible"}]),
+    )
+    monkeypatch.setattr(
+        model_router, "get_llm", AsyncMock(return_value=SimpleNamespace(invoke=slow_invoke))
+    )
+    plan = [
+        {"field_id": f"q{i}", "label": f"Question {i}", "value": None, "source": "unresolved"}
+        for i in range(6)
+    ]
+    started = time.monotonic()
+    await extension_service._llm_fallback(
+        MagicMock(), SimpleNamespace(user_id=uuid.uuid4()), plan, [p["field_id"] for p in plan]
+    )
+    # Six 0.3 s calls run together, not one after another (1.8 s).
+    assert time.monotonic() - started < 1.2
+    assert all(p["value"] == "Yes, I can." and p["source"] == "ai_draft" for p in plan)
+
+    monkeypatch.setattr(extension_service, "_LLM_FALLBACK_BUDGET_S", 0.05)
+    late = [{"field_id": "late", "label": "Late", "value": None, "source": "unresolved"}]
+    await extension_service._llm_fallback(
+        MagicMock(), SimpleNamespace(user_id=uuid.uuid4()), late, ["late"]
+    )
+    assert late[0]["value"] is None  # past the deadline: left to the member
+    await asyncio.sleep(0.4)  # let the abandoned worker thread finish
+
+
+def test_collect_accepts_naukri_subdomains_only_for_naukri():
+    job = extension_service.normalize_collected_job(
+        {"url": "https://jobs.naukri.com/listing-1", "title": "Data Analyst"}
+    )
+    assert job["platform"] == "naukri"
+    with pytest.raises(ValueError, match="Unsupported job board host"):
+        extension_service.normalize_collected_job(
+            {"url": "https://app.instahyre.com/job-1", "title": "Data Analyst"}
+        )
+
+
+def test_redact_obj_redacts_keys_too():
+    from app.core.pii_vault import KnownPii, PiiVault
+
+    known = KnownPii()
+    known.add("NAME", "Priya Sharma")
+    out = PiiVault(known).redact_obj({"Priya Sharma": "self", "other": ["Priya Sharma"]})
+    assert "Priya Sharma" not in str(out)

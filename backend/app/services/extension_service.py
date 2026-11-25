@@ -24,7 +24,7 @@ import zipfile
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -686,6 +686,7 @@ async def plan_fields(db: AsyncSession, task: ExtensionTask, raw_fields: list[di
                 field.options,
                 field.label,
                 local_only=_local_match_only(field.normalized_key or "") or _local_match_only(key),
+                user_id=str(task.user_id),
             )
             if option is None:
                 entry.update(
@@ -702,6 +703,22 @@ async def plan_fields(db: AsyncSession, task: ExtensionTask, raw_fields: list[di
     unresolved_required = [
         p["field_id"] for p in plan if p["required"] and p["value"] in (None, "")
     ]
+    # Identity/sensitive/consent questions never go to the LLM: their
+    # answers must stay on this server.
+    by_field = {field.field_id: field for field in fields}
+    llm_eligible = [
+        fid
+        for fid in unresolved_required
+        if by_field[fid].input_type != "checkbox"
+        and not _local_match_only(by_field[fid].normalized_key or "")
+        and not _local_match_only(normalize_question(by_field[fid].label) or "")
+    ]
+    if llm_eligible:
+        await _llm_fallback(db, task, plan, llm_eligible)
+        # A drafted answer is no longer missing; it is flagged requires_review.
+        unresolved_required = [
+            p["field_id"] for p in plan if p["required"] and p["value"] in (None, "")
+        ]
     _remember_open_questions(task, plan)
     _remember_answer_sources(task, plan)
     return {
@@ -913,3 +930,210 @@ def package_extension(root: Path = EXTENSION_DIR) -> tuple[str, bytes]:
                 continue
             archive.write(path, f"{_PACKAGE_ROOT}/{relative.as_posix()}")
     return str(manifest.get("version", "0")), buffer.getvalue()
+
+
+# ── Board capture: Naukri / Instahyre listings collected by the extension ──
+
+# Boards the backend accepts collected listings from. The extension only ever
+# captures what is on screen (read-only); these normalizers map each board's
+# DOM extraction onto the job dict `saved_boards.save_jobs` expects.
+COLLECTABLE_HOSTS = {
+    "naukri.com": "naukri",
+    "www.naukri.com": "naukri",
+    "instahyre.com": "instahyre",
+    "www.instahyre.com": "instahyre",
+    "linkedin.com": "linkedin",
+    "www.linkedin.com": "linkedin",
+}
+
+_COLLECT_MAX_TEXT = 20_000
+
+
+def _strip_tracking(url: str) -> str:
+    """Drop utm_*/ref tracking params the content script may have missed."""
+    parts = urlsplit(url)
+    if not parts.query:
+        return url
+    from urllib.parse import parse_qsl, urlencode
+
+    kept = [
+        (k, v) for k, v in parse_qsl(parts.query) if not re.match(r"^(utm_|ref$|src$)", k, re.I)
+    ]
+    return urlunsplit(parts._replace(query=urlencode(kept)))
+
+
+def normalize_collected_job(payload: dict) -> dict:
+    """Map a raw listing the content script scraped onto the job schema used by
+    search/track/auto-apply drafts. Raises ValueError when the capture is not
+    a job listing we can use."""
+    parts = urlsplit((payload.get("url") or "").strip())
+    host = (parts.hostname or "").lower()
+    board = COLLECTABLE_HOSTS.get(host)
+    if board is None and host.endswith(".naukri.com"):
+        board = "naukri"  # Naukri serves listings from regional subdomains too
+    if board is None:
+        raise ValueError(f"Unsupported job board host: {host or 'unknown'}")
+    # The URL becomes a link in the app: only a plain https board URL.
+    if parts.scheme != "https" or parts.username or parts.password or parts.port:
+        raise ValueError("A collected listing URL must be a plain https link")
+
+    title = (payload.get("title") or "").strip()
+    company = (payload.get("company") or "").strip()
+    url = (payload.get("url") or "").strip()
+    if not title or not url:
+        raise ValueError("A collected listing needs at least a title and a URL")
+
+    job: dict = {
+        "title": title[:200],
+        "company": company[:150] or "Unknown",
+        "url": _strip_tracking(url),
+        "platform": board,
+        "source": f"{board}-extension",
+    }
+    location = (payload.get("location") or "").strip()
+    if location:
+        job["location"] = location[:150]
+
+    description = (payload.get("description") or "").strip()
+    if description:
+        job["description"] = description[:_COLLECT_MAX_TEXT]
+
+    salary = (payload.get("salary") or "").strip()
+    if salary:
+        job["salary"] = salary[:120]
+
+    posted_raw = (payload.get("posted_at") or "").strip()
+    if posted_raw:
+        parsed = _parse_board_date(posted_raw)
+        if parsed:
+            job["posted_at"] = parsed
+
+    skills = payload.get("skills")
+    if isinstance(skills, list) and skills:
+        job["skills"] = [str(s).strip()[:60] for s in skills[:30] if str(s).strip()]
+    return job
+
+
+def _parse_board_date(raw: str):
+    """Board-specific 'posted' strings ("30 Days Ago", "just now", ISO) to an
+    ISO timestamp; None when unparseable so the field is simply omitted."""
+    from datetime import timedelta
+
+    raw = raw.strip().lower()
+    if not raw:
+        return None
+    iso = raw.replace("z", "+00:00")
+    try:
+        return datetime.fromisoformat(iso).isoformat()
+    except ValueError:
+        pass
+    if raw in {"just now", "today", "few hours ago", "a few hours ago"}:
+        return datetime.now(UTC).isoformat()
+    # Naukri writes "30+ Days Ago"; LinkedIn "1 week ago" / "a day ago".
+    match = re.search(r"(\d+|an?)\+?\s*(minute|hour|day|week|month)s?\s*ago", raw)
+    if not match:
+        return None
+    amount = 1 if match.group(1) in {"a", "an"} else int(match.group(1))
+    unit = match.group(2)
+    delta = {
+        "minute": timedelta(minutes=amount),
+        "hour": timedelta(hours=amount),
+        "day": timedelta(days=amount),
+        "week": timedelta(weeks=amount),
+        "month": timedelta(days=amount * 30),
+    }[unit]
+    return (datetime.now(UTC) - delta).isoformat()
+
+
+# ── Generic form fallback: LLM mapping for questions no template answered ──
+
+_LLM_FALLBACK_MAX = 8  # questions per plan; the rest stay with the member
+# All drafts together must finish well inside the extension's 40 s request
+# timeout: questions still being drafted at the deadline stay with the member.
+_LLM_FALLBACK_BUDGET_S = 15.0
+
+
+async def _llm_fallback(
+    db: AsyncSession, task: ExtensionTask, plan: list[dict], field_ids: list[str]
+) -> None:
+    """For required questions no template or saved answer resolved, ask the
+    gateway LLM to map one of the member's saved answers / resume facts onto
+    the question. Everything it proposes keeps ``requires_review`` and an
+    ``ai_draft`` source, so auto-submit never fires without a person.
+
+    Identity, sensitive and disclosure answers never leave this server: they
+    are dropped from what the model sees, whatever the question."""
+    todo = [p for p in plan if p["field_id"] in set(field_ids)][:_LLM_FALLBACK_MAX]
+    if not todo:
+        return
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    from app.applications import saved_answers as _sa
+    from app.core.model_router import get_llm
+
+    try:
+        answers = await _sa.list_answers(db, task.user_id)
+    except Exception as exc:  # noqa: BLE001 — fallback is best effort
+        logger.info("Saved answers unavailable: %s", type(exc).__name__)
+        return
+    saved = {
+        a["question_key"]: a.get("value")
+        for a in answers
+        if a.get("question_key")
+        and a.get("value") not in (None, "", [])
+        and not _local_match_only(a["question_key"])
+    }
+    if not saved:
+        return  # nothing the model may use: leave the questions to the member
+    try:
+        llm = await get_llm(str(task.user_id), db, task_type="auto_apply")
+    except Exception as exc:  # noqa: BLE001 — fallback is best effort
+        logger.info("LLM fallback unavailable: %s", type(exc).__name__)
+        return
+    by_id = {p["field_id"]: p for p in plan}
+
+    async def draft(field: dict) -> tuple[str, str | None]:
+        try:
+            messages = [
+                SystemMessage(
+                    content=(
+                        "Map the candidate's saved answers onto one application form "
+                        "question. Use only the saved answers given; if none fits, "
+                        "reply NO_ANSWER. Output only the answer text, first person."
+                    )
+                ),
+                HumanMessage(
+                    content=(
+                        f"Question ({field.get('input_type', 'text')}): {field.get('label', '')}\n"
+                        f"Options: {json.dumps(field.get('options') or [])}\n"
+                        f"Saved answers: {json.dumps(saved, default=str)[:4000]}"
+                    )
+                ),
+            ]
+            result = await asyncio.to_thread(llm.invoke, messages)
+            text = (getattr(result, "content", "") or "").strip()
+            if not text or text.upper().startswith("NO_ANSWER") or len(text) > 2000:
+                return field["field_id"], None
+            return field["field_id"], text
+        except Exception as exc:  # noqa: BLE001 — one bad question must not stop the plan
+            logger.info("LLM fallback failed: %s", type(exc).__name__)
+            return field["field_id"], None
+
+    # Concurrently, under one budget: drafts finished by the deadline are kept.
+    tasks = [asyncio.create_task(draft(field)) for field in todo]
+    done, pending = await asyncio.wait(tasks, timeout=_LLM_FALLBACK_BUDGET_S)
+    for task_ in pending:
+        task_.cancel()
+    if pending:
+        logger.info("LLM fallback: %d question(s) left to the member at the deadline", len(pending))
+    for finished in done:
+        field_id, text = finished.result()
+        entry = by_id.get(field_id)
+        if text and entry is not None and entry["value"] in (None, ""):
+            entry.update(
+                value=text[:2000],
+                source="ai_draft",
+                requires_review=True,
+                missing_reason=None,
+                confidence=0.0,
+            )

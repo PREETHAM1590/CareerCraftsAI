@@ -936,3 +936,40 @@ async def decide(
         }
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+class CollectJobRequest(BaseModel):
+    """A listing the content script read off the page — capture only."""
+
+    url: str = Field(min_length=1, max_length=2000)
+    title: str = Field(min_length=1, max_length=300)
+    company: str = Field(default="", max_length=200)
+    location: str = Field(default="", max_length=200)
+    description: str = Field(default="", max_length=50_000)
+    salary: str = Field(default="", max_length=200)
+    posted_at: str = Field(default="", max_length=100)
+    skills: list[str] = Field(default_factory=list, max_length=40)
+
+
+@router.post("/device/collect-job")
+@limiter.limit("30/minute")
+async def collect_job(
+    request: Request,
+    body: CollectJobRequest,
+    device: ExtensionDevice = Depends(get_device),
+    db: AsyncSession = Depends(get_db),
+):
+    """Read-only capture: the extension sends the listing open in the member's
+    browser (Naukri, Instahyre, LinkedIn) and it is tracked like a search
+    result. Nothing is ever submitted to the board from here."""
+    from app.services import saved_boards
+
+    payload = body.model_dump()
+    try:
+        job = extension_service.normalize_collected_job(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    ids, created = await saved_boards.save_jobs(db, device.user_id, [job])
+    if not ids:
+        return {"status": "duplicate", "created": 0, "application_id": None}
+    return {"status": "saved", "created": created, "application_id": str(next(iter(ids)))}

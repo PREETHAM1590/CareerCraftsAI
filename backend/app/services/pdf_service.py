@@ -239,6 +239,57 @@ _UNICODE_FONTS = {
             "NotoSans-BoldItalic.ttf",
         ),
         ("arial.ttf", "arialbd.ttf", "ariali.ttf", "arialbi.ttf"),
+        # Indic scripts (Devanagari, Tamil, ...): tried last, so Latin text
+        # keeps DejaVu/Noto and Devanagari/Tamil text falls through to the
+        # first family whose glyphs actually cover it.
+        (
+            "NotoSansDevanagari-Regular.ttf",
+            "NotoSansDevanagari-Bold.ttf",
+            "NotoSansDevanagari-Regular.ttf",
+            "NotoSansDevanagari-Bold.ttf",
+        ),
+        (
+            "NotoSansTamil-Regular.ttf",
+            "NotoSansTamil-Bold.ttf",
+            "NotoSansTamil-Regular.ttf",
+            "NotoSansTamil-Bold.ttf",
+        ),
+        (
+            "NotoSansTelugu-Regular.ttf",
+            "NotoSansTelugu-Bold.ttf",
+            "NotoSansTelugu-Regular.ttf",
+            "NotoSansTelugu-Bold.ttf",
+        ),
+        (
+            "NotoSansKannada-Regular.ttf",
+            "NotoSansKannada-Bold.ttf",
+            "NotoSansKannada-Regular.ttf",
+            "NotoSansKannada-Bold.ttf",
+        ),
+        (
+            "NotoSansGurmukhi-Regular.ttf",
+            "NotoSansGurmukhi-Bold.ttf",
+            "NotoSansGurmukhi-Regular.ttf",
+            "NotoSansGurmukhi-Bold.ttf",
+        ),
+        (
+            "NotoSansGujarati-Regular.ttf",
+            "NotoSansGujarati-Bold.ttf",
+            "NotoSansGujarati-Regular.ttf",
+            "NotoSansGujarati-Bold.ttf",
+        ),
+        (
+            "NotoSansBengali-Regular.ttf",
+            "NotoSansBengali-Bold.ttf",
+            "NotoSansBengali-Regular.ttf",
+            "NotoSansBengali-Bold.ttf",
+        ),
+        (
+            "NotoSansMalayalam-Regular.ttf",
+            "NotoSansMalayalam-Bold.ttf",
+            "NotoSansMalayalam-Regular.ttf",
+            "NotoSansMalayalam-Bold.ttf",
+        ),
     ],
     "serif": [
         (
@@ -254,6 +305,56 @@ _UNICODE_FONTS = {
             "DejaVuSerif-BoldItalic.ttf",
         ),
         ("times.ttf", "timesbd.ttf", "timesi.ttf", "timesbi.ttf"),
+        # Same Indic tail as the sans list, with serif filenames where they
+        # ship; sans-Noto files are the realistic fallback on Linux.
+        (
+            "NotoSerifDevanagari-Regular.ttf",
+            "NotoSerifDevanagari-Bold.ttf",
+            "NotoSansDevanagari-Regular.ttf",
+            "NotoSansDevanagari-Bold.ttf",
+        ),
+        (
+            "NotoSerifTamil-Regular.ttf",
+            "NotoSerifTamil-Bold.ttf",
+            "NotoSansTamil-Regular.ttf",
+            "NotoSansTamil-Bold.ttf",
+        ),
+        (
+            "NotoSerifTelugu-Regular.ttf",
+            "NotoSerifTelugu-Bold.ttf",
+            "NotoSansTelugu-Regular.ttf",
+            "NotoSansTelugu-Bold.ttf",
+        ),
+        (
+            "NotoSerifKannada-Regular.ttf",
+            "NotoSerifKannada-Bold.ttf",
+            "NotoSansKannada-Regular.ttf",
+            "NotoSansKannada-Bold.ttf",
+        ),
+        (
+            "NotoSerifGurmukhi-Regular.ttf",
+            "NotoSerifGurmukhi-Bold.ttf",
+            "NotoSansGurmukhi-Regular.ttf",
+            "NotoSansGurmukhi-Bold.ttf",
+        ),
+        (
+            "NotoSerifGujarati-Regular.ttf",
+            "NotoSerifGujarati-Bold.ttf",
+            "NotoSansGujarati-Regular.ttf",
+            "NotoSansGujarati-Bold.ttf",
+        ),
+        (
+            "NotoSerifBengali-Regular.ttf",
+            "NotoSerifBengali-Bold.ttf",
+            "NotoSansBengali-Regular.ttf",
+            "NotoSansBengali-Bold.ttf",
+        ),
+        (
+            "NotoSerifMalayalam-Regular.ttf",
+            "NotoSerifMalayalam-Bold.ttf",
+            "NotoSansMalayalam-Regular.ttf",
+            "NotoSansMalayalam-Bold.ttf",
+        ),
     ],
 }
 
@@ -290,18 +391,19 @@ def _find_font(filename: str) -> Path | None:
 
 
 @functools.lru_cache(maxsize=2)
-def _unicode_family(serif: bool) -> tuple[str, frozenset[int]] | None:
-    """Register (once) the first available Unicode TTF family.
-
-    Returns the family's base font name and the code points it covers, or
-    None when no suitable font is installed.
-    """
+def _unicode_families(serif: bool) -> tuple[tuple[str, frozenset[int]], ...]:
+    """Register (once) every available Unicode TTF family, in preference
+    order, with the code points each covers."""
     kinds = ("serif", "sans") if serif else ("sans",)
+    found: list[tuple[str, frozenset[int]]] = []
+    seen: set[str] = set()
     for files in (f for kind in kinds for f in _UNICODE_FONTS[kind]):
         regular = _find_font(files[0])
         if regular is None:
             continue
         name = "CC-" + files[0].rsplit(".", 1)[0].removesuffix("-Regular")
+        if name in seen:
+            continue
         names = (name, f"{name}-Bold", f"{name}-Italic", f"{name}-BoldItalic")
         try:
             for font_name, filename in zip(names, files, strict=True):
@@ -316,8 +418,31 @@ def _unicode_family(serif: bool) -> tuple[str, frozenset[int]] | None:
             italic=names[2],
             boldItalic=names[3],
         )
-        return name, frozenset(pdfmetrics.getFont(name).face.charToGlyph)
-    return None
+        seen.add(name)
+        found.append((name, frozenset(pdfmetrics.getFont(name).face.charToGlyph)))
+    return tuple(found)
+
+
+@functools.lru_cache(maxsize=2)
+def _unicode_family(serif: bool) -> tuple[str, frozenset[int]] | None:
+    """The first available Unicode TTF family: its base font name and the
+    code points it covers, or None when no suitable font is installed."""
+    families = _unicode_families(serif)
+    return families[0] if families else None
+
+
+def _covering_family(serif: bool, needed: set[int]) -> tuple[str, frozenset[int]] | None:
+    """The first family that draws every needed character; otherwise the one
+    that draws the most of them (a Latin font for Cyrillic, a Tamil font for
+    Tamil, ...). None when no installed family draws any."""
+    best, best_count = None, 0
+    for family in _unicode_families(serif):
+        count = len(needed & family[1])
+        if count == len(needed):
+            return family
+        if count > best_count:
+            best, best_count = family, count
+    return best
 
 
 def _document_fonts(theme: Theme, text: str) -> tuple[Theme, Glyphs]:
@@ -327,8 +452,8 @@ def _document_fonts(theme: Theme, text: str) -> tuple[Theme, Glyphs]:
     extra = {ord(ch) for ch in set(text.translate(_ASCII_PUNCT)) if not _winansi_ok(ch)}
     if not extra:
         return theme, None
-    family = _unicode_family(theme.regular.startswith("Times"))
-    if family is None or not extra & family[1]:
+    family = _covering_family(theme.regular.startswith("Times"), extra)
+    if family is None:
         return theme, None
     name, glyphs = family
     return replace(theme, regular=name, bold=f"{name}-Bold", italic=f"{name}-Italic"), glyphs

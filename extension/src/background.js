@@ -457,7 +457,7 @@ async function handleMessage(msg, sender) {
   if (contentMessages.has(msg?.type) && !taskSenderAllowed(sender, await getActiveTask(), msg, chrome.runtime.id)) {
     return { error: "This page does not own the active application." };
   }
-  if (["CC_GET_STATUS", "CC_VALIDATE_AND_PAIR", "CC_DISCONNECT", "CC_CHECK_NOW", "CC_APPROVE_SUBMIT", "CC_APPROVE_HOST", "CC_CONFIRM_PAIR", "CC_REJECT_PAIR"].includes(msg?.type) && !popup) return { error: "Open the CareerCraft extension popup to perform this action." };
+  if (["CC_GET_STATUS", "CC_VALIDATE_AND_PAIR", "CC_DISCONNECT", "CC_CHECK_NOW", "CC_APPROVE_SUBMIT", "CC_APPROVE_HOST", "CC_CONFIRM_PAIR", "CC_REJECT_PAIR", "CC_COLLECT_JOB"].includes(msg?.type) && !popup) return { error: "Open the CareerCraft extension popup to perform this action." };
   switch (msg && msg.type) {
     case "WAKE":
     case "CC_CHECK_NOW": {
@@ -620,6 +620,29 @@ async function handleMessage(msg, sender) {
       const res = await apiFetch(pairing, "/extension/device/decide", {
         method: "POST",
         json: { state: msg.state, questions: msg.questions },
+      });
+      if (!res.ok) return { error: res.error || `http_${res.status}` };
+      return { data: res.data };
+    }
+
+    case "CC_COLLECT_JOB": {
+      // Read-only capture from Naukri/Instahyre/LinkedIn: POST the listing
+      // the member is viewing so it is tracked like a search result.
+      const pairing = await getPairing();
+      if (!pairing) return { error: "not_paired" };
+      const job = msg.job || {};
+      const res = await apiFetch(pairing, "/extension/device/collect-job", {
+        method: "POST",
+        json: {
+          url: job.url,
+          title: job.title,
+          company: job.company || "",
+          location: job.location || "",
+          description: job.description || "",
+          salary: job.salary || "",
+          posted_at: job.posted_at || "",
+          skills: Array.isArray(job.skills) ? job.skills : [],
+        },
       });
       if (!res.ok) return { error: res.error || `http_${res.status}` };
       return { data: res.data };

@@ -18,6 +18,7 @@ def _use_fonts(monkeypatch, dirs: tuple[Path, ...], roots: tuple[Path, ...]) -> 
     monkeypatch.setattr(pdf_service, "_SYSTEM_FONT_ROOTS", roots)
     pdf_service._system_fonts.cache_clear()
     pdf_service._unicode_family.cache_clear()
+    pdf_service._unicode_families.cache_clear()
 
 
 @pytest.fixture
@@ -26,6 +27,7 @@ def font_lookup(monkeypatch):
     monkeypatch.undo()
     pdf_service._system_fonts.cache_clear()
     pdf_service._unicode_family.cache_clear()
+    pdf_service._unicode_families.cache_clear()
 
 
 @pytest.fixture
@@ -227,7 +229,12 @@ def test_unicode_candidates_include_linux_liberation_and_dejavu():
     assert serif[0] == tuple(f"LiberationSerif-{s}.ttf" for s in _STYLES)
     assert sans[1][:2] == ("DejaVuSans.ttf", "DejaVuSans-Bold.ttf")
     assert serif[1][:2] == ("DejaVuSerif.ttf", "DejaVuSerif-Bold.ttf")
-    assert sans[-1][0] == "arial.ttf" and serif[-1][0] == "times.ttf"
+    assert sans[3][0] == "arial.ttf" and serif[2][0] == "times.ttf"
+    # Indic families come after the Latin candidates so pure-Latin resumes
+    # keep DejaVu/Liberation and Indic text falls through to a covering font.
+    assert sans[-1][0] == "NotoSansMalayalam-Regular.ttf"
+    assert any("Devanagari" in files[0] for files in sans)
+    assert any("Devanagari" in files[0] for files in serif)
 
 
 def test_liberation_fonts_in_linux_layout_render_cyrillic(font_lookup, tmp_path):
@@ -263,6 +270,23 @@ def test_dejavu_fonts_in_linux_layout_are_found(font_lookup, tmp_path):
     assert pdf_service._unicode_family(True)[0] == "CC-DejaVuSerif"
     pdf = generate_resume_pdf(CYRILLIC, template="modern")
     assert "Иван Петров" in fitz.open(stream=pdf, filetype="pdf")[0].get_text()
+
+
+@pytest.mark.parametrize(("template", "family"), [("modern", "Sans"), ("classic", "Serif")])
+def test_unicode_selection_falls_through_from_devanagari_to_tamil(template, family):
+    for script in ("Devanagari", "Tamil"):
+        if not pdf_service._find_font(f"Noto{family}{script}-Regular.ttf"):
+            pytest.skip(f"Noto {family} {script} font is not installed")
+
+    theme = THEMES[template]
+    # Resolve two distinct sets with the same theme to exercise the cache key.
+    devanagari, _ = pdf_service._document_fonts(theme, "ह")
+    tamil, glyphs = pdf_service._document_fonts(theme, "த")
+    assert devanagari.regular == f"CC-Noto{family}Devanagari"
+    assert tamil.regular == f"CC-Noto{family}Tamil"
+    assert glyphs is not None and ord("த") in glyphs
+    pdf = generate_resume_pdf("# த\n## SUMMARY\nத", template=template)
+    assert "த" in fitz.open(stream=pdf, filetype="pdf")[0].get_text()
 
 
 def test_latin_extended_text_uses_the_unicode_font(font_lookup):
@@ -457,3 +481,18 @@ def test_model_text_is_escaped_not_interpreted_as_markup():
     pdf = generate_resume_pdf(text, full_name="Jane", template="modern")
     body = " ".join(t for _, _, t in _lines(pdf))
     assert "<script>alert(1)</script> & bold claims" in body
+
+
+def test_document_fonts_pick_the_family_that_covers_the_script(monkeypatch):
+    """Tamil text must get the Tamil font even when a Devanagari font is
+    earlier in the list (Noto Sans Devanagari has no Tamil glyphs)."""
+    latin = ("CC-DejaVuSans", frozenset(range(0x20, 0x250)))
+    devanagari = ("CC-NotoSansDevanagari", frozenset(range(0x0900, 0x0980)))
+    tamil = ("CC-NotoSansTamil", frozenset(range(0x0B80, 0x0C00)))
+    monkeypatch.setattr(pdf_service, "_unicode_families", lambda serif: (latin, devanagari, tamil))
+    theme, glyphs = pdf_service._document_fonts(THEMES["modern"], "தமிழ் செல்வன்")
+    assert theme.regular == "CC-NotoSansTamil" and glyphs == tamil[1]
+    theme, _ = pdf_service._document_fonts(THEMES["modern"], "प्रिया शर्मा")
+    assert theme.regular == "CC-NotoSansDevanagari"
+    theme, _ = pdf_service._document_fonts(THEMES["modern"], "Łódź")
+    assert theme.regular == "CC-DejaVuSans"
