@@ -13,6 +13,8 @@ export const STATIC_HOST_ORIGINS = [
   "https://www.linkedin.com",
   "https://*.naukri.com",
   "https://www.naukri.com",
+  "https://internshala.com",
+  "https://*.internshala.com",
   "https://*.greenhouse.io",
   "https://jobs.lever.co",
   "https://jobs.eu.lever.co",
@@ -56,7 +58,12 @@ export const LOCAL_KEYS = { PAIRING: "pairing", AUTOFILL_PROFILE: "autofillProfi
 
 // Never auto-submitted, whatever the account setting: LinkedIn's terms forbid
 // automation and Naukri's were not reviewed. The server enforces this too.
-export const NO_AUTO_SUBMIT_HOSTS = ["linkedin.com", "naukri.com"];
+// Scope: job applications. The one exception is LinkedIn outreach
+// (src/linkedin.js, backend linkedin_sender): off unless the server sets
+// LINKEDIN_OUTREACH_ENABLED, and only drafts the member approves and confirms
+// per batch, under daily caps. It still carries LinkedIn's ToS risk; turning
+// it on is the product owner's call.
+export const NO_AUTO_SUBMIT_HOSTS = ["linkedin.com", "naukri.com", "internshala.com"];
 
 export function autoSubmitBlockedHost(urlString) {
   let host = "";

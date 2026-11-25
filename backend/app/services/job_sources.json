@@ -2343,5 +2343,85 @@
     "company": "SarvM.AI",
     "provenance": "verified live 2026-11-12 via /jobs listing page (5 jobs, 5 in India or open to India)",
     "policy": "public keyless board page (robots.txt allows /jobs); stop on denial; no browser fallback"
+  },
+  {
+    "id": "x:software",
+    "family": "x_hiring",
+    "tenant": "",
+    "url": "\"software engineer\" OR developer OR \"backend engineer\" OR \"frontend engineer\" OR \"full stack\"",
+    "permitted": true,
+    "refresh_hours": 24,
+    "provenance": "X API v2 recent search (official, pay per post read); needs X_BEARER_TOKEN, inert without it",
+    "policy": "credit the post and link to it; employer apply links only; scam and job-seeker posts dropped"
+  },
+  {
+    "id": "x:data-ai",
+    "family": "x_hiring",
+    "tenant": "",
+    "url": "\"data scientist\" OR \"data analyst\" OR \"data engineer\" OR \"machine learning\" OR \"AI engineer\"",
+    "permitted": true,
+    "refresh_hours": 24,
+    "provenance": "X API v2 recent search (official, pay per post read); needs X_BEARER_TOKEN, inert without it",
+    "policy": "credit the post and link to it; employer apply links only; scam and job-seeker posts dropped"
+  },
+  {
+    "id": "x:product-design",
+    "family": "x_hiring",
+    "tenant": "",
+    "url": "\"product manager\" OR \"product designer\" OR \"UX designer\" OR \"UI designer\"",
+    "permitted": true,
+    "refresh_hours": 24,
+    "provenance": "X API v2 recent search (official, pay per post read); needs X_BEARER_TOKEN, inert without it",
+    "policy": "credit the post and link to it; employer apply links only; scam and job-seeker posts dropped"
+  },
+  {
+    "id": "x:freshers",
+    "family": "x_hiring",
+    "tenant": "",
+    "url": "fresher OR freshers OR intern OR internship OR \"entry level\" OR \"new grad\"",
+    "permitted": true,
+    "refresh_hours": 24,
+    "provenance": "X API v2 recent search (official, pay per post read); needs X_BEARER_TOKEN, inert without it",
+    "policy": "credit the post and link to it; employer apply links only; scam and job-seeker posts dropped"
+  },
+  {
+    "id": "linkedin-posts:software",
+    "family": "linkedin_posts",
+    "tenant": "",
+    "url": "\"software engineer\" OR developer OR \"backend engineer\" OR \"frontend engineer\" OR \"full stack\"",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "public linkedin.com/posts pages from search engines via self-hosted SearXNG; needs SEARXNG_URL, inert without it; LinkedIn is never contacted",
+    "policy": "credit the post and link to it; employer apply links only; scam and job-seeker posts dropped"
+  },
+  {
+    "id": "linkedin-posts:data-ai",
+    "family": "linkedin_posts",
+    "tenant": "",
+    "url": "\"data scientist\" OR \"data analyst\" OR \"data engineer\" OR \"machine learning\" OR \"AI engineer\"",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "public linkedin.com/posts pages from search engines via self-hosted SearXNG; needs SEARXNG_URL, inert without it; LinkedIn is never contacted",
+    "policy": "credit the post and link to it; employer apply links only; scam and job-seeker posts dropped"
+  },
+  {
+    "id": "linkedin-posts:product-design",
+    "family": "linkedin_posts",
+    "tenant": "",
+    "url": "\"product manager\" OR \"product designer\" OR \"UX designer\" OR \"UI designer\"",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "public linkedin.com/posts pages from search engines via self-hosted SearXNG; needs SEARXNG_URL, inert without it; LinkedIn is never contacted",
+    "policy": "credit the post and link to it; employer apply links only; scam and job-seeker posts dropped"
+  },
+  {
+    "id": "linkedin-posts:freshers",
+    "family": "linkedin_posts",
+    "tenant": "",
+    "url": "fresher OR freshers OR intern OR internship OR \"entry level\" OR \"new grad\"",
+    "permitted": true,
+    "refresh_hours": 12,
+    "provenance": "public linkedin.com/posts pages from search engines via self-hosted SearXNG; needs SEARXNG_URL, inert without it; LinkedIn is never contacted",
+    "policy": "credit the post and link to it; employer apply links only; scam and job-seeker posts dropped"
   }
 ]

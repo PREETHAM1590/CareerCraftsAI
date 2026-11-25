@@ -84,7 +84,9 @@ async def upsert_jobs(db, jobs: list[dict], source_id: str) -> None:
               THEN job_catalog.data->'description'
               ELSE coalesce(EXCLUDED.data->'description',to_jsonb(''::text)) END),
             title=EXCLUDED.title,
-            company=EXCLUDED.company,posted_at=EXCLUDED.posted_at,last_seen_at=now()"""),
+            company=EXCLUDED.company,last_seen_at=now(),
+            -- A sighting without a date never erases a known one.
+            posted_at=COALESCE(EXCLUDED.posted_at,job_catalog.posted_at)"""),
             {
                 "id": job["job_id"],
                 "url": job["url"],
@@ -181,7 +183,8 @@ async def refresh_source(source: Source, query="") -> tuple[list[dict], str | No
                         raise
                     await asyncio.sleep(1)
                 except (httpx.TransportError, TimeoutError):
-                    if attempt:
+                    # X bills every post it returns, even when the reply is lost.
+                    if attempt or source.family == "x_hiring":
                         raise
                     await asyncio.sleep(1)
             jobs.extend(result.jobs)
@@ -236,7 +239,9 @@ async def refresh_source(source: Source, query="") -> tuple[list[dict], str | No
         )
         if not warning:
             await upsert_jobs(db, jobs, source.id)
-            if cursor is None:
+            # Hiring-post searches see only a recent window, not the whole
+            # source: a post missing from one refresh is not gone.
+            if cursor is None and source.family not in {"x_hiring", "linkedin_posts"}:
                 await db.execute(
                     text(
                         "DELETE FROM job_source_occurrences WHERE source_id=:id "

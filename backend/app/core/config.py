@@ -71,6 +71,14 @@ class Settings(BaseSettings):
     # tracking adds its pixel only when this is set to a public https URL.
     PUBLIC_API_URL: str | None = None
 
+    # ── LinkedIn sending (beta, off by default) ────────────────────────
+    # Sends approved outreach from the member's own LinkedIn, through their
+    # paired CareerCraft extension in their own Chrome. LinkedIn's User
+    # Agreement prohibits automation; accounts can be restricted.
+    LINKEDIN_OUTREACH_ENABLED: bool = False
+    LINKEDIN_INVITES_PER_DAY: int = 10
+    LINKEDIN_MESSAGES_PER_DAY: int = 25
+
     # ── Redis ──────────────────────────────────────────────────────────
     REDIS_PASSWORD: str | None = None
 
@@ -116,9 +124,27 @@ class Settings(BaseSettings):
     RESEND_API_KEY: str = ""
     # Must be on a domain verified in the Resend account, or every send is rejected.
     RESEND_FROM_EMAIL: str = "noreply@jobagent.ai"
+    # Application email: <alias>@APPLY_EMAIL_DOMAIN, received by Resend (MX on
+    # this subdomain) and delivered to /api/v1/inbound/resend. Blank disables it.
+    APPLY_EMAIL_DOMAIN: str = ""
+    RESEND_WEBHOOK_SECRET: str = ""
+    # Telegram bot for one-time code requests from Nova. All three or off.
+    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_BOT_USERNAME: str = ""
+    TELEGRAM_WEBHOOK_SECRET: str = ""
     YOUTUBE_API_KEY: str = ""
     FIRECRAWL_API_KEY: str | None = None
     SEARXNG_URL: str | None = None
+    # Obscura (lightweight headless browser) for reading job pages that only
+    # render with JavaScript. CDP websocket, e.g. ws://127.0.0.1:19222/devtools/browser.
+    # Blank = plain HTTP only.
+    OBSCURA_CDP_URL: str = ""
+    OBSCURA_CDP_TOKEN: str = ""
+    # Hiring posts on X (official API v2, pay per post read). Blank = off.
+    X_BEARER_TOKEN: str = ""
+    # Posts read per X source refresh (10-100). 4 role groups x 50 a day is
+    # about 200 posts, roughly $1 a day at $0.005 a post.
+    X_HIRING_POSTS_PER_REFRESH: int = Field(default=50, ge=10, le=100)
     RAPIDAPI_KEY: str | None = None
     JOOBLE_API_KEY: str | None = None
     CAREERJET_API_KEY: str | None = None

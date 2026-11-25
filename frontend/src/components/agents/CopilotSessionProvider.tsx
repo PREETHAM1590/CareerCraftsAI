@@ -83,7 +83,7 @@ export function CopilotSessionProvider({ ownerId, children }: { ownerId: string;
   }
   function reportError(event: unknown) {
     const message = typeof event === "object" && event !== null && "error" in event ? (event as { error: Error }).error?.message : undefined;
-    setError(message || "The copilot hit an error. Try again.");
+    setError(message || "Nova hit an error. Try again.");
   }
   return <SessionContext.Provider value={{ agent, threadId, messages, running, error, historyError, threads, selectThread, newChat, sendMessage, reportError }}>{children}</SessionContext.Provider>;
 }

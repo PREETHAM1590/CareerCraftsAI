@@ -40,9 +40,10 @@ source = source.replace(anchor, `
         return json({navigated:true});
       }
       if (url.pathname === "/credentials/fill" && request.method === "POST") {
-        if (request.headers.get("x-careercraft-actor") !== "human") return json({error:"Human-only credential path"},403);
+        const actor = request.headers.get("x-careercraft-actor");
+        if (actor !== "human" && actor !== "nova") return json({error:"Private credential path"},403);
         try {
-        const body = await request.json() as {origin:string;username:string;password:string;usernameRef:string;passwordRef:string;snapshotId:number};
+        const body = await request.json() as {origin:string;username:string;password:string;usernameRef:string;passwordRef:string;confirmRef?:string;snapshotId:number;submit?:boolean};
         const target = await currentPage(botId);
         if (new URL(target.url()).origin !== body.origin) return json({error:"Credential origin mismatch"},403);
         const userField = locateRef(session, target, body.usernameRef, body.snapshotId);
@@ -50,16 +51,58 @@ source = source.replace(anchor, `
         if (await userField.evaluate(el=>el.ownerDocument.location.origin) !== body.origin ||
             await passField.evaluate(el=>el.ownerDocument.location.origin) !== body.origin) return json({error:"Credential field origin mismatch"},403);
         if (await passField.getAttribute("type") !== "password") return json({error:"A password input is required"},422);
+        // Sign-up forms that repeat the password (Nova creating an account).
+        const confirmField = body.confirmRef ? locateRef(session, target, body.confirmRef, body.snapshotId) : null;
+        if (confirmField && (await confirmField.evaluate(el=>el.ownerDocument.location.origin) !== body.origin ||
+            await confirmField.getAttribute("type") !== "password")) return json({error:"Confirm field must be a password input on this site"},422);
         const userType = await userField.getAttribute("type");
         if (![null,"text","email"].includes(userType)) return json({error:"Use a username or email input"},422);
         await writeFile(privateMarker,privatePageKey(target.url()));
         await userField.fill(body.username,{timeout:ACTION_TIMEOUT_MS});
         await passField.fill(body.password,{timeout:ACTION_TIMEOUT_MS});
-        return json({filled:true,submitted:false});
+        if (confirmField) await confirmField.fill(body.password,{timeout:ACTION_TIMEOUT_MS});
+        // Only CareerCraft's server (Nova, with member consent or approval)
+        // submits; a member filling by hand still presses Sign in themselves.
+        if (actor !== "nova" || body.submit !== true) return json({filled:true,submitted:false});
+        await passField.press("Enter",{timeout:ACTION_TIMEOUT_MS});
+        await target.waitForLoadState("domcontentloaded",{timeout:NAVIGATION_TIMEOUT_MS}).catch(()=>{});
+        session.snapshotId += 1;
+        // The agent may look again only once no typed password remains on the
+        // page; otherwise the login failed and stays private for the member.
+        const stillFilled = await target.locator('input[type="password"]').evaluateAll(nodes => nodes.some(n => (n as HTMLInputElement).value.length > 0)).catch(()=>true);
+        if (!stillFilled) await rm(privateMarker,{force:true});
+        return json({filled:true,submitted:!stillFilled});
         } catch {
           // Playwright failures can include typed values in their call logs.
           // Keep them out of responses and Bun's uncaught-error logger.
           return json({error:"Private credential entry failed"},502);
+        }
+      }
+      if (url.pathname === "/codes/fill" && request.method === "POST") {
+        if (request.headers.get("x-careercraft-actor") !== "nova") return json({error:"Nova-only code path"},403);
+        try {
+        const body = await request.json() as {origin:string;ref:string;snapshotId:number;code:string};
+        if (typeof body.code !== "string" || !/^[A-Za-z0-9-]{4,12}$/.test(body.code)) return json({error:"Invalid code"},422);
+        const target = await currentPage(botId);
+        if (new URL(target.url()).origin !== body.origin) return json({error:"Code origin mismatch"},403);
+        const field = locateRef(session, target, body.ref, body.snapshotId);
+        if (await field.evaluate(el=>el.ownerDocument.location.origin) !== body.origin) return json({error:"Code field origin mismatch"},403);
+        const kind = await field.getAttribute("type");
+        if (![null,"text","tel","number","password"].includes(kind)) return json({error:"Use a code input"},422);
+        await writeFile(privateMarker,privatePageKey(target.url()));
+        await field.fill(body.code,{timeout:ACTION_TIMEOUT_MS});
+        await field.press("Enter",{timeout:ACTION_TIMEOUT_MS});
+        await target.waitForLoadState("domcontentloaded",{timeout:NAVIGATION_TIMEOUT_MS}).catch(()=>{});
+        session.snapshotId += 1;
+        // Released only when the typed code is no longer on the page.
+        // Unreadable but still on the page counts as visible: the marker (which
+        // keeps the model from reading the page) stays until the code is gone.
+        const codeVisible = await field.inputValue({timeout:1000}).then(v => v.length > 0)
+          .catch(async () => (await field.count().catch(() => 1)) > 0);
+        if (!codeVisible) await rm(privateMarker,{force:true});
+        return json({filled:true,submitted:!codeVisible});
+        } catch {
+          return json({error:"Private code entry failed"},502);
         }
       }
       if (url.pathname === "/privacy/release" && request.method === "POST") {

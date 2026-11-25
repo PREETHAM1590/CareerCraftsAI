@@ -189,6 +189,25 @@ services:
         condition: service_healthy
       frontend:
         condition: service_healthy
+  # Private meta-search for the backend (backend.env: SEARXNG_URL=
+  # http://127.0.0.1:18188). Loopback only; see searxng/settings.yml.
+  searxng:
+    image: searxng/searxng:2026.11.23-a7163d091@sha256:a7fc607aa6723f5a8982105bcc5ffba4d1b9fc7c6922a31a88d6e4cba49ef12a
+    network_mode: host
+    # Optional feature: a VM without searxng.env still runs every other service.
+    env_file:
+      - path: /opt/careercraft-secrets/searxng.env
+        required: false
+    environment:
+      SEARXNG_SETTINGS_PATH: /etc/searxng/settings.yml
+      SEARXNG_BIND_ADDRESS: 127.0.0.1
+      SEARXNG_PORT: "18188"
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+    cpus: 0.5
+    restart: unless-stopped
   # SSH tunnel to the computers host (deploy/computers). Publishes its relay on
   # this VM's loopback, where backend.env's SANDBOX_RELAY_URL points
   # (http://127.0.0.1:14312). sandboxtunnel on that host may only open a local
@@ -206,6 +225,44 @@ services:
     restart: unless-stopped
     mem_limit: 64m
     init: true
+
+  # Obscura (lightweight headless browser) renders job pages that need
+  # JavaScript, for full job descriptions (app/services/job_page.py). Never
+  # holds members' sign-ins. backend.env: OBSCURA_CDP_URL=
+  # ws://127.0.0.1:19222/devtools/browser and OBSCURA_CDP_TOKEN (same value as
+  # in obscura.env). Report: docs/reports/2026-11-24-obscura-trial.md.
+  obscura:
+    image: h4ckf0r0day/obscura:0.2.7@sha256:e70c2abc925f2194c9338762075432c69328032cae220d77393f1495e90c601a
+    # Published on loopback only. Obscura refuses private and internal
+    # destinations itself (SSRF protection). Same port inside and out:
+    # Obscura answers 403 when the request's Host port differs from its own.
+    ports: ["127.0.0.1:19222:19222"]
+    # Docker's default bridge: no other container uses it (the stack runs with
+    # host networking), and it is the network whose DNS works under gVisor
+    # (a user-defined network's embedded resolver isn't reachable from runsc).
+    network_mode: bridge
+    # Optional: started only with `docker compose --profile obscura up -d obscura`,
+    # so a VM without obscura.env still runs every other service.
+    profiles: [obscura]
+    env_file: /opt/careercraft-secrets/obscura.env  # OBSCURA_CDP_TOKEN (32+ bytes)
+    command:
+      - serve
+      - --host=0.0.0.0
+      - --port=19222
+      - --workers=2
+      - --worker-max-rss=400
+      - --worker-max-age=3600
+    # gVisor when installed (runsc), as the trial report recommends for a
+    # young engine running untrusted pages: OBSCURA_RUNTIME=runsc.
+    runtime: ${OBSCURA_RUNTIME:-runc}
+    read_only: true
+    tmpfs: ["/tmp:size=64m"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    mem_limit: 768m
+    cpus: 1.0
+    restart: unless-stopped
 
 volumes:
   redis_data:

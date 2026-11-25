@@ -192,6 +192,154 @@ provider credentials; CareerCraft does not store provider OAuth tokens.
 
 ---
 
+## Full job descriptions from job pages (Obscura)
+
+Many sources only carry a snippet (hiring posts, Internshala, JobSpy). When a
+member opens a saved job whose description is under 800 characters,
+`GET /jobs/applications/{id}/jd` reads the job's own page once and serves the
+full text for tailoring and scoring. The member's own saved description is
+never overwritten.
+
+1. Plain HTTPS first, after robots.txt allows it. The page's JSON-LD
+   `JobPosting` description wins; otherwise its main text.
+2. Only if that is still thin (a JavaScript-rendered page), the page is
+   rendered in **Obscura**, a lightweight headless browser
+   (`docs/reports/2026-11-24-obscura-trial.md`).
+
+Results, including misses, are cached per URL in Redis: 7 days for a hit, 1
+day for a miss. A URL with a query string (it may carry a personal token) is
+cached per member; path-only job URLs are shared. Without Redis the page is
+just read. Login-walled and bot-blocking sites (LinkedIn, X, Indeed,
+Naukri, Glassdoor, foundit) are skipped. A rate-limited or unavailable
+robots.txt counts as "not allowed" (RFC 9309).
+
+| Variable | Description |
+|---|---|
+| `OBSCURA_CDP_URL` | `ws://127.0.0.1:19222/devtools/browser` on the APP VM. Blank = plain HTTP only. |
+| `OBSCURA_CDP_TOKEN` | 32+ random bytes, the same value as in `/opt/careercraft-secrets/obscura.env`. |
+
+**Running Obscura** (`deploy/oracle-vm/compose.yml`, service `obscura`, profile `obscura`)
+- Start it with `docker compose --profile obscura up -d obscura` once `obscura.env` exists; plain `docker compose up -d` leaves it off.
+- Runs on Docker's default bridge network, which no other container uses (the stack runs with host networking). A dedicated network would break DNS under gVisor.
+- Listens on 19222 inside the container as well: Obscura answers 403 when the request's port differs from its own.
+- Pinned image digest, published on `127.0.0.1:19222` only, bearer token required.
+- Read-only filesystem, no Linux capabilities, non-root, 768 MB.
+- Workers recycle at 400 MB or after an hour.
+- Install gVisor and set `OBSCURA_RUNTIME=runsc` to run it under a user-space kernel.
+- It never holds anyone's sign-in.
+
+## Application email (Nova)
+
+Each member gets an address such as `priya.k7f2m@apply.careercraftsai.me`. Job
+portals send sign-up codes and confirmations there. Nova fills an emailed code
+in by itself when it is waiting on a code step for the same site and the
+sender passed DKIM or DMARC (Resend's receiving server reports this; a forged
+From can't). Any other code stays in the member's inbox for them to use.
+
+| Variable | Description |
+|---|---|
+| `APPLY_EMAIL_DOMAIN` | Receiving subdomain, e.g. `apply.careercraftsai.me`. Blank turns the feature off. |
+| `RESEND_API_KEY` | Also used to fetch received messages (`GET /emails/receiving/{id}`). |
+| `RESEND_WEBHOOK_SECRET` | The `whsec_...` signing secret of the receiving webhook. |
+
+Setup, once:
+1. In Resend, add the receiving domain `apply.careercraftsai.me`.
+2. Add the MX record Resend shows to DNS. Use a subdomain, so your main domain's mail is untouched.
+3. In Resend, create a webhook for `email.received` pointing at `https://<api-host>/api/v1/inbound/resend`.
+4. Put its signing secret in `RESEND_WEBHOOK_SECRET`.
+5. Run migration `20261124130000_apply_email.sql`.
+
+The webhook carries metadata only. The backend fetches the message, keeps it for
+the member, and extracts codes and verification links. Links are never opened
+automatically.
+
+## Code requests on Telegram (Nova)
+
+When Nova waits on a one-time code, it can ask the member on Telegram. Their
+reply goes to the waiting step through the same sealed, read-once path as the
+in-app code box. The bot then deletes the code message from the chat.
+
+| Variable | Description |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` | From @BotFather. |
+| `TELEGRAM_BOT_USERNAME` | The bot's username without `@`, used for the `t.me/<bot>?start=` link. |
+| `TELEGRAM_WEBHOOK_SECRET` | 32+ random characters. Telegram sends it in `X-Telegram-Bot-Api-Secret-Token`. |
+
+Setup, once:
+1. Create the bot with @BotFather and set the three variables.
+2. Run migration `20261124140000_telegram_links.sql`.
+3. Register the webhook (only messages are needed):
+
+```bash
+curl -s "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
+  -d url="https://<api-host>/api/v1/inbound/telegram" \
+  -d secret_token="$TELEGRAM_WEBHOOK_SECRET" \
+  -d allowed_updates='["message"]' -d drop_pending_updates=true
+```
+
+Members connect from the computer panel ("Code requests on Telegram"). They
+can send /stop, or disconnect in the app, at any time.
+
+## Hiring posts on X and LinkedIn
+
+Jobs that people announce in posts ("we're hiring a Backend Engineer...") come
+from two catalog source families. Each is fetched once per role group for
+everyone, not per member search. The 4 role groups are in
+`backend/app/services/job_sources.json` (`x:*`, `linkedin-posts:*`).
+
+| Variable | Description |
+|---|---|
+| `X_BEARER_TOKEN` | X API v2 app bearer token. X bills $0.005 per post read; blank turns X off. |
+| `X_HIRING_POSTS_PER_REFRESH` | Posts per X source refresh, 10 to 100 (default 50). 4 sources daily at 50 is about 200 posts, roughly $1 a day. Also set a spending limit in the X Developer Console. |
+| `SEARXNG_URL` | Our own SearXNG, used to find public `linkedin.com/posts` pages that search engines have indexed. LinkedIn itself is never contacted. |
+
+**SearXNG on the APP VM**
+1. Create `/opt/careercraft-secrets/searxng.env` containing `SEARXNG_SECRET=<openssl rand -hex 32>`.
+2. Start it with `docker compose up -d searxng` in `deploy/oracle-vm`. It listens on `127.0.0.1:18188` only.
+3. Set `SEARXNG_URL=http://127.0.0.1:18188` in `backend.env`.
+4. Check it with `curl 'http://127.0.0.1:18188/search?q=hiring&format=json'`.
+
+The search engines SearXNG queries may rate-limit a server IP, so expect some
+refreshes to come back empty. That is not a failure: hiring-post sources never
+remove jobs on refresh (each search sees only a recent window), so earlier posts
+stay in the catalog until they age out with the catalog's freshness window.
+
+**What gets through**
+- Posts are untrusted text. A post becomes a job only when it reads as an employer hiring and names a role.
+- Job-seeker posts (#OpenToWork, "looking for a job", "I'm looking for a ... role") are dropped. This is checked on the whole post, so an employer post that quotes a seeker's line is dropped too: precision over recall.
+- Scam signals drop a post: fees or deposits, Telegram or WhatsApp-only contact, crypto, "earn per day", "no interview".
+- Links are never opened. A link to a specific posting on a known ATS (Greenhouse, Lever, Workday...) becomes the job URL; any other link, or a generic careers page, leaves the post itself as the link.
+- Every job credits the post: "Posted by @handle on X: <link>".
+
+## LinkedIn sending (beta, off by default)
+
+Sends approved LinkedIn outreach from the member's own LinkedIn, through
+their paired CareerCraft extension in their own Chrome. There is no
+third-party service and nothing new on the server: LinkedIn access never
+leaves the member's computer.
+
+> **Risk:** LinkedIn's User Agreement prohibits automated tools, and LinkedIn
+> can restrict accounts that use them. Keep this off unless you accept that
+> risk for your users. Free LinkedIn accounts can send only a few connection
+> notes a month.
+
+| Variable | Description |
+|---|---|
+| `LINKEDIN_OUTREACH_ENABLED` | `true` to offer it. Default `false`; off means drafts are copy-only, as before. |
+| `LINKEDIN_INVITES_PER_DAY` / `LINKEDIN_MESSAGES_PER_DAY` | Per-member daily caps (default 10 and 25). |
+
+**How it works**
+- **Sending:** "Send on LinkedIn" on an approved draft card hands the batch to the member's online extension, in the background. It needs Chrome open with the extension, signed in to LinkedIn.
+- **For each draft, the extension:**
+  1. opens the profile in a background tab (grouped as "CareerCraft LinkedIn") and checks it, read only;
+  2. after the server claims the day's cap, sends a message to a first-degree connection, or a connection request with the note (300 characters max) to anyone else;
+  3. reports success only once LinkedIn shows it.
+- **Delivery states:** each draft records `invited`, `messaged`, `failed`, `limit_reached` or `outcome_unknown`. Nothing is retried automatically.
+- **Resend unsent** sends `failed` and `limit_reached` drafts again. Drafts that were sent, or might have been, are never resent.
+- **Out of free notes:** when a free account has no personalised notes left, the extension stops. It never sends a bare request instead.
+
+Run migration `20261124160000_linkedin_sending.sql`.
+
 ## Development vs Production Differences
 
 | Setting | Development | Production |

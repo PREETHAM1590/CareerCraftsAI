@@ -153,6 +153,12 @@ def _adapter_searxng(query: str, location: str, max_results: int) -> list[dict]:
     return _search_searxng_jobs(query, location, max_results)
 
 
+def _adapter_internshala(query: str, location: str, max_results: int) -> list[dict]:
+    from app.services.internshala import search
+
+    return search(query, location, max_results)
+
+
 def _adapter_presets(query: str, location: str, max_results: int) -> list[dict]:
     from app.agents.job_search import _search_via_search_presets
 
@@ -166,6 +172,7 @@ _ADAPTERS: dict[str, Callable[[str, str, int], list[dict]]] = {
     "remoteok": _adapter_remoteok,
     "searxng": _adapter_searxng,
     "presets": _adapter_presets,
+    "internshala": _adapter_internshala,
 }
 
 DEFAULT_PLATFORMS = [
@@ -180,6 +187,8 @@ DEFAULT_PLATFORMS = [
     # the member's location) fill the gap, and catalog-first search only calls
     # them when the shared catalog is short. Results are written through.
     "jobspy",
+    # Indian and remote roles only; returns nothing (no request) elsewhere.
+    "internshala",
 ]
 
 

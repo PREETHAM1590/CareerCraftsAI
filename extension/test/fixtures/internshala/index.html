@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Python Development internship at Acme (Internshala-like fixture)</title></head>
+<body>
+<div id="root"></div>
+<script>
+  // Mirrors Internshala's signed-in flow: job page → "Apply now" link to an
+  // in-between page → "Proceed to application" reveals the form, which has no
+  // email field (Internshala applies with the student's profile).
+  const root = document.getElementById("root");
+  const slug = location.pathname.split("/").filter(Boolean).pop();
+  if (location.pathname.startsWith("/internship/detail/")) {
+    root.innerHTML = `<h1>Python Development</h1><p>Acme · Bangalore · ₹ 15,000 /month</p>
+      <div class="buttons_container"><a class="apply_now_button" href="/student/interstitial/application/${slug}">Apply now</a></div>`;
+  } else {
+    root.innerHTML = `<h2>Your profile is ready</h2><p>Check your resume and preferences before applying.</p>
+      <button type="button" id="proceed">Proceed to application</button>
+      <form id="application-form" onsubmit="return false" style="display:none">
+        <h3>Cover letter</h3>
+        <label for="cover_letter">Why should you be hired for this role?</label>
+        <textarea id="cover_letter" name="cover_letter" required></textarea>
+        <fieldset><legend>Are you available to join immediately?</legend>
+          <label><input type="radio" name="availability" value="yes" required> Yes, I am available to join immediately</label>
+          <label><input type="radio" name="availability" value="no"> No</label>
+        </fieldset>
+        <label for="assessment">Describe a project where you used Python.</label>
+        <textarea id="assessment" name="assessment" required></textarea>
+        <label for="custom_resume">Upload a custom resume (optional)</label>
+        <input id="custom_resume" name="custom_resume" type="file">
+        <button type="submit" id="submit">Submit</button>
+      </form>`;
+    document.getElementById("proceed").addEventListener("click", (e) => {
+      e.target.remove();
+      document.getElementById("application-form").style.display = "";
+    });
+    document.getElementById("application-form").addEventListener("submit", (e) => {
+      const f = e.target;
+      const data = {
+        cover_letter: f.cover_letter.value,
+        availability: (f.querySelector("input[name=availability]:checked") || {}).value,
+        assessment: f.assessment.value,
+        resume: f.custom_resume.files[0]?.name,
+      };
+      fetch("/__submitted", { method: "POST", body: JSON.stringify(data) });
+      root.innerHTML = "<h2>Application submitted</h2><p>Your application has been submitted successfully.</p>";
+    });
+  }
+</script>
+</body>
+</html>

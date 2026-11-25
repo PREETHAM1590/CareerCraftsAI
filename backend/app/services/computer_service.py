@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import logging
+import re
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -57,7 +58,14 @@ PARAMETERS = {
     "human/secret": {"text"},
     "privacy/release": set(),
     "human/navigate": {"url"},
+    # Nova's private steps (see nova_signin): refs only, never a secret.
+    "sign_in": {"usernameRef", "passwordRef", "snapshotId"},
+    "enter_code": {"ref", "snapshotId"},
+    # confirmRef is optional: not every signup form repeats the password.
+    "create_account": {"emailRef", "passwordRef", "confirmRef", "snapshotId"},
 }
+NOVA_STEPS = {"sign_in", "enter_code", "create_account"}
+OPTIONAL = {"files/list": {"path"}, "create_account": {"confirmRef"}}
 # The extension drives one agent tab; anything else stays cloud-only.
 BROWSER_OPERATIONS = {
     "navigate",
@@ -79,6 +87,7 @@ COMMAND_TIMEOUT = 60  # navigation in the user's browser can be slow
 RESULT_TTL = 120
 RESULT_STATUSES = {403, 409, 422, 502}
 PERMISSION_PREFIX = "Allow the CareerCraft extension on "
+REF = re.compile(r"[a-zA-Z0-9_-]{1,30}")
 
 
 class ComputerAction(BaseModel):
@@ -100,9 +109,7 @@ class ComputerAction(BaseModel):
             raise ValueError("This operation is not available")
         if set(self.parameters) - PARAMETERS[self.operation]:
             raise ValueError("Unexpected computer action parameters")
-        required = PARAMETERS[self.operation] - (
-            {"path"} if self.operation == "files/list" else set()
-        )
+        required = PARAMETERS[self.operation] - OPTIONAL.get(self.operation, set())
         if not required.issubset(self.parameters):
             raise ValueError("Required computer action parameters are missing")
         if self.operation in {"click", "type", "upload"}:
@@ -112,6 +119,20 @@ class ComputerAction(BaseModel):
                 or not self.parameters.get("ref")
             ):
                 raise ValueError("Use the current computer run, snapshotId and element ref")
+        if self.operation in NOVA_STEPS:
+            names = {
+                "sign_in": ["usernameRef", "passwordRef"],
+                "enter_code": ["ref"],
+                "create_account": ["emailRef", "passwordRef"]
+                + (["confirmRef"] if "confirmRef" in self.parameters else []),
+            }[self.operation]
+            refs = [self.parameters.get(name) for name in names]
+            if (
+                not self.computer_run
+                or not isinstance(self.parameters.get("snapshotId"), int)
+                or not all(isinstance(ref, str) and REF.fullmatch(ref) for ref in refs)
+            ):
+                raise ValueError("Use the current computer run, snapshotId and element refs")
         if self.operation == "upload":
             uuid.UUID(str(self.parameters["document_id"]))
             if self.approved_snapshot != self.parameters["snapshotId"]:
@@ -206,35 +227,72 @@ async def computer_backend(user_id) -> dict:
     return {"mode": mode, "backend": backend, "paired": bool(devices), "device": device}
 
 
-async def send_command(device_id: str, kind: str, body=None):
-    """Queue one command for the extension and wait for its reply."""
+class CommandNotDispatched(RuntimeError):
+    """The command failed before reaching the device queue."""
+
+
+class CommandResultUnavailable(RuntimeError):
+    """The command may have run, but its reply could not be read."""
+
+
+async def send_command(device_id: str, kind: str, body=None, timeout: int | None = None):
+    """Queue one command for the extension and wait for its reply.
+
+    `timeout` (default COMMAND_TIMEOUT, read at call time) must stay under
+    redis_client.BLOCKING_SOCKET_TIMEOUT (90 s)."""
+    timeout = timeout or COMMAND_TIMEOUT
     from app.core import redis_client
 
     command_id = str(uuid.uuid4())
-    redis = redis_client.get_redis()
-    # Only this device may answer the command (checked on the result route).
-    await redis.set(f"ext:owner:{command_id}", device_id, ex=COMMAND_TIMEOUT + RESULT_TTL)
-    queue = f"ext:cmd:{device_id}"
-    raw = json.dumps(
-        {
-            "id": command_id,
-            "kind": kind,
-            "body": body or {},
-            "expires": int(time.time()) + COMMAND_TIMEOUT,
-        }
-    )
-    await redis.rpush(queue, raw)
-    await redis.expire(queue, COMMAND_TIMEOUT + 30)
-    reply = await redis_client.get_blocking_redis("result").blpop(
-        f"ext:res:{command_id}", timeout=COMMAND_TIMEOUT
-    )
+    try:
+        redis = redis_client.get_redis()
+        # Only this device may answer the command (checked on the result route).
+        await redis.set(f"ext:owner:{command_id}", device_id, ex=timeout + RESULT_TTL)
+        queue = f"ext:cmd:{device_id}"
+        raw = json.dumps(
+            {
+                "id": command_id,
+                "kind": kind,
+                "body": body or {},
+                "expires": int(time.time()) + timeout,
+            }
+        )
+    except Exception as exc:
+        if kind == "linkedin":
+            raise CommandNotDispatched from exc
+        raise
+    try:
+        # Even an error from rpush can mean Redis queued the command.
+        await redis.rpush(queue, raw)
+        await redis.expire(queue, timeout + 30)
+        reply = await redis_client.get_blocking_redis("result").blpop(
+            f"ext:res:{command_id}", timeout=timeout
+        )
+    except Exception as exc:
+        if kind == "linkedin":
+            raise CommandResultUnavailable from exc
+        raise
     if reply is None:
         # Nobody is waiting any more: a browser that reconnects later must not
         # run a command the caller was told failed. If the extension already
         # took it, it is running and its late result simply expires.
-        await redis.lrem(queue, 1, raw)
+        try:
+            await redis.lrem(queue, 1, raw)
+        except Exception as exc:
+            if kind == "linkedin":
+                raise CommandResultUnavailable from exc
+            raise
         raise HTTPException(504, "Your browser didn't respond in time.")
-    result = json.loads(reply[1])
+    try:
+        result = json.loads(reply[1])
+        if kind == "linkedin" and (
+            not isinstance(result, dict) or not isinstance(result.get("ok"), bool)
+        ):
+            raise ValueError("Invalid LinkedIn command reply")
+    except (ValueError, TypeError, IndexError) as exc:
+        if kind == "linkedin":
+            raise CommandResultUnavailable from exc
+        raise
     if not result.get("ok"):
         status = result.get("status")
         if result.get("error") == "permission_required" and result.get("origin"):
@@ -243,6 +301,8 @@ async def send_command(device_id: str, kind: str, body=None):
             status if status in RESULT_STATUSES else 502,
             str(result.get("error") or "Browser action failed")[:300],
         )
+    if kind == "linkedin":
+        return result.get("result")
     return result.get("result") or {}
 
 

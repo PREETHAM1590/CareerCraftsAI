@@ -233,6 +233,7 @@ class Operation(str, Enum):
     human_scroll = "human/scroll"
     human_navigate = "human/navigate"
     credential_fill = "credentials/fill"
+    code_fill = "codes/fill"
     privacy_release = "privacy/release"
 
 
@@ -241,7 +242,9 @@ class Action(BaseModel):
     parameters: dict = Field(default_factory=dict)
     computer_run: str | None = None
     approved_snapshot: int | None = None
-    actor: Literal["human", "agent"] = "human"
+    # "nova": CareerCraft's server typing a saved login or a member-entered
+    # one-time code. Allowed only for those two private operations.
+    actor: Literal["human", "agent", "nova"] = "human"
 
 
 @app.get("/health")
@@ -326,6 +329,10 @@ async def action(user_id: uuid.UUID, payload: Action):
             "files/write",
         }:
             raise HTTPException(403, "This operation is not an agent capability")
+        if payload.actor == "nova" and op not in {"credentials/fill", "codes/fill"}:
+            raise HTTPException(403, "This operation is not a Nova capability")
+        if op == "codes/fill" and payload.actor != "nova":
+            raise HTTPException(403, "Only Nova enters one-time codes")
         # Screen polling must not allocate a computer or prevent idle release.
         if op in {"screenshot", "control"}:
             with database() as db:
@@ -346,7 +353,7 @@ async def action(user_id: uuid.UUID, payload: Action):
             payload.actor == "agent" and op in {"navigate", "click", "type", "scroll"}
         )
         if (
-            mutation or op in {"click", "type", "credentials/fill"}
+            mutation or op in {"click", "type", "credentials/fill", "codes/fill"}
         ) and payload.computer_run != current["run"]:
             raise HTTPException(
                 409, "Computer restarted; take a new snapshot and review again"

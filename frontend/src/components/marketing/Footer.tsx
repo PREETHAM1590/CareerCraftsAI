@@ -78,7 +78,7 @@ export function MarketingFooter() {
           <div className="col-span-2">
             <div className="font-display text-3xl text-foreground">CareerCraft AI</div>
             <p className="mt-3 max-w-xs text-sm leading-6 text-muted-foreground">
-              The AI job-search copilot for students and freshers. Tailor resumes, match jobs, follow up — automatically.
+              Nova, the AI job-search agent for students and freshers. Tailor resumes, match jobs, follow up — automatically.
             </p>
           </div>
           {COLUMNS.map((c) => (

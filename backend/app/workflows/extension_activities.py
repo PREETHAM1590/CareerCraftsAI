@@ -37,6 +37,7 @@ def detect_platform(job_url: str) -> str:
     for needle, platform in (
         ("linkedin.com", "linkedin"),
         ("naukri.com", "naukri"),
+        ("internshala.com", "internshala"),
         ("indeed.", "indeed"),
         ("greenhouse.io", "greenhouse"),
         ("lever.co", "lever"),
