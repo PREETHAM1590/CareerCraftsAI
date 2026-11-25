@@ -2,7 +2,9 @@
 
 ## Production (careercraftsai.me)
 
-Host: SSH alias `24gb1` (Oracle A1, 4 OCPU / 24 GB, Ubuntu 26.04), checkout of
+Host since 2026-11-25: SSH alias `24gb` (129.154.38.17, Oracle A1, 4 OCPU / 24 GB,
+Ubuntu 26.04; shared with other services, so `SANDBOX_MAX_SESSIONS=4` and
+`COMPUTER_CPUS=1`; it replaced `24gb1`), checkout of
 this directory at `~/careercraft-computers/deploy/computers`, secrets in the
 root-only `/opt/careercraft-secrets/computers.env`.
 Root is mounted without online `discard` (weekly `fstrim.timer` instead), as on
