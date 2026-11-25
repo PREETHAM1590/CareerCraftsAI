@@ -55,7 +55,7 @@ const geistMono = Geist_Mono({
 const SITE_URL = "https://careercraftsai.me";
 const SITE_NAME = "CareerCraft AI";
 const SITE_DESCRIPTION =
-  "AI job-search copilot for students and freshers. Tailor resumes, match jobs, and follow up — automatically.";
+  "Nova, the AI job-search agent for students and freshers. Tailor resumes, match jobs, and follow up — automatically.";
 const DEFAULT_TITLE = "CareerCraft AI — Apply smarter. Tailor faster.";
 
 export const metadata: Metadata = {

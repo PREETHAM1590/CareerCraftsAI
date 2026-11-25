@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import postcss from "postcss";
 
 const src = "node_modules/@copilotkit/react-core/dist/v2/index.css";
-const dst = "src/app/(app)/copilot/copilot-v2.css";
+const dst = "src/app/(app)/nova/copilot-v2.css";
 
 const root = postcss.parse(readFileSync(src, "utf-8"));
 

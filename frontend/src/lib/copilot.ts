@@ -44,7 +44,7 @@ export function createCopilotAgent(threadId: string, messages: HttpAgent["messag
     // Resolve credentials on every request, including the first chat turn.
     fetch: async (url, init) => {
       const token = await getClerkAuthToken();
-      if (!token) throw new Error("Please sign in again to use Career Copilot.");
+      if (!token) throw new Error("Please sign in again to use Nova.");
       const headers = new Headers(init.headers);
       headers.set("Authorization", `Bearer ${token}`);
       return fetch(url, { ...init, headers });

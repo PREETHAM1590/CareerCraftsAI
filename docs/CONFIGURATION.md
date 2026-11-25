@@ -227,6 +227,58 @@ robots.txt counts as "not allowed" (RFC 9309).
 - Install gVisor and set `OBSCURA_RUNTIME=runsc` to run it under a user-space kernel.
 - It never holds anyone's sign-in.
 
+## Application email (Nova)
+
+Each member gets an address such as `priya.k7f2m@apply.careercraftsai.me`. Job
+portals send sign-up codes and confirmations there. Nova fills an emailed code
+in by itself when it is waiting on a code step for the same site and the
+sender passed DKIM or DMARC (Resend's receiving server reports this; a forged
+From can't). Any other code stays in the member's inbox for them to use.
+
+| Variable | Description |
+|---|---|
+| `APPLY_EMAIL_DOMAIN` | Receiving subdomain, e.g. `apply.careercraftsai.me`. Blank turns the feature off. |
+| `RESEND_API_KEY` | Also used to fetch received messages (`GET /emails/receiving/{id}`). |
+| `RESEND_WEBHOOK_SECRET` | The `whsec_...` signing secret of the receiving webhook. |
+
+Setup, once:
+1. In Resend, add the receiving domain `apply.careercraftsai.me`.
+2. Add the MX record Resend shows to DNS. Use a subdomain, so your main domain's mail is untouched.
+3. In Resend, create a webhook for `email.received` pointing at `https://<api-host>/api/v1/inbound/resend`.
+4. Put its signing secret in `RESEND_WEBHOOK_SECRET`.
+5. Run migration `20261124130000_apply_email.sql`.
+
+The webhook carries metadata only. The backend fetches the message, keeps it for
+the member, and extracts codes and verification links. Links are never opened
+automatically.
+
+## Code requests on Telegram (Nova)
+
+When Nova waits on a one-time code, it can ask the member on Telegram. Their
+reply goes to the waiting step through the same sealed, read-once path as the
+in-app code box. The bot then deletes the code message from the chat.
+
+| Variable | Description |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` | From @BotFather. |
+| `TELEGRAM_BOT_USERNAME` | The bot's username without `@`, used for the `t.me/<bot>?start=` link. |
+| `TELEGRAM_WEBHOOK_SECRET` | 32+ random characters. Telegram sends it in `X-Telegram-Bot-Api-Secret-Token`. |
+
+Setup, once:
+1. Create the bot with @BotFather and set the three variables.
+2. Run migration `20261124140000_telegram_links.sql`.
+3. Register the webhook (only messages are needed):
+
+```bash
+curl -s "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
+  -d url="https://<api-host>/api/v1/inbound/telegram" \
+  -d secret_token="$TELEGRAM_WEBHOOK_SECRET" \
+  -d allowed_updates='["message"]' -d drop_pending_updates=true
+```
+
+Members connect from the computer panel ("Code requests on Telegram"). They
+can send /stop, or disconnect in the app, at any time.
+
 ## Hiring posts on X and LinkedIn
 
 Jobs that people announce in posts ("we're hiring a Backend Engineer...") come
