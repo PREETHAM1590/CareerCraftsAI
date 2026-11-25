@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,6 +25,7 @@ from app.models.db import (
 )
 from app.schemas.jobs import JobSearchQuerySchema
 from app.services import job_page
+from app.services.job_connectors import clean_description
 from app.workflows.starters import WorkflowUnavailable
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -110,6 +111,11 @@ class ApplicationResponse(BaseModel):
     apply_state: str | None = None
 
     model_config = {"from_attributes": True}
+
+    @field_validator("jd_text")
+    @classmethod
+    def _readable_jd(cls, value: str | None) -> str | None:
+        return None if value is None else clean_description(value)
 
 
 class ApplicationIdsBody(BaseModel):
@@ -1263,7 +1269,7 @@ async def get_application_jd(
     if not apps:
         raise HTTPException(status_code=404, detail="Application not found")
     app = apps[0]
-    saved = (app.jd_text or "").strip()
+    saved = clean_description(app.jd_text).strip()
     catalog = ""
     if app.job_url:
         from app.services.job_connectors import canonical_url
@@ -1284,6 +1290,7 @@ async def get_application_jd(
             ).scalar_one_or_none()
             or ""
         ).strip()
+        catalog = clean_description(catalog).strip()
     role, company, job_url = app.role, app.company, app.job_url
     if job_url and max(len(saved), len(catalog)) < job_page.THIN:
         # Only a snippet so far: read the job's own page once (cached per URL).

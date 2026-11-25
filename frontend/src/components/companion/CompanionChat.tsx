@@ -1,10 +1,20 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { ArrowUp } from "@phosphor-icons/react";
 import { useCopilotSession } from "@/components/agents/CopilotSessionProvider";
 import { conversationRunIds, modelSetupRequired } from "@/lib/copilot-activity";
 import Link from "next/link";
+import { parseInlineMarkdown, type InlineToken } from "@/lib/inline-markdown";
 import { CopilotRunCard } from "@/components/agents/CopilotRunCard";
+
+function renderInline(tokens: InlineToken[]): React.ReactNode {
+  return tokens.map((token, index) => {
+    if (token.kind === "bold") return <strong key={index}>{renderInline(token.children)}</strong>;
+    if (token.kind === "code") return <code key={index} className="rounded bg-muted px-1">{token.text}</code>;
+    if (token.kind === "link") return <a key={index} href={token.href} target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2">{renderInline(token.children)}</a>;
+    return <Fragment key={index}>{token.text}</Fragment>;
+  });
+}
 
 export function CompanionChat() {
   const { agent, messages, running, error, historyError, sendMessage } = useCopilotSession();
@@ -17,7 +27,7 @@ export function CompanionChat() {
   return <div className="companion-chat">
     <div ref={log} className="companion-chat-log" role="log" aria-label="Conversation with your companion" onScroll={event => { const el = event.currentTarget; follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40; }}>
       {!visible.length && <p className="py-6 text-center text-xs leading-5 text-muted-foreground">Tell me what you're working on.<br />This is your saved Nova conversation.</p>}
-      {visible.map(message => <div key={message.id} className={`companion-chat-message ${message.role === "user" ? "from-user" : "from-assistant"}`}><p className="mb-1 text-[10px] font-semibold text-muted-foreground">{message.role === "user" ? "You" : "Nova"}</p><p className="whitespace-pre-wrap break-words text-xs leading-5">{String(message.content)}</p></div>)}
+      {visible.map(message => <div key={message.id} className={`companion-chat-message ${message.role === "user" ? "from-user" : "from-assistant"}`}><p className="mb-1 text-[10px] font-semibold text-muted-foreground">{message.role === "user" ? "You" : "Nova"}</p><p className="whitespace-pre-wrap break-words text-xs leading-5">{message.role === "assistant" ? renderInline(parseInlineMarkdown(String(message.content))) : String(message.content)}</p></div>)}
       {runId && <CopilotRunCard runId={runId} />}
       {running && <p role="status" className="py-2 text-xs text-muted-foreground">Nova is responding…</p>}
     </div>

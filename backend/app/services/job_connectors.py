@@ -173,8 +173,37 @@ def posted(value):
         return None
 
 
+# Real HTML tags only, so "<5 years" or "List<String>" in a posting survive.
+_HTML_TAG = re.compile(
+    r"</?(?:a|article|b|blockquote|br|code|div|em|font|h[1-6]|hr|i|img|li|ol|p|pre|section|small"
+    r"|span|strong|sub|sup|table|tbody|td|th|thead|tr|u|ul)(?=[\s/>])[^>]*>",
+    re.IGNORECASE,
+)
+
+
 def plain(value) -> str:
-    return html.unescape(re.sub(r"<[^>]*>", " ", str(value or "")))[:16000].strip()
+    raw = str(value or "")
+    if not _HTML_TAG.search(raw):
+        # Some APIs (Greenhouse) send the whole body entity-escaped, so its
+        # tags only appear, and can only be stripped, after one unescape.
+        unescaped = html.unescape(raw)
+        if _HTML_TAG.search(unescaped):
+            raw = unescaped
+    return html.unescape(re.sub(r"<[^>]*>", " ", raw))[:16000].strip()
+
+
+def clean_description(value: str | None) -> str:
+    """Text for a description that may have been saved with its HTML still in
+    it. Text without HTML tags is returned as it is."""
+    text = value or ""
+    if not _HTML_TAG.search(text):
+        unescaped = html.unescape(text)
+        if not _HTML_TAG.search(unescaped):
+            return text
+        text = unescaped
+    # Saved copies are capped in length, which can cut the last tag in half.
+    text = re.sub(r"</?[a-zA-Z][^<>]*$", "", text)
+    return re.sub(r"[ \t]{2,}", " ", _HTML_TAG.sub(" ", plain(text))).strip()
 
 
 def normalize(raw: dict, source: Source) -> dict | None:

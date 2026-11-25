@@ -122,3 +122,21 @@ def test_bamboohr_body_fill_stops_at_the_budget_and_keeps_partial_rows(monkeypat
     asyncio.run(jc._fill_bodies_within_budget(jc._fill_bamboohr_bodies("acme", rows)))
     assert rows[0]["description"] == "First"
     assert rows[1]["description"] == ""
+
+
+def test_plain_strips_entity_escaped_bodies():
+    raw = "&lt;div class=&quot;content-intro&quot;&gt;&lt;p&gt;R&amp;amp;D&amp;nbsp;team&lt;/p&gt;&lt;/div&gt;"
+    assert jc.plain(raw) == "R&D\xa0team"
+    assert jc.plain("<p>Use List&lt;String&gt;</p>") == "Use List<String>"
+    assert jc.plain("Under &lt;5 years") == "Under <5 years"
+
+
+def test_clean_description_fixes_saved_html_and_keeps_text():
+    assert jc.clean_description('<div class="x"><p>At Affirm</p></div><p>Pay &amp; go <stro') == (
+        "At Affirm Pay & go"
+    )
+    escaped = "&lt;p&gt;Hello&lt;/p&gt; the rest stays &lt;stro"
+    assert jc.clean_description(escaped) == "Hello the rest stays"
+    text = "Line one\n\n  - C++ where a < b and c > d, List<String>"
+    assert jc.clean_description(text) == text
+    assert jc.clean_description(None) == ""

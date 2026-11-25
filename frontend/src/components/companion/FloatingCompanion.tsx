@@ -8,10 +8,16 @@ import { useCompanion } from "./CompanionProvider";
 import { CompanionPet } from "./CompanionPet";
 import { ApprovalModal } from "@/components/agents/ApprovalModal";
 import { CompanionChat } from "./CompanionChat";
+import { opensByItself } from "@/lib/copilot-activity";
+
+// Remembered for the tab, so a panel the member closed stays closed on the next page.
+const dismissedKey = "cc-companion-dismissed";
+function readDismissed() { try { return sessionStorage.getItem(dismissedKey); } catch { return null; } }
 
 export function FloatingCompanion() {
   const { preferences, activity, loaded, refreshRuns } = useCompanion();
   const [panel, setPanel] = useState<{ key: string; open: boolean } | null>(null);
+  const [dismissed, setDismissed] = useState(readDismissed);
   const [reviewing, setReviewing] = useState(false);
   const [view, setView] = useState<"chat" | "status">("chat");
   const [reaction, setReaction] = useState<{ kind: string; id: number; text: string } | null>(null);
@@ -23,7 +29,12 @@ export function FloatingCompanion() {
   const [popupShift, setPopupShift] = useState({ x: 0, y: 0 });
   const dragControls = useDragControls();
   const activityKey = `${activity.state}:${activity.run?.id ?? ""}:${activity.title}:${activity.detail}`;
-  const open = panel?.open === true || (panel?.key !== activityKey && activity.state === "waiting");
+  const open = panel?.open === true || (panel?.key !== activityKey && opensByItself(activity) && dismissed !== activityKey);
+  function close() {
+    setPanel({ key: activityKey, open: false });
+    setDismissed(activityKey);
+    try { sessionStorage.setItem(dismissedKey, activityKey); } catch { /* Closing still works for this page. */ }
+  }
   const asleep = resting && ["idle", "review"].includes(activity.state);
   function respond(kind: string, text: string) {
     if (reactionTimer.current) clearTimeout(reactionTimer.current);
@@ -50,9 +61,9 @@ export function FloatingCompanion() {
   const label = { idle: "Ready", running: "Working", waiting: "Input needed", failed: "Needs attention", review: "Results ready" }[activity.state];
   return createPortal(<>
     <div ref={bounds} className="floating-companion-boundary">
-    <motion.aside key={`${preferences.corner}:${preferences.size}`} drag dragListener={false} dragControls={dragControls} dragConstraints={bounds} dragElastic={0} dragMomentum={false} onDragStart={() => { setPanel({ key: activityKey, open: false }); setPopupShift({ x: 0, y: 0 }); respond("drag", "Whee! A new spot."); }} className={`floating-companion corner-${preferences.corner} size-${preferences.size} state-${activity.state}`} aria-label={`${preferences.name} companion`} onKeyDown={event => { if (event.key === "Escape") setPanel({ key: activityKey, open: false }); }}>
+    <motion.aside key={`${preferences.corner}:${preferences.size}`} drag dragListener={false} dragControls={dragControls} dragConstraints={bounds} dragElastic={0} dragMomentum={false} onDragStart={() => { close(); setPopupShift({ x: 0, y: 0 }); respond("drag", "Whee! A new spot."); }} className={`floating-companion corner-${preferences.corner} size-${preferences.size} state-${activity.state}`} aria-label={`${preferences.name} companion`} onKeyDown={event => { if (event.key === "Escape") close(); }}>
       {open && <section ref={popup} id={panelId} className="floating-companion-panel" style={{ transform: `translate(${popupShift.x}px, ${popupShift.y}px)` }} aria-label="Companion status">
-        <div className="flex items-center justify-between gap-3"><span className="text-xs font-medium text-muted-foreground">{preferences.name} · Nova</span><button aria-label="Close companion status" className="rounded-full p-1" onClick={() => setPanel({ key: activityKey, open: false })}><X size={16} /></button></div>
+        <div className="flex items-center justify-between gap-3"><span className="text-xs font-medium text-muted-foreground">{preferences.name} · Nova</span><button aria-label="Close companion status" className="rounded-full p-1" onClick={close}><X size={16} /></button></div>
         <div className="companion-bubble-nav"><button aria-pressed={view === "chat"} onClick={() => setView("chat")}>Chat</button><button aria-pressed={view === "status"} onClick={() => setView("status")}>Task status{activity.state === "waiting" ? " · input needed" : ""}</button></div>
         {view === "chat" ? <CompanionChat /> : <div role="status" aria-live="polite"><h2 className="mt-3 text-sm font-semibold">{activity.title}</h2><p className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap text-xs leading-5 text-muted-foreground">{activity.detail}</p></div>}
         <div className="mt-4 flex flex-wrap items-center gap-3 text-xs">
@@ -68,7 +79,7 @@ export function FloatingCompanion() {
         </div>
       </section>}
       {reaction && <span className="pet-reaction-caption" role="status" aria-label="Pet reaction">{reaction.text}</span>}
-      <motion.button className="floating-companion-trigger" aria-label={`${open ? "Close" : "Open"} ${preferences.name} companion status`} aria-expanded={open} aria-controls={panelId} onPointerDown={event => dragControls.start(event)} onTap={() => { respond("wave", "Hello, you!"); setView(activity.state === "waiting" ? "status" : "chat"); setPanel({ key: activityKey, open: !open }); }}>
+      <motion.button className="floating-companion-trigger" aria-label={`${open ? "Close" : "Open"} ${preferences.name} companion status`} aria-expanded={open} aria-controls={panelId} onPointerDown={event => dragControls.start(event)} onTap={() => { respond("wave", "Hello, you!"); setView(activity.state === "waiting" ? "status" : "chat"); if (open) close(); else setPanel({ key: activityKey, open: true }); }}>
         <CompanionPet preferences={preferences} state={activity.state} reaction={reaction} resting={asleep} />
         <span className="floating-companion-label" role="status" aria-live="polite"><span className="floating-status-dot" /><span>{label}</span></span>
       </motion.button>

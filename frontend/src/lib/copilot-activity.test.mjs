@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { companionActivity, conversationRunIds, readCompanion, modelSetupRequired } from "./copilot-activity.ts";
+import { companionActivity, conversationRunIds, readCompanion, modelSetupRequired, opensByItself } from "./copilot-activity.ts";
 const id = "4954fb84-44e7-4f95-8a8f-2c10e32d7666";
 const run = (status, output = null) => ({ id, status, agent_type: "computer_task", output });
 test("only structured tool results identify current conversation runs", () => {
@@ -50,4 +50,11 @@ test("model setup response shows required input, and a newer reply clears it", (
   assert.equal(companionActivity([], false, null, [message]).state, "waiting");
   assert.equal(modelSetupRequired([{ ...message, role: "user" }]), false);
   assert.equal(modelSetupRequired([message, { role: "assistant", content: "Hello" }]), false);
+});
+test("the companion opens itself for a task awaiting the member, not for a chat question", () => {
+  const question = companionActivity([], false, null, [{ role: "assistant", content: "Which one?" }]);
+  assert.equal(question.state, "waiting");
+  assert.equal(opensByItself(question), false);
+  const run = { id: "r", status: "awaiting_approval", agent_type: "email", output: null };
+  assert.equal(opensByItself(companionActivity([run], false, null, [])), true);
 });
