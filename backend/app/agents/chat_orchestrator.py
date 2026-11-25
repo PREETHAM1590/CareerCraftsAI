@@ -1,4 +1,4 @@
-"""chat_orchestrator.py — Career Copilot conversational graph (AG-UI served).
+"""chat_orchestrator.py — Nova conversational graph (AG-UI served).
 
 A multi-turn chat agent that orchestrates the existing CareerCraft agents:
 it starts runs (job_search, auto_apply, resume_optimize, ...), monitors them,
@@ -62,10 +62,10 @@ _MAX_CONTEXT_CHARS = 8000
 _MAX_LIST_RESULTS = 25
 
 UNAUTHENTICATED_REPLY = (
-    "This chat session is not authenticated. Please sign in again and reopen the Copilot."
+    "This chat session is not authenticated. Please sign in again and reopen Nova."
 )
 
-_SYSTEM_PROMPT = f"""You are Career Copilot, the orchestration assistant inside CareerCraft AI.
+_SYSTEM_PROMPT = f"""You are Nova, the orchestration assistant inside CareerCraft AI.
 
 Your job is to help the user drive their job search end to end by calling tools:
 start agent runs (job search, auto-apply, resume tailoring, cover letters,
@@ -215,7 +215,8 @@ async def start_job_application(job_url: str) -> str:
     """Prepare an application to the exact job link supplied by the user.
 
     Wakes their browser on demand. Browser mutations and submission still
-    require the user's approval. Login needs private human help; saved resume
+    require the user's approval. Nova signs in with a saved login and asks the
+    user for one-time codes; saved resume
     uploads are supported after review.
     """
     from app.services.computer_service import AGENT_WRITES, ComputerAction

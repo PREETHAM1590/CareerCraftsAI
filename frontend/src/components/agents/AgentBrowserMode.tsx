@@ -21,7 +21,7 @@ const OPTIONS = [
   { value: "cloud", label: "Cloud" },
 ] as const;
 
-/** GET/PUT /computer/mode, shared by Settings and the Copilot computer panel. */
+/** GET/PUT /computer/mode, shared by Settings and the Nova computer panel. */
 export function useComputerMode() {
   const queryClient = useQueryClient();
   const query = useQuery<ComputerModeState>({

@@ -259,6 +259,21 @@ def _computer_patches(proposal: dict, snapshot: dict | None = None):
     )
 
 
+@pytest.fixture(autouse=True)
+def _no_nova_context_lookups():
+    """plan() also reads Nova's private-step context (saved logins, account
+    sites, the application inbox); none of it matters to these tests."""
+    from app.agents import computer_agent as agent
+
+    with (
+        patch.object(agent.nova_signin, "saved_logins", AsyncMock(return_value=[])),
+        patch.object(agent.nova_signin, "account_sites", AsyncMock(return_value=[])),
+        patch.object(agent.apply_inbox, "alias_for", AsyncMock(return_value=None)),
+        patch.object(agent.apply_inbox, "recent_links", AsyncMock(return_value=[])),
+    ):
+        yield
+
+
 def _run(task: str = "Open the employer page"):
     return SimpleNamespace(
         user_id=uuid.uuid4(), id=uuid.uuid4(), input={"context": {"task": task}}, tokens_used=0

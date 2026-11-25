@@ -136,8 +136,12 @@ export function ApprovalModal({ runId, action, onApprove, onCancel }: Props) {
   const [loading, setLoading] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editedText, setEditedText] = useState<string | null>(null);
+  const [code, setCode] = useState("");
   const reduce = useReducedMotion();
   const actionType = (action.type as string) || "unknown";
+  // Nova is waiting for a one-time code: the code goes to its own private
+  // route (sealed, read once) and never travels in the approval payload.
+  const needsCode = actionType === "computer_action" && action.input_required === "code";
   const warnings = collectWarnings(action);
   const ActionIcon = ACTION_ICON[actionType] ?? ShieldCheck;
 
@@ -150,13 +154,22 @@ export function ApprovalModal({ runId, action, onApprove, onCancel }: Props) {
       toast.error("The approved content cannot be empty");
       return;
     }
+    if (approved && needsCode && !/^[A-Za-z0-9-]{4,12}$/.test(code.trim())) {
+      toast.error("Enter the 4 to 12 letter or digit code the site sent you");
+      return;
+    }
     setLoading(true);
     try {
-      const edits = approvalEdits(approved, editedText);
-      await apiClient.post(`/agents/${runId}/approve`, {
-        approved,
-        edits,
-      });
+      if (approved && needsCode) {
+        await apiClient.post(`/computer/runs/${runId}/code`, { code: code.trim() });
+        setCode("");
+      } else {
+        const edits = approvalEdits(approved, editedText);
+        await apiClient.post(`/agents/${runId}/approve`, {
+          approved,
+          edits,
+        });
+      }
       if (approved) {
         useAgentStore.getState().clearCheckpoint(runId);
         useAgentStore.getState().setRunStatus(runId, "queued");
@@ -178,7 +191,7 @@ export function ApprovalModal({ runId, action, onApprove, onCancel }: Props) {
     if (e.key === "Escape" && !editing) onCancel();
   };
 
-  const approveLabel = loading ? "Processing..." : actionType === "linkedin_outreach" ? "Copy drafts" : "Approve & Execute";
+  const approveLabel = loading ? "Processing..." : actionType === "linkedin_outreach" ? "Copy drafts" : needsCode ? "Send code to Nova" : "Approve & Execute";
 
   return (
     <DialogPrimitive.Root open onOpenChange={(open) => !open && onCancel()}>
@@ -516,12 +529,25 @@ export function ApprovalModal({ runId, action, onApprove, onCancel }: Props) {
                         <p className="font-medium">{String(action.summary ?? "Review browser action")}</p>
                         <p className="break-all text-sm text-muted-foreground">Page: {String(action.page_url ?? "Current browser page")}</p>
                         <Recessed>
-                          <p>Action: {step?.operation}</p>
+                          <p>Action: {step?.operation === "sign_in" ? "Sign in with your saved login" : step?.operation === "enter_code" ? "Enter a one-time code" : step?.operation}</p>
                           {action.target ? <p>Target: {String(action.target)}</p> : null}
                           {step?.parameters?.url ? <p>Open: {step.parameters.url}</p> : null}
                           {step?.parameters?.text !== undefined ? <p>Enter: {step.parameters.text}</p> : null}
                           {step?.parameters?.deltaY !== undefined ? <p>Scroll: {step.parameters.deltaY} pixels</p> : null}
                         </Recessed>
+                        {needsCode && <label className="block space-y-1.5">
+                          <span className="text-sm font-medium">Code from the site</span>
+                          <input
+                            value={code}
+                            onChange={e => setCode(e.target.value)}
+                            inputMode="numeric"
+                            autoComplete="one-time-code"
+                            maxLength={12}
+                            placeholder="123456"
+                            className="w-full rounded-lg border bg-background px-3 py-2 font-geist-mono text-base tracking-[0.3em]"
+                          />
+                          <span className="block text-xs text-muted-foreground">Used once to fill the code box, then deleted. Nova&apos;s AI never sees it.</span>
+                        </label>}
                         <p className="text-sm text-muted-foreground">Check the live computer view before approving.</p>
                       </div>;
                     })()}

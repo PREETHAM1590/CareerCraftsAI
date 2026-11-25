@@ -1,4 +1,4 @@
-"""AG-UI endpoint for the Career Copilot chat graph.
+"""AG-UI endpoint for the Nova chat graph.
 
 Serves the chat orchestrator over the AG-UI protocol so the CopilotKit React
 SDK can talk to it directly. Mounted at /api/v1/agents/chat — a non-public

@@ -1,4 +1,4 @@
-"""Career Copilot chat orchestrator + gateway tool sessions.
+"""Nova chat orchestrator + gateway tool sessions.
 
 The chat copilot is orchestration-only: it may start whitelisted runs and
 read status for the authenticated user, but there is deliberately no tool

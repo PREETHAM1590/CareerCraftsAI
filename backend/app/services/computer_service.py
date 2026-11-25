@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import logging
+import re
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -57,7 +58,14 @@ PARAMETERS = {
     "human/secret": {"text"},
     "privacy/release": set(),
     "human/navigate": {"url"},
+    # Nova's private steps (see nova_signin): refs only, never a secret.
+    "sign_in": {"usernameRef", "passwordRef", "snapshotId"},
+    "enter_code": {"ref", "snapshotId"},
+    # confirmRef is optional: not every signup form repeats the password.
+    "create_account": {"emailRef", "passwordRef", "confirmRef", "snapshotId"},
 }
+NOVA_STEPS = {"sign_in", "enter_code", "create_account"}
+OPTIONAL = {"files/list": {"path"}, "create_account": {"confirmRef"}}
 # The extension drives one agent tab; anything else stays cloud-only.
 BROWSER_OPERATIONS = {
     "navigate",
@@ -79,6 +87,7 @@ COMMAND_TIMEOUT = 60  # navigation in the user's browser can be slow
 RESULT_TTL = 120
 RESULT_STATUSES = {403, 409, 422, 502}
 PERMISSION_PREFIX = "Allow the CareerCraft extension on "
+REF = re.compile(r"[a-zA-Z0-9_-]{1,30}")
 
 
 class ComputerAction(BaseModel):
@@ -100,9 +109,7 @@ class ComputerAction(BaseModel):
             raise ValueError("This operation is not available")
         if set(self.parameters) - PARAMETERS[self.operation]:
             raise ValueError("Unexpected computer action parameters")
-        required = PARAMETERS[self.operation] - (
-            {"path"} if self.operation == "files/list" else set()
-        )
+        required = PARAMETERS[self.operation] - OPTIONAL.get(self.operation, set())
         if not required.issubset(self.parameters):
             raise ValueError("Required computer action parameters are missing")
         if self.operation in {"click", "type", "upload"}:
@@ -112,6 +119,20 @@ class ComputerAction(BaseModel):
                 or not self.parameters.get("ref")
             ):
                 raise ValueError("Use the current computer run, snapshotId and element ref")
+        if self.operation in NOVA_STEPS:
+            names = {
+                "sign_in": ["usernameRef", "passwordRef"],
+                "enter_code": ["ref"],
+                "create_account": ["emailRef", "passwordRef"]
+                + (["confirmRef"] if "confirmRef" in self.parameters else []),
+            }[self.operation]
+            refs = [self.parameters.get(name) for name in names]
+            if (
+                not self.computer_run
+                or not isinstance(self.parameters.get("snapshotId"), int)
+                or not all(isinstance(ref, str) and REF.fullmatch(ref) for ref in refs)
+            ):
+                raise ValueError("Use the current computer run, snapshotId and element refs")
         if self.operation == "upload":
             uuid.UUID(str(self.parameters["document_id"]))
             if self.approved_snapshot != self.parameters["snapshotId"]:

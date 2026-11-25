@@ -35,7 +35,7 @@ export function companionActivity(runs: ActivityRun[], running: boolean, error: 
   if (waiting) return { state: "waiting", title: "Your review is needed", detail: typeof waiting.output?.summary === "string" ? waiting.output.summary : "Review the proposed action before the assistant continues.", run: waiting };
   const active = runs.findLast(run => ["running", "queued"].includes(run.status));
   if (active) return { state: "running", title: active.status === "queued" ? "Task queued" : `Working on ${active.agent_type.replaceAll("_", " ")}`, detail: "Open the run for its progress and results.", run: active };
-  if (running) return { state: "running", title: "Thinking through your request", detail: "The copilot is responding to this conversation." };
+  if (running) return { state: "running", title: "Thinking through your request", detail: "Nova is responding to this conversation." };
   if (error) return { state: "failed", title: "The conversation needs attention", detail: error };
   const latest = runs.at(-1);
   if (latest?.output?.input_required === "browser_handoff") return { state: "waiting", title: "Browser input is needed", detail: typeof latest.output.message === "string" ? latest.output.message : "Finish your browser input and return control to the assistant.", run: latest };

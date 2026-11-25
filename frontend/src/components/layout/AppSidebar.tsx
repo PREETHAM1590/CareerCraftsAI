@@ -30,7 +30,7 @@ const ITEMS = [
   { href: "/jobs", icon: Search, label: "Jobs" },
   { href: "/applications", icon: Briefcase, label: "Applications" },
   { href: "/agents", icon: Bot, label: "Agents" },
-  { href: "/copilot", icon: MessageSquare, label: "Copilot" },
+  { href: "/nova", icon: MessageSquare, label: "Nova" },
   { href: "/email", icon: Mail, label: "Email" },
   { href: "/outreach", icon: Send, label: "Outreach" },
   { href: "/linkedin", icon: BrandLinkedin, label: "LinkedIn" },
