@@ -155,9 +155,8 @@ sudo find /var/cache/nginx/website -type f -delete
 
 nginx serves its saved copy of a page while it refreshes it in the background,
 so without the purge the first visit to each page gets the previous build's
-HTML, however old, which can point at JS files that no longer exist
-(`ChunkLoadError`). Cache config:
-`/etc/nginx/snippets/website-cache-locations.conf` on the VM.
+HTML (up to a day old), which can point at JS files that no longer exist
+(`ChunkLoadError`). Cache config: `deploy/oracle-vm/nginx-host/`.
 
 ---
 
