@@ -1,7 +1,6 @@
 """Bounded best-effort description fill for BambooHR and Rippling boards."""
 
 import asyncio
-from types import SimpleNamespace
 
 from app.services import job_connectors as jc
 
@@ -25,11 +24,14 @@ def test_bamboohr_bodies_fill(monkeypatch):
 
     async def fake_get(url, **kw):
         calls.append(url)
-        return FakeResponse('[{"id": "7", "description": "<p>Ship things</p>"}]')
+        return FakeResponse(
+            '{"result": {"jobOpening": {"description": "<p>Ship <b>things</b></p>"}}}'
+        )
 
     monkeypatch.setattr(jc, "_polite_get", fake_get)
     rows = [{"id": "7", "description": ""}, {"id": "8", "description": "already"}]
     asyncio.run(jc._fill_bamboohr_bodies("acme", rows))
+    assert calls == ["https://acme.bamboohr.com/careers/7/detail"]
     assert rows[0]["description"] == "Ship things"
     assert rows[1]["description"] == "already"
 
@@ -49,7 +51,10 @@ def test_rippling_bodies_bounded_and_extracted(monkeypatch):
 
     async def fake_get(url, **kw):
         urls.append(url)
-        return FakeResponse('<div class="job-description">Build <b>platforms</b></div>')
+        return FakeResponse(
+            '<div class="job-description"><div>Build <b>platforms</b></div>'
+            "<div>Own on-call</div></div><div>Footer</div>"
+        )
 
     monkeypatch.setattr(jc, "_polite_get", fake_get)
     rows = [
@@ -58,5 +63,5 @@ def test_rippling_bodies_bounded_and_extracted(monkeypatch):
     ]
     asyncio.run(jc._fill_rippling_bodies("acme", rows))
     assert len(urls) == 25
-    assert rows[0]["description"] == "Build platforms"
+    assert rows[0]["description"] == "Build platforms Own on-call"
     assert rows[30]["description"] == ""

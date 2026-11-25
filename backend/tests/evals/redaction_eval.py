@@ -10,7 +10,6 @@ Run:  python3 -m tests.evals.redaction_eval [--real]
 from __future__ import annotations
 
 import json
-import re
 import sys
 from dataclasses import dataclass, field
 
@@ -22,7 +21,11 @@ from app.core.pii_vault import PiiVault
 CASES = [
     (
         "Priya Sharma (priya.sharma@gmail.com, +91 98765 43210) applied for the backend role.",
-        {"NAME": {"Priya Sharma"}, "EMAIL": {"priya.sharma@gmail.com"}, "PHONE": {"+91 98765 43210"}},
+        {
+            "NAME": {"Priya Sharma"},
+            "EMAIL": {"priya.sharma@gmail.com"},
+            "PHONE": {"+91 98765 43210"},
+        },
         [],
     ),
     (

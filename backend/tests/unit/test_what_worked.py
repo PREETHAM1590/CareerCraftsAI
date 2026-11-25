@@ -9,7 +9,8 @@ def _row(status, source, resume_id, score=80):
 
 
 def test_summarize_rates_and_ranking():
-    resume_a, resume_b = "11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222"
+    resume_a = "11111111-1111-1111-1111-111111111111"
+    resume_b = "22222222-2222-2222-2222-222222222222"
     rows = (
         [("applied", "linkedin", resume_a, 80)] * 8
         + [("interview", "linkedin", resume_a, 90)] * 2
@@ -48,7 +49,11 @@ def test_small_samples_flag_the_note():
 
 def test_tailoring_prompt_includes_outcome_feedback():
     prompt = resume_prompt.build_user_prompt(
-        {"jd_text": "jd", "target_title": "Engineer", "outcome_feedback": "Interviews came from LinkedIn, resume A."}
+        {
+            "jd_text": "jd",
+            "target_title": "Engineer",
+            "outcome_feedback": "Interviews came from LinkedIn, resume A.",
+        }
     )
     assert "WHAT_WORKED" in prompt
     assert "LinkedIn, resume A" in prompt

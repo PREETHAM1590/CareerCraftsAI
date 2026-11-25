@@ -10,9 +10,25 @@ type RunRow = {
   id: string;
   agent_type: string;
   status: string;
-  created_at?: string | null;
-  result?: { content?: string | null } | null;
+  started_at?: string | null;
+  output?: Record<string, unknown> | null;
 };
+
+// Agents store their draft under different keys (and often inside
+// pending_action); show the first readable text.
+const DRAFT_KEYS = ["content", "body", "message", "draft", "cover_letter", "about", "headline"];
+
+function draftText(output: RunRow["output"]): string {
+  const sources = [output, output?.pending_action, output?.result];
+  for (const source of sources) {
+    if (!source || typeof source !== "object") continue;
+    for (const key of DRAFT_KEYS) {
+      const value = (source as Record<string, unknown>)[key];
+      if (typeof value === "string" && value.trim()) return value;
+    }
+  }
+  return "";
+}
 
 const AGENT_LABELS: Record<string, string> = {
   email: "Email draft",
@@ -40,10 +56,10 @@ export default function ApprovalsPage() {
 
   const load = useCallback(async () => {
     try {
-      const { data } = await apiClient.get<RunRow[]>("/agents/runs", {
+      const { data } = await apiClient.get<{ runs?: RunRow[] }>("/agents/runs", {
         params: { status: "awaiting_approval" },
       });
-      setRuns(Array.isArray(data) ? data : []);
+      setRuns(Array.isArray(data?.runs) ? data.runs : []);
       setError(null);
     } catch {
       setError("Could not load the approval queue.");
@@ -57,7 +73,7 @@ export default function ApprovalsPage() {
   const decide = async (run: RunRow, approved: boolean) => {
     setBusy(run.id);
     try {
-      await apiClient.post(`/agents/runs/${run.id}/approve`, { approved });
+      await apiClient.post(`/agents/${run.id}/approve`, { approved });
       setRuns((prev) => (prev ?? []).filter((r) => r.id !== run.id));
     } catch {
       setError("Could not record the decision. Try again.");
@@ -93,23 +109,25 @@ export default function ApprovalsPage() {
         </p>
       ) : (
         <ul className="space-y-3">
-          {runs.map((run) => (
+          {runs.map((run) => {
+            const draft = draftText(run.output);
+            return (
             <li
               key={run.id}
               className="rounded-xl border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900"
             >
               <div className="flex items-center justify-between gap-3">
                 <AgentBadge type={run.agent_type} />
-                <time className="text-xs text-neutral-500" dateTime={run.created_at ?? undefined}>
-                  {run.created_at ? new Date(run.created_at).toLocaleDateString() : ""}
+                <time className="text-xs text-neutral-500" dateTime={run.started_at ?? undefined}>
+                  {run.started_at ? new Date(run.started_at).toLocaleDateString() : ""}
                 </time>
               </div>
 
               <p className="mt-2 line-clamp-2 text-sm text-neutral-700 dark:text-neutral-300">
-                {run.result?.content?.slice(0, 240) || "Draft ready for your review."}
+                {draft.slice(0, 240) || "Draft ready for your review."}
               </p>
 
-              {run.result?.content && (
+              {draft && (
                 <>
                   <button
                     type="button"
@@ -121,7 +139,7 @@ export default function ApprovalsPage() {
                   </button>
                   {openId === run.id && (
                     <div className="mt-2 max-h-64 overflow-y-auto whitespace-pre-wrap rounded-lg bg-neutral-50 p-3 text-sm text-neutral-800 dark:bg-neutral-800 dark:text-neutral-200">
-                      {run.result.content}
+                      {draft}
                     </div>
                   )}
                 </>
@@ -146,7 +164,8 @@ export default function ApprovalsPage() {
                 </button>
               </div>
             </li>
-          ))}
+            );
+          })}
         </ul>
       )}
     </div>

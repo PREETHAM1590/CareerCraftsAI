@@ -952,34 +952,49 @@ _BODIES_MAX = 25  # descriptions fetched per refresh; the rest stay empty
 
 
 async def _fill_bamboohr_bodies(tenant: str, rows: list[dict]) -> None:
-    """BambooHR's list endpoint has no bodies; each posting's JSON does.
-    Best effort, bounded: the first _BODIES_MAX postings per refresh."""
-    from html import unescape
-
-    todo = [r for r in rows if not r.get("description")][:25]
-    if not todo:
-        return
-    try:
-        text = await _polite_get(
-            f"https://{tenant}.bamboohr.com/careers/job_ads",
-            headers={"Accept": "application/json"},
-        )
-        text.raise_for_status()
-        bodies = {
-            j.get("id"): re.sub(r"<[^>]+>", " ", str(j.get("description") or ""))
-            for j in json.loads(text.text)
-        }
-        bodies = {k: " ".join(plain(v).split()) for k, v in bodies.items()}
-    except Exception:  # noqa: BLE001, S110 - the body is optional
-        return
+    """BambooHR's list endpoint has no bodies; each posting's detail JSON
+    (/careers/<id>/detail) does. Best effort, bounded: the first _BODIES_MAX
+    postings per refresh."""
+    todo = [r for r in rows if not r.get("description") and r.get("id")][:_BODIES_MAX]
     for r in todo:
-        r["description"] = bodies.get(r["id"], "")
+        try:
+            res = await _polite_get(
+                f"https://{tenant}.bamboohr.com/careers/{r['id']}/detail",
+                headers={"Accept": "application/json"},
+            )
+            res.raise_for_status()
+            opening = ((res.json() or {}).get("result") or {}).get("jobOpening") or {}
+            body = " ".join(plain(opening.get("description")).split())
+            if body:
+                r["description"] = body[:8000]
+        except Exception:  # noqa: BLE001, S112 - the body is optional
+            continue
+
+
+_DESCRIPTION_OPEN = re.compile(
+    r"<(div|section)\b[^>]*(?:class|id)=[\"'][^\"']*description[^\"']*[\"'][^>]*>", re.I
+)
+_BLOCK_TAG = re.compile(r"<(/?)(div|section)\b[^>]*>", re.I)
+
+
+def _description_block(page: str) -> str:
+    """Inner HTML of the first element whose class/id names a description,
+    up to its own closing tag (nested blocks included)."""
+    opening = _DESCRIPTION_OPEN.search(page)
+    if not opening:
+        return ""
+    depth = 1
+    for tag in _BLOCK_TAG.finditer(page, opening.end()):
+        depth += -1 if tag.group(1) else 1
+        if depth == 0:
+            return page[opening.end() : tag.start()]
+    return page[opening.end() :]
 
 
 async def _fill_rippling_bodies(tenant: str, rows: list[dict]) -> None:
     """Rippling's board API lists without bodies; each job's `url` serves the
     posting HTML. Best effort, bounded, plain-text extraction only."""
-    todo = [r for r in rows if not r.get("description")][:25]
+    todo = [r for r in rows if not r.get("description")][:_BODIES_MAX]
     for r in todo:
         url = r.get("url")
         if not url:
@@ -987,14 +1002,10 @@ async def _fill_rippling_bodies(tenant: str, rows: list[dict]) -> None:
         try:
             res = await _polite_get(url)
             res.raise_for_status()
-            match = re.search(
-                r"<(?:div|section)[^>]*(?:job[-_]?description|description)[^>]*>(.*?)</(?:div|section)>",
-                res.text,
-                re.I | re.S,
-            )
-            if match:
-                r["description"] = " ".join(plain(match.group(1)).split())[:8000]
-        except Exception:  # noqa: BLE001, S110 - the body is optional
+            block = _description_block(res.text)
+            if block:
+                r["description"] = " ".join(plain(block).split())[:8000]
+        except Exception:  # noqa: BLE001, S112 - the body is optional
             continue
 
 

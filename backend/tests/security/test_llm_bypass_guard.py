@@ -161,7 +161,6 @@ def test_decision_engine_redacts_form_state_before_the_provider_call():
     member's name, email, phone — none of it may reach Typesafe/Laya raw."""
     import asyncio
 
-    from app.core import config
     from app.services import decision_engine
 
     captured = {}
@@ -191,7 +190,9 @@ def test_decision_engine_redacts_form_state_before_the_provider_call():
     async def scenario():
         async def fake_context(uid):
             policy = SimpleNamespace(enabled=True, detect_patterns=True)
-            known = SimpleNamespace(values={"name": {"Priya Sharma"}, "email": {"priya@example.com"}})
+            known = SimpleNamespace(
+                values={"name": {"Priya Sharma"}, "email": {"priya@example.com"}}
+            )
             return policy, known
 
         def redact(text):

@@ -457,7 +457,7 @@ async function handleMessage(msg, sender) {
   if (contentMessages.has(msg?.type) && !taskSenderAllowed(sender, await getActiveTask(), msg, chrome.runtime.id)) {
     return { error: "This page does not own the active application." };
   }
-  if (["CC_GET_STATUS", "CC_VALIDATE_AND_PAIR", "CC_DISCONNECT", "CC_CHECK_NOW", "CC_APPROVE_SUBMIT", "CC_APPROVE_HOST", "CC_CONFIRM_PAIR", "CC_REJECT_PAIR"].includes(msg?.type) && !popup) return { error: "Open the CareerCraft extension popup to perform this action." };
+  if (["CC_GET_STATUS", "CC_VALIDATE_AND_PAIR", "CC_DISCONNECT", "CC_CHECK_NOW", "CC_APPROVE_SUBMIT", "CC_APPROVE_HOST", "CC_CONFIRM_PAIR", "CC_REJECT_PAIR", "CC_COLLECT_JOB"].includes(msg?.type) && !popup) return { error: "Open the CareerCraft extension popup to perform this action." };
   switch (msg && msg.type) {
     case "WAKE":
     case "CC_CHECK_NOW": {

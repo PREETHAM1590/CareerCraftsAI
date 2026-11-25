@@ -5,7 +5,7 @@ records. Read-only aggregation — nothing here mutates an application."""
 from __future__ import annotations
 
 import uuid
-from collections import Counter, defaultdict
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
@@ -44,7 +44,6 @@ async def what_worked(db, user_id: uuid.UUID, now: datetime | None = None) -> di
 def summarize(rows, now: datetime | None = None) -> dict:
     """Pure aggregation over (status, source, resume_id, match_score) rows so
     the grouping is testable without a database."""
-    outcome_counts: dict[str, Counter] = defaultdict(Counter)
     resume_counts: Counter = Counter()
     resume_wins: Counter = Counter()
     source_counts: Counter = Counter()

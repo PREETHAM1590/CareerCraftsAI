@@ -89,7 +89,7 @@
   }
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    if (msg && msg.type === "CC_COLLECT_JOB") {
+    if (msg && msg.type === "CC_SCRAPE_JOB") {
       const payload = scrape();
       sendResponse(payload.title ? { ok: true, job: payload } : { ok: false, error: "No job listing found on this page" });
     }

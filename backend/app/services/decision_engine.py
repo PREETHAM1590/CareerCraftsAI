@@ -116,7 +116,9 @@ async def _remote(user_id: str | None, chosen: str, state: Any, questions: dict)
             {"Authorization": f"Bearer {settings.LAYA_API_KEY}"} if settings.LAYA_API_KEY else {}
         )
         body = {"state": state, "questions": questions}
-    body["state"], body["questions"] = await _redact_payload(user_id, body["state"], body["questions"])
+    body["state"], body["questions"] = await _redact_payload(
+        user_id, body["state"], body["questions"]
+    )
     async with httpx.AsyncClient(timeout=settings.DECISION_ENGINE_TIMEOUT_S) as client:
         response = await client.post(url, json=body, headers=headers)
         response.raise_for_status()
@@ -133,7 +135,7 @@ async def _redact_payload(user_id: str | None, state: Any, questions: dict) -> t
     loading failure stops the call in strict mode, and a member's disabled
     privacy policy turns redaction off."""
     from app.core.config import settings as s
-    from app.core.pii_vault import KnownPii, PiiVault
+    from app.core.pii_vault import PiiVault
     from app.services import pii_profile
 
     if not s.PII_REDACTION_ENABLED:
@@ -151,7 +153,6 @@ async def _redact_payload(user_id: str | None, state: Any, questions: dict) -> t
     redacted_state, redacted_questions = vault.redact_obj(state), vault.redact_obj(questions)
     if vault.summary():
         logger.info("decision_engine_pii_redacted counts=%s", vault.summary())
-    return redacted_state, redacted_questions
     return redacted_state, redacted_questions
 
 

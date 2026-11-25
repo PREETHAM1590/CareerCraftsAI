@@ -705,16 +705,16 @@ async def plan_fields(db: AsyncSession, task: ExtensionTask, raw_fields: list[di
     ]
     # Identity/sensitive/consent questions never go to the LLM: their
     # answers must stay on this server.
+    by_field = {field.field_id: field for field in fields}
     llm_eligible = [
         fid
         for fid in unresolved_required
-        if not _local_match_only(
-            normalize_question(next(p["label"] for p in plan if p["field_id"] == fid)) or ""
-        )
-        and next(p["input_type"] for p in plan if p["field_id"] == fid) != "checkbox"
+        if by_field[fid].input_type != "checkbox"
+        and not _local_match_only(by_field[fid].normalized_key or "")
+        and not _local_match_only(normalize_question(by_field[fid].label) or "")
     ]
     if llm_eligible:
-        await _llm_fallback(task, plan, llm_eligible)
+        await _llm_fallback(db, task, plan, llm_eligible)
     _remember_open_questions(task, plan)
     _remember_answer_sources(task, plan)
     return {
@@ -952,7 +952,11 @@ def _strip_tracking(url: str) -> str:
         return url
     from urllib.parse import parse_qsl, urlencode
 
-    kept = [(k, v) for k, v in parse_qsl(parts.query) if not re.match(r"^(utm_|ref$|src$)", k, re.I)]
+    kept = [
+        (k, v)
+        for k, v in parse_qsl(parts.query)
+        if not re.match(r"^(utm_|ref$|src$)", k, re.I)
+    ]
     return urlunsplit(parts._replace(query=urlencode(kept)))
 
 
@@ -960,10 +964,14 @@ def normalize_collected_job(payload: dict) -> dict:
     """Map a raw listing the content script scraped onto the job schema used by
     search/track/auto-apply drafts. Raises ValueError when the capture is not
     a job listing we can use."""
-    host = (urlsplit(payload.get("url") or "").hostname or "").lower()
+    parts = urlsplit((payload.get("url") or "").strip())
+    host = (parts.hostname or "").lower()
     board = COLLECTABLE_HOSTS.get(host)
     if board is None:
         raise ValueError(f"Unsupported job board host: {host or 'unknown'}")
+    # The URL becomes a link in the app: only a plain https board URL.
+    if parts.scheme != "https" or parts.username or parts.password or parts.port:
+        raise ValueError("A collected listing URL must be a plain https link")
 
     title = (payload.get("title") or "").strip()
     company = (payload.get("company") or "").strip()
@@ -1015,10 +1023,14 @@ def _parse_board_date(raw: str):
         return datetime.fromisoformat(iso).isoformat()
     except ValueError:
         pass
-    match = re.search(r"(\d+)\s*(minute|hour|day|week|month)s?\s*ago", raw)
+    if raw in {"just now", "today", "few hours ago", "a few hours ago"}:
+        return datetime.now(UTC).isoformat()
+    # Naukri writes "30+ Days Ago"; LinkedIn "1 week ago" / "a day ago".
+    match = re.search(r"(\d+|an?)\+?\s*(minute|hour|day|week|month)s?\s*ago", raw)
     if not match:
         return None
-    amount, unit = int(match.group(1)), match.group(2)
+    amount = 1 if match.group(1) in {"a", "an"} else int(match.group(1))
+    unit = match.group(2)
     delta = {
         "minute": timedelta(minutes=amount),
         "hour": timedelta(hours=amount),
@@ -1034,39 +1046,43 @@ def _parse_board_date(raw: str):
 _LLM_FALLBACK_MAX = 8  # questions per plan; the rest stay with the member
 
 
-async def _llm_fallback(task: ExtensionTask, plan: list[dict], field_ids: list[str]) -> None:
+async def _llm_fallback(
+    db: AsyncSession, task: ExtensionTask, plan: list[dict], field_ids: list[str]
+) -> None:
     """For required questions no template or saved answer resolved, ask the
     gateway LLM to map one of the member's saved answers / resume facts onto
     the question. Everything it proposes keeps ``requires_review`` and an
-    ``ai_draft`` source, so auto-submit never fires without a person."""
+    ``ai_draft`` source, so auto-submit never fires without a person.
+
+    Identity, sensitive and disclosure answers never leave this server: they
+    are dropped from what the model sees, whatever the question."""
     todo = [p for p in plan if p["field_id"] in set(field_ids)][:_LLM_FALLBACK_MAX]
     if not todo:
         return
     from langchain_core.messages import HumanMessage, SystemMessage
 
+    from app.applications import saved_answers as _sa
     from app.core.model_router import get_llm
 
-    saved = getattr(task, "saved_answers", None)
-    if saved is None:
-        from app.applications import saved_answers as _sa
-
-        try:
-            saved = {
-                a["question_key"]: a.get("value")
-                for a in await _sa.list_answers(db, task.user_id)
-                if a.get("question_key")
-            }
-        except Exception as exc:  # noqa: BLE001 — fallback is best effort
-            logger.info("Saved answers unavailable: %s", type(exc).__name__)
-            saved = {}
+    try:
+        answers = await _sa.list_answers(db, task.user_id)
+    except Exception as exc:  # noqa: BLE001 — fallback is best effort
+        logger.info("Saved answers unavailable: %s", type(exc).__name__)
+        return
+    saved = {
+        a["question_key"]: a.get("value")
+        for a in answers
+        if a.get("question_key")
+        and a.get("value") not in (None, "", [])
+        and not _local_match_only(a["question_key"])
+    }
+    if not saved:
+        return  # nothing the model may use: leave the questions to the member
     try:
         llm = await get_llm(str(task.user_id), None, task_type="auto_apply")
     except Exception as exc:  # noqa: BLE001 — fallback is best effort
-        logger.info(
-            "LLM fallback unavailable: %s", type(exc).__name__
-        )
+        logger.info("LLM fallback unavailable: %s", type(exc).__name__)
         return
-    task_id = getattr(task, "id", "?")
     by_id = {p["field_id"]: p for p in plan}
     for field in todo:
         try:
