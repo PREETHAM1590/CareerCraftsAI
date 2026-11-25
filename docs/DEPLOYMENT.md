@@ -146,6 +146,19 @@ public.env` and merely `docker restart`-ing the frontend container does
 **not** pick up the change. A rebuild (`docker compose build frontend`) is
 required whenever any `NEXT_PUBLIC_*` value changes.
 
+**After every frontend deploy, once the new container is healthy, purge the
+host nginx page cache:**
+
+```bash
+sudo find /var/cache/nginx/website -type f -delete
+```
+
+nginx serves its saved copy of a page while it refreshes it in the background,
+so without the purge the first visit to each page gets the previous build's
+HTML, however old, which can point at JS files that no longer exist
+(`ChunkLoadError`). Cache config:
+`/etc/nginx/snippets/website-cache-locations.conf` on the VM.
+
 ---
 
 ## 4. Verify
