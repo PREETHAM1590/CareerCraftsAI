@@ -218,7 +218,7 @@ services:
       dockerfile: tunnel.Dockerfile
     network_mode: host
     environment:
-      SANDBOX_SSH_TARGET: sandboxtunnel@129.225.91.17
+      SANDBOX_SSH_TARGET: sandboxtunnel@129.154.38.17
     volumes:
       - /opt/careercraft-secrets/sandbox-tunnel/sandbox.key:/secrets/sandbox.key:ro
       - /opt/careercraft-secrets/sandbox-tunnel/known_hosts:/secrets/known_hosts:ro
