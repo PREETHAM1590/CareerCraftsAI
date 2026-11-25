@@ -418,7 +418,12 @@ class PiiVault:
         if isinstance(obj, list):
             return [self.redact_obj(item) for item in obj]
         if isinstance(obj, dict):
-            return {key: self.redact_obj(value) for key, value in obj.items()}
+            # Keys too: form state can key a radio group by an option's text,
+            # which may be the member's own name or city.
+            return {
+                (self.redact(key) if isinstance(key, str) else key): self.redact_obj(value)
+                for key, value in obj.items()
+            }
         return obj
 
     # ── inbound ──

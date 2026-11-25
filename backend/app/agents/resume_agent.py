@@ -300,6 +300,9 @@ def resume_agent_node(state: AgentState) -> AgentState:
         from app.services.resume_facts import fetch_resume_facts_sync
 
         verified_contact, saved_facts = fetch_resume_facts_sync(user_id)
+        from app.services.what_worked import feedback_text_sync
+
+        outcome_feedback = feedback_text_sync(user_id)
 
         emit(
             run_id,
@@ -346,6 +349,7 @@ def resume_agent_node(state: AgentState) -> AgentState:
                     "template": template,
                     "verified_facts": saved_facts,
                     "page_target": ctx.get("page_target", 2),
+                    "outcome_feedback": outcome_feedback,
                 },
                 chunk_texts,
             ),

@@ -359,3 +359,63 @@ async def test_claim_locks_device_row_first_and_flags_redelivery():
     assert await extension_service.claim_next_task(db, device) is task
     assert "FOR UPDATE" in str(db.execute.await_args_list[0].args[0])
     assert task.redelivered is True
+
+
+async def test_llm_fallback_drafts_concurrently_within_the_budget(monkeypatch):
+    import asyncio
+    import time
+
+    from app.applications import saved_answers
+    from app.core import model_router
+
+    def slow_invoke(messages):
+        time.sleep(0.3)
+        return SimpleNamespace(content="Yes, I can.")
+
+    monkeypatch.setattr(
+        saved_answers,
+        "list_answers",
+        AsyncMock(return_value=[{"question_key": "custom.notes", "value": "Flexible"}]),
+    )
+    monkeypatch.setattr(
+        model_router, "get_llm", AsyncMock(return_value=SimpleNamespace(invoke=slow_invoke))
+    )
+    plan = [
+        {"field_id": f"q{i}", "label": f"Question {i}", "value": None, "source": "unresolved"}
+        for i in range(6)
+    ]
+    started = time.monotonic()
+    await extension_service._llm_fallback(
+        MagicMock(), SimpleNamespace(user_id=uuid.uuid4()), plan, [p["field_id"] for p in plan]
+    )
+    # Six 0.3 s calls run together, not one after another (1.8 s).
+    assert time.monotonic() - started < 1.2
+    assert all(p["value"] == "Yes, I can." and p["source"] == "ai_draft" for p in plan)
+
+    monkeypatch.setattr(extension_service, "_LLM_FALLBACK_BUDGET_S", 0.05)
+    late = [{"field_id": "late", "label": "Late", "value": None, "source": "unresolved"}]
+    await extension_service._llm_fallback(
+        MagicMock(), SimpleNamespace(user_id=uuid.uuid4()), late, ["late"]
+    )
+    assert late[0]["value"] is None  # past the deadline: left to the member
+    await asyncio.sleep(0.4)  # let the abandoned worker thread finish
+
+
+def test_collect_accepts_naukri_subdomains_only_for_naukri():
+    job = extension_service.normalize_collected_job(
+        {"url": "https://jobs.naukri.com/listing-1", "title": "Data Analyst"}
+    )
+    assert job["platform"] == "naukri"
+    with pytest.raises(ValueError, match="Unsupported job board host"):
+        extension_service.normalize_collected_job(
+            {"url": "https://app.instahyre.com/job-1", "title": "Data Analyst"}
+        )
+
+
+def test_redact_obj_redacts_keys_too():
+    from app.core.pii_vault import KnownPii, PiiVault
+
+    known = KnownPii()
+    known.add("NAME", "Priya Sharma")
+    out = PiiVault(known).redact_obj({"Priya Sharma": "self", "other": ["Priya Sharma"]})
+    assert "Priya Sharma" not in str(out)

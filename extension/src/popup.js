@@ -196,7 +196,8 @@ $("autofill").addEventListener("click", async () => {
   }
 });
 
-const COLLECT_PAGE = /^https:\/\/([a-z0-9-]+\.)*(naukri\.com|instahyre\.com)\/|^https:\/\/www\.linkedin\.com\/jobs\//;
+// Same hosts the backend accepts (extension_service.normalize_collected_job).
+const COLLECT_PAGE = /^https:\/\/([a-z0-9-]+\.)*naukri\.com\/|^https:\/\/www\.instahyre\.com\/|^https:\/\/www\.linkedin\.com\/jobs\//;
 
 async function scrapeJob(tabId) {
   const ask = () => chrome.tabs.sendMessage(tabId, { type: "CC_SCRAPE_JOB" }, { frameId: 0 });

@@ -85,7 +85,6 @@
         "https://www.naukri.com/*",
         "https://*.naukri.com/*",
         "https://www.instahyre.com/*",
-        "https://*.instahyre.com/*",
         "https://www.linkedin.com/jobs/*"
       ],
       "js": ["src/content/collect.js"],

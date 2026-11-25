@@ -105,3 +105,12 @@ def test_tailoring_prompt_includes_outcome_feedback():
 def test_tailoring_prompt_omits_empty_feedback():
     prompt = resume_prompt.build_user_prompt({"jd_text": "jd", "target_title": "Engineer"})
     assert "WHAT_WORKED" not in prompt
+
+
+def test_feedback_text_needs_enough_applications():
+    few = what_worked.summarize([_row("interview", "linkedin", None)] * 2)
+    assert what_worked.feedback_text(few) == ""
+    rows = [_row("interview", "linkedin", None)] * 3 + [_row("applied", "linkedin", None)] * 7
+    text = what_worked.feedback_text(what_worked.summarize(rows))
+    assert "10 applications" in text and "3 reached interview (30%)" in text
+    assert "Best source: linkedin (30%" in text

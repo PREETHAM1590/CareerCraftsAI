@@ -715,6 +715,10 @@ async def plan_fields(db: AsyncSession, task: ExtensionTask, raw_fields: list[di
     ]
     if llm_eligible:
         await _llm_fallback(db, task, plan, llm_eligible)
+        # A drafted answer is no longer missing; it is flagged requires_review.
+        unresolved_required = [
+            p["field_id"] for p in plan if p["required"] and p["value"] in (None, "")
+        ]
     _remember_open_questions(task, plan)
     _remember_answer_sources(task, plan)
     return {
@@ -965,6 +969,8 @@ def normalize_collected_job(payload: dict) -> dict:
     parts = urlsplit((payload.get("url") or "").strip())
     host = (parts.hostname or "").lower()
     board = COLLECTABLE_HOSTS.get(host)
+    if board is None and host.endswith(".naukri.com"):
+        board = "naukri"  # Naukri serves listings from regional subdomains too
     if board is None:
         raise ValueError(f"Unsupported job board host: {host or 'unknown'}")
     # The URL becomes a link in the app: only a plain https board URL.
@@ -1042,6 +1048,9 @@ def _parse_board_date(raw: str):
 # ── Generic form fallback: LLM mapping for questions no template answered ──
 
 _LLM_FALLBACK_MAX = 8  # questions per plan; the rest stay with the member
+# All drafts together must finish well inside the extension's 40 s request
+# timeout: questions still being drafted at the deadline stay with the member.
+_LLM_FALLBACK_BUDGET_S = 15.0
 
 
 async def _llm_fallback(
@@ -1082,7 +1091,8 @@ async def _llm_fallback(
         logger.info("LLM fallback unavailable: %s", type(exc).__name__)
         return
     by_id = {p["field_id"]: p for p in plan}
-    for field in todo:
+
+    async def draft(field: dict) -> tuple[str, str | None]:
         try:
             messages = [
                 SystemMessage(
@@ -1103,16 +1113,27 @@ async def _llm_fallback(
             result = await asyncio.to_thread(llm.invoke, messages)
             text = (getattr(result, "content", "") or "").strip()
             if not text or text.upper().startswith("NO_ANSWER") or len(text) > 2000:
-                continue
-            entry = by_id.get(field["field_id"])
-            if entry is None or entry["value"] in (None, ""):
-                entry.update(
-                    value=text[:2000],
-                    source="ai_draft",
-                    requires_review=True,
-                    missing_reason=None,
-                    confidence=0.0,
-                )
+                return field["field_id"], None
+            return field["field_id"], text
         except Exception as exc:  # noqa: BLE001 — one bad question must not stop the plan
             logger.info("LLM fallback failed: %s", type(exc).__name__)
-            continue
+            return field["field_id"], None
+
+    # Concurrently, under one budget: drafts finished by the deadline are kept.
+    tasks = [asyncio.create_task(draft(field)) for field in todo]
+    done, pending = await asyncio.wait(tasks, timeout=_LLM_FALLBACK_BUDGET_S)
+    for task_ in pending:
+        task_.cancel()
+    if pending:
+        logger.info("LLM fallback: %d question(s) left to the member at the deadline", len(pending))
+    for finished in done:
+        field_id, text = finished.result()
+        entry = by_id.get(field_id)
+        if text and entry is not None and entry["value"] in (None, ""):
+            entry.update(
+                value=text[:2000],
+                source="ai_draft",
+                requires_review=True,
+                missing_reason=None,
+                confidence=0.0,
+            )

@@ -107,3 +107,50 @@ def summarize(rows, now: datetime | None = None) -> dict:
             else None
         ),
     }
+
+
+def feedback_text(summary: dict) -> str:
+    """A short, plain summary for the tailoring prompt, or "" when the member
+    has too few applications for the rates to mean anything."""
+    applied = summary.get("applied") or 0
+    if applied < MIN_GROUP_FOR_RATE:
+        return ""
+    parts = [
+        f"Last {summary['window_days']} days: {applied} applications, "
+        f"{summary['interviews']} reached interview ({summary['interview_rate']:.0%})."
+    ]
+    reliable = [g for g in summary.get("by_source") or [] if not g["small_sample"]]
+    if reliable:
+        best = max(reliable, key=lambda g: g["rate"])
+        parts.append(f"Best source: {best['key']} ({best['rate']:.0%} of its applications).")
+    return " ".join(parts)
+
+
+def feedback_text_sync(user_id: str) -> str:
+    """feedback_text for the (sync) resume agent. Never raises: outcome
+    feedback is an enhancement, never a blocker."""
+    import logging
+
+    from app.core.sync_db import _get_sync_factory, _to_uuid
+
+    try:
+        since = datetime.now(UTC) - timedelta(days=WINDOW_DAYS)
+        with _get_sync_factory()() as session:
+            rows = session.execute(
+                select(
+                    JobApplication.status,
+                    JobApplication.source,
+                    JobApplication.resume_id,
+                    JobApplication.match_score,
+                ).where(
+                    JobApplication.user_id == _to_uuid(user_id),
+                    JobApplication.deleted_at.is_(None),
+                    JobApplication.found_at > since,
+                )
+            ).all()
+        return feedback_text(summarize(rows))
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).warning(
+            "what_worked_feedback_unavailable error_type=%s", type(exc).__name__
+        )
+        return ""
