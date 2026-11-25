@@ -9,7 +9,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import func, or_, select, text, tuple_
+from sqlalchemy import and_, func, or_, select, text, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import get_current_user, get_db
@@ -1008,6 +1008,7 @@ def _application_query(
     sort: str | None = None,
     q: str | None = None,
     hidden=None,
+    only_hidden: bool = False,
 ):
     """Filters owned rows in SQL for paging, counts and exports."""
     if status and status not in VALID_STATUSES:
@@ -1038,7 +1039,7 @@ def _application_query(
     if filters:
         query = query.where(JobApplication.location.is_not(None), JobApplication.location != "")
     if hidden is not None:
-        query = query.where(~hidden)
+        query = query.where(hidden if only_hidden else ~hidden)
     if status:
         query = query.where(JobApplication.status == status)
     if source:
@@ -1078,7 +1079,7 @@ def _application_query(
 async def _outside_india(db: AsyncSession, user_id: uuid.UUID, region: str, location: str | None):
     """SQL condition for saved roles open only outside India, or None to show
     everything. "auto" follows the member's India first switch. Only roles still
-    "saved" are hidden: anything the member acted on always stays in the list.
+    "saved" with no apply started are hidden: anything acted on stays in the list.
     A location filter naming a place abroad shows that place."""
     from app.services.india_focus import classify, wants_india
 
@@ -1096,7 +1097,11 @@ async def _outside_india(db: AsyncSession, user_id: uuid.UUID, region: str, loca
     places = [p for p in places if p.lower() not in {"remote", "hybrid", "onsite"}]
     if places and not wants_india({"locations": places}):
         return None
-    saved = (JobApplication.user_id == user_id, JobApplication.status == "saved")
+    saved = (
+        JobApplication.user_id == user_id,
+        JobApplication.status == "saved",
+        JobApplication.apply_state.is_(None),
+    )
     place = func.coalesce(JobApplication.location, "")
     source = func.coalesce(JobApplication.source, "")
     pairs = (await db.execute(select(place, source).where(*saved).distinct())).all()
@@ -1122,9 +1127,7 @@ async def _outside_india(db: AsyncSession, user_id: uuid.UUID, region: str, loca
         ]
     if not foreign and not restricted:
         return None
-    return (JobApplication.status == "saved") & or_(
-        tuple_(place, source).in_(foreign), JobApplication.id.in_(restricted)
-    )
+    return and_(*saved, or_(tuple_(place, source).in_(foreign), JobApplication.id.in_(restricted)))
 
 
 async def _filtered_applications(
@@ -1157,19 +1160,27 @@ async def list_applications(
     offset/limit) is returned in the ``X-Total-Count`` header and per-stage
     counts in ``X-Stage-Counts`` (JSON), so the body stays a plain list for
     existing callers and a paged view can still show whole-list stats."""
-    query = _application_query(
-        current_user.id,
-        status=status,
-        location=location,
-        source=source,
-        posted_within_days=posted_within_days,
-        min_match=min_match,
-        found_after=found_after,
-        found_before=found_before,
-        sort=sort,
-        q=q,
-        hidden=await _outside_india(db, current_user.id, region, location),
-    )
+    hidden = await _outside_india(db, current_user.id, region, location)
+    filters = {
+        "status": status,
+        "location": location,
+        "source": source,
+        "posted_within_days": posted_within_days,
+        "min_match": min_match,
+        "found_after": found_after,
+        "found_before": found_before,
+        "sort": sort,
+        "q": q,
+        "hidden": hidden,
+    }
+    query = _application_query(current_user.id, **filters)
+    hidden_count = 0
+    if hidden is not None:
+        outside = _application_query(current_user.id, **filters, only_hidden=True)
+        hidden_count = (
+            await db.execute(outside.order_by(None).with_only_columns(func.count()))
+        ).scalar_one()
+    response.headers["X-Hidden-Outside-India"] = str(hidden_count)
     counts = (
         await db.execute(
             query.order_by(None)

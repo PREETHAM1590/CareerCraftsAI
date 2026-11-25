@@ -184,7 +184,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
     # Paginated lists (GET /jobs/applications) report their total here.
-    expose_headers=["X-Total-Count", "X-Stage-Counts"],
+    expose_headers=["X-Total-Count", "X-Stage-Counts", "X-Hidden-Outside-India"],
 )
 
 

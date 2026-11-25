@@ -300,8 +300,8 @@ _FOREIGN = (
     "mountain view",
     "palo alto",
 )
-# Boards that only list roles in Europe, where a bare town name ("Delft") or no
-# location at all still means Europe.
+# Boards that only list roles in Europe, where a bare town name ("Delft") still
+# means Europe. No location at all may be a remote role, so it stays unknown.
 _EUROPE_BOARDS = {"arbeitnow"}
 _US_STATE = re.compile(
     r",\s*(A[KLRZ]|C[AOT]|D[CE]|FL|GA|HI|I[ADLN]|K[SY]|LA|M[ADEINOST]|N[CDEHJMVY]|O[HKR]|PA"
@@ -323,8 +323,11 @@ FITS = ("india", "india_remote", "remote_global", "unknown", "foreign")
 
 
 def _norm(text: str) -> str:
-    # "México" and "Zürich" compare as plain letters.
-    folded = unicodedata.normalize("NFKD", str(text or "")).encode("ascii", "ignore").decode()
+    # "México" and "Zürich" compare as plain letters. Only the accents are dropped:
+    # other symbols ("Delhi–NCR") still separate words below.
+    folded = "".join(
+        c for c in unicodedata.normalize("NFKD", str(text or "")) if not unicodedata.combining(c)
+    )
     return " " + re.sub(r"[^a-z0-9.+]+", " ", folded.lower()).strip() + " "
 
 
@@ -458,7 +461,7 @@ def classify(job: dict) -> tuple[str, str]:
         return "remote_global", "Remote, no country restriction stated"
     if foreign or us_state or cities:
         return "foreign", "Located outside India"
-    if str(job.get("platform") or "").lower() in _EUROPE_BOARDS:
+    if hay.strip() and str(job.get("platform") or "").lower() in _EUROPE_BOARDS:
         return "foreign", "Listed on a Europe-only job board"
     return "unknown", "No location given"
 

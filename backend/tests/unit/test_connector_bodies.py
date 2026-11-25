@@ -134,12 +134,18 @@ def test_plain_strips_entity_escaped_bodies():
     assert jc.plain("Under &lt;5 years") == "Under <5 years"
 
 
+def test_descriptions_keep_paragraphs_and_lists():
+    body = "<h2>Role</h2><p>Build <b>APIs</b></p><ul><li>Python</li><li>SQL</li></ul>"
+    assert jc.clean_description(body) == "Role\nBuild APIs\n- Python\n- SQL"
+    assert "\n" not in jc.plain(body)
+
+
 def test_clean_description_fixes_saved_html_and_keeps_text():
     assert jc.clean_description('<div class="x"><p>At Affirm</p></div><p>Pay &amp; go <stro') == (
-        "At Affirm Pay & go"
+        "At Affirm\nPay & go"
     )
     escaped = "&lt;p&gt;Hello&lt;/p&gt; the rest stays &lt;stro"
-    assert jc.clean_description(escaped) == "Hello the rest stays"
+    assert jc.clean_description(escaped) == "Hello\nthe rest stays"
     text = "Line one\n\n  - C++ where a < b and c > d, List<String>"
     assert jc.clean_description(text) == text
     assert jc.clean_description(None) == ""

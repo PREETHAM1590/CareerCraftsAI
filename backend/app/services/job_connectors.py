@@ -181,7 +181,15 @@ _HTML_TAG = re.compile(
 )
 
 
-def plain(value) -> str:
+_LINE_TAG = re.compile(
+    r"\s*</?(?:article|blockquote|br|div|h[1-6]|hr|ol|p|pre|section|table|tr|ul)(?=[\s/>])[^>]*>\s*",
+    re.IGNORECASE,
+)
+_LIST_ITEM = re.compile(r"\s*<li(?=[\s/>])[^>]*>\s*", re.IGNORECASE)
+
+
+def plain(value, breaks: bool = False) -> str:
+    """Text of an HTML value. `breaks` keeps paragraphs and list items on lines."""
     raw = str(value or "")
     if not _HTML_TAG.search(raw):
         # Some APIs (Greenhouse) send the whole body entity-escaped, so its
@@ -189,6 +197,10 @@ def plain(value) -> str:
         unescaped = html.unescape(raw)
         if _HTML_TAG.search(unescaped):
             raw = unescaped
+    if breaks and _HTML_TAG.search(raw):
+        raw = _LINE_TAG.sub("\n", _LIST_ITEM.sub("\n- ", raw))
+        raw = re.sub(r"[ \t]{2,}", " ", re.sub(r"<[^>]*>", " ", raw))
+        raw = re.sub(r"\s*\n\s*", "\n", raw)
     return html.unescape(re.sub(r"<[^>]*>", " ", raw))[:16000].strip()
 
 
@@ -203,7 +215,7 @@ def clean_description(value: str | None) -> str:
         text = unescaped
     # Saved copies are capped in length, which can cut the last tag in half.
     text = re.sub(r"</?[a-zA-Z][^<>]*$", "", text)
-    return re.sub(r"[ \t]{2,}", " ", _HTML_TAG.sub(" ", plain(text))).strip()
+    return re.sub(r"[ \t]{2,}", " ", _HTML_TAG.sub(" ", plain(text, breaks=True))).strip()
 
 
 def normalize(raw: dict, source: Source) -> dict | None:
@@ -246,7 +258,7 @@ def normalize(raw: dict, source: Source) -> dict | None:
         "first_seen_at": now.isoformat(),
         "last_seen_at": now.isoformat(),
         "expires_at": expires.isoformat() if expires else None,
-        "description": plain(raw.get("description")),
+        "description": plain(raw.get("description"), breaks=True),
         "occurrences": [{"source_id": source.id, "url": url}],
     }
 
@@ -489,7 +501,7 @@ def parse_hn_post(comment_html: str) -> dict | None:
         "title": parts[1],
         "location": next((p for p in rest if p and "remote" not in p.lower()), ""),
         "remote": any("remote" in p.lower() for p in parts),
-        "description": plain(comment_html),
+        "description": plain(comment_html, breaks=True),
     }
 
 

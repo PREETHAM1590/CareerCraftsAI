@@ -116,7 +116,13 @@ function ApplicationsView() {
 
   const region = params.get("region") === "all" ? "all" : "auto";
   const pendingParams = useRef(params.toString());
-  useEffect(() => { pendingParams.current = params.toString(); }, [params]);
+  const issuedParams = useRef<string[]>([]);
+  useEffect(() => {
+    // An earlier change of ours landing must not rewind a later one still in flight.
+    const at = issuedParams.current.indexOf(params.toString());
+    issuedParams.current = at === -1 ? [] : issuedParams.current.slice(at + 1);
+    if (!issuedParams.current.length) pendingParams.current = params.toString();
+  }, [params]);
 
   const setParams = (patch: Record<string, string | null>) => {
     // Two quick changes (blurring the city field by opening a select) must both land.
@@ -126,7 +132,9 @@ function ApplicationsView() {
       else next.delete(key);
     }
     const qs = next.toString();
+    if (qs === pendingParams.current) return;
     pendingParams.current = qs;
+    issuedParams.current.push(qs);
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
   };
 
@@ -165,6 +173,7 @@ function ApplicationsView() {
       return {
         total: page.total,
         stageCounts: page.stageCounts,
+        hiddenOutsideIndia: page.hiddenOutsideIndia,
         next: pageParam + page.items.length,
         items: page.items.map((application: ApplicationRecord): ApplicationItem => ({
           id: String(application.id),
@@ -193,6 +202,7 @@ function ApplicationsView() {
   });
   const items = useMemo(() => data?.pages.flatMap((page) => page.items) ?? [], [data]);
   const total = data?.pages[0]?.total ?? 0;
+  const hiddenOutsideIndia = data?.pages[0]?.hiddenOutsideIndia ?? 0;
   // Whole-list stage counts from the server, so stats stay right while paging.
   const stageCounts = data?.pages[0]?.stageCounts ?? {};
 
@@ -483,6 +493,14 @@ function ApplicationsView() {
                 Clear filters
               </button>
             ) : null}
+            {hiddenOutsideIndia > 0 ? (
+              <span>
+                · {hiddenOutsideIndia} outside India hidden{" "}
+                <button type="button" onClick={() => setParams({ region: "all" })} className="text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  Show
+                </button>
+              </span>
+            ) : null}
           </p>
           {checkedIds.length > 0 ? (
             <IslandButton tone="danger" size="sm" icon={<Trash size={14} />} onClick={() => setPendingDelete(checkedIds)}>
@@ -512,6 +530,8 @@ function ApplicationsView() {
               />
             </Bezel>
           </Reveal>
+        ) : items.length === 0 && hiddenOutsideIndia > 0 ? (
+          <Bezel><EmptyPanel compact title="Only roles outside India here" description={`India first is hiding ${hiddenOutsideIndia} saved ${hiddenOutsideIndia === 1 ? "role" : "roles"}.`} action={<IslandButton tone="ghost" size="sm" onClick={() => setParams({ region: "all" })}>Show every country</IslandButton>} /></Bezel>
         ) : items.length === 0 && filtersActive ? (
           <Bezel><EmptyPanel compact title="No jobs match these filters" description="Loosen the match or found-date filter." action={<IslandButton tone="ghost" size="sm" onClick={clearFilters}>Clear filters</IslandButton>} /></Bezel>
         ) : items.length === 0 ? (

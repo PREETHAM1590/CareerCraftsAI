@@ -180,11 +180,11 @@ def test_non_inr_salary_is_not_guessed():
     assert india.parse_inr_salary("") is None
 
 
-@pytest.mark.parametrize("location", ["Delft", "", "Munich, Bavaria", "Zürich"])
+@pytest.mark.parametrize("location", ["Delft", "Munich, Bavaria", "Zürich"])
 def test_europe_only_board_is_foreign(location):
     assert india.classify({"location": location, "platform": "arbeitnow"})[0] == "foreign"
     assert india.classify({"location": "Pune", "platform": "arbeitnow"})[0] == "india"
-    assert india.classify({"location": "", "platform": "jobspy"})[0] == "unknown"
+    assert india.classify({"location": "", "platform": "arbeitnow"})[0] == "unknown"
 
 
 class _Rows:
@@ -211,6 +211,14 @@ def test_accented_foreign_places_are_foreign(location):
     assert india.classify({"location": location})[0] == "foreign"
 
 
+@pytest.mark.parametrize(
+    "location,fit",
+    [("Delhi–NCR", "india"), ("Bengaluru•Pune", "india"), ("Remote—India", "india_remote")],
+)
+def test_typographic_separators_still_split_words(location, fit):
+    assert india.classify({"location": location})[0] == fit
+
+
 async def test_saved_roles_abroad_are_hidden_by_the_india_first_switch():
     import uuid
 
@@ -230,6 +238,7 @@ async def test_saved_roles_abroad_are_hidden_by_the_india_first_switch():
             dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}
         )
     )
+    assert "apply_state IS NULL" in sql
     assert "San Mateo" in sql and str(blocked) in sql
     assert "Bengaluru" not in sql and str(open_id) not in sql
 

@@ -1308,15 +1308,16 @@ export default function JobsPage() {
       /* storage blocked: choice lasts for this visit only */
     }
   };
+  const [everyCountry, setEveryCountry] = useState(false);
   const minMatch = listChoice?.choice === "filter" ? listChoice.min : 0;
 
   const effectivePostedDays = activeFilters.has("Today") ? 1 : activeFilters.has("Past week") ? 7 : activeFilters.has("Past month") ? 30 : postedDays;
   const selectedLocations = Array.from(activeFilters).filter((f) => QUERY_LOCATION_FILTERS.includes(f));
 
   const { data: jobsPage, isLoading } = useQuery<ApplicationPage>({
-    queryKey: ["jobs-saved", Array.from(activeFilters).sort().join(","), jobSource, postedDays, minMatch],
+    queryKey: ["jobs-saved", Array.from(activeFilters).sort().join(","), jobSource, postedDays, minMatch, everyCountry],
     queryFn: () => {
-      const filters: ApplicationFilters = { status: "saved", sort: "match_desc", region: "auto" };
+      const filters: ApplicationFilters = { status: "saved", sort: "match_desc", region: everyCountry ? "all" : "auto" };
       if (jobSource) filters.source = jobSource;
       if (minMatch > 0) filters.minMatch = minMatch;
       filters.postedWithinDays = effectivePostedDays;
@@ -1327,11 +1328,13 @@ export default function JobsPage() {
   });
   const jobs: SavedJob[] = jobsPage?.items ?? [];
   const totalJobs = jobsPage?.total ?? 0;
+  const hiddenOutsideIndia = jobsPage?.hiddenOutsideIndia ?? 0;
 
   const viewAllParams = new URLSearchParams({ sort: "match_desc", status: "saved", posted: String(effectivePostedDays) });
   if (minMatch > 0) viewAllParams.set("min", String(minMatch));
   if (selectedLocations.length) viewAllParams.set("city", selectedLocations.join(","));
   if (jobSource) viewAllParams.set("source", jobSource);
+  if (everyCountry) viewAllParams.set("region", "all");
   const viewAllHref = `/applications?${viewAllParams.toString()}`;
   const showSizePrompt = listChoice === null && totalJobs > BIG_LIST;
 
@@ -1846,6 +1849,15 @@ export default function JobsPage() {
               Showing matches ≥ {listChoice.min}%.{" "}
               <button type="button" className="underline underline-offset-2 hover:text-foreground" onClick={() => chooseList({ choice: "all" })}>
                 Show all
+              </button>
+            </p>
+          )}
+
+          {(hiddenOutsideIndia > 0 || everyCountry) && (
+            <p className="text-sm text-muted-foreground">
+              {everyCountry ? "Showing roles in every country." : `${hiddenOutsideIndia} saved ${hiddenOutsideIndia === 1 ? "role" : "roles"} outside India hidden.`}{" "}
+              <button type="button" className="underline underline-offset-2 hover:text-foreground" onClick={() => setEveryCountry(!everyCountry)}>
+                {everyCountry ? "Use my India first setting" : "Show"}
               </button>
             </p>
           )}
