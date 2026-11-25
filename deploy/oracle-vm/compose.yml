@@ -226,6 +226,44 @@ services:
     mem_limit: 64m
     init: true
 
+  # Obscura (lightweight headless browser) renders job pages that need
+  # JavaScript, for full job descriptions (app/services/job_page.py). Never
+  # holds members' sign-ins. backend.env: OBSCURA_CDP_URL=
+  # ws://127.0.0.1:19222/devtools/browser and OBSCURA_CDP_TOKEN (same value as
+  # in obscura.env). Report: docs/reports/2026-11-24-obscura-trial.md.
+  obscura:
+    image: h4ckf0r0day/obscura:0.2.7@sha256:e70c2abc925f2194c9338762075432c69328032cae220d77393f1495e90c601a
+    # Published on loopback only. Obscura refuses private and internal
+    # destinations itself (SSRF protection). Same port inside and out:
+    # Obscura answers 403 when the request's Host port differs from its own.
+    ports: ["127.0.0.1:19222:19222"]
+    # Docker's default bridge: no other container uses it (the stack runs with
+    # host networking), and it is the network whose DNS works under gVisor
+    # (a user-defined network's embedded resolver isn't reachable from runsc).
+    network_mode: bridge
+    # Optional: started only with `docker compose --profile obscura up -d obscura`,
+    # so a VM without obscura.env still runs every other service.
+    profiles: [obscura]
+    env_file: /opt/careercraft-secrets/obscura.env  # OBSCURA_CDP_TOKEN (32+ bytes)
+    command:
+      - serve
+      - --host=0.0.0.0
+      - --port=19222
+      - --workers=2
+      - --worker-max-rss=400
+      - --worker-max-age=3600
+    # gVisor when installed (runsc), as the trial report recommends for a
+    # young engine running untrusted pages: OBSCURA_RUNTIME=runsc.
+    runtime: ${OBSCURA_RUNTIME:-runc}
+    read_only: true
+    tmpfs: ["/tmp:size=64m"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    mem_limit: 768m
+    cpus: 1.0
+    restart: unless-stopped
+
 volumes:
   redis_data:
   pgdata:

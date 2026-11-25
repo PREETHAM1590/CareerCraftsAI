@@ -135,6 +135,11 @@ class Settings(BaseSettings):
     YOUTUBE_API_KEY: str = ""
     FIRECRAWL_API_KEY: str | None = None
     SEARXNG_URL: str | None = None
+    # Obscura (lightweight headless browser) for reading job pages that only
+    # render with JavaScript. CDP websocket, e.g. ws://127.0.0.1:19222/devtools/browser.
+    # Blank = plain HTTP only.
+    OBSCURA_CDP_URL: str = ""
+    OBSCURA_CDP_TOKEN: str = ""
     # Hiring posts on X (official API v2, pay per post read). Blank = off.
     X_BEARER_TOKEN: str = ""
     # Posts read per X source refresh (10-100). 4 role groups x 50 a day is

@@ -78,7 +78,7 @@ export const restoreApplications = (ids: string[]) =>
 /** Job description for resume tailoring; falls back to the shared job catalog. 404 = none. */
 export const fetchApplicationJd = (id: string) =>
   apiClient
-    .get<{ jd_text: string; role: string; company: string; source: "application" | "catalog" }>(
+    .get<{ jd_text: string; role: string; company: string; source: "application" | "catalog" | "job_page" }>(
       `/jobs/applications/${id}/jd`,
     )
     .then((r) => r.data);
