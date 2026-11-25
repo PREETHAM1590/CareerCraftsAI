@@ -107,3 +107,18 @@ async def test_rippling_body_budget_preserves_external_cancellation(monkeypatch)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+def test_bamboohr_body_fill_stops_at_the_budget_and_keeps_partial_rows(monkeypatch):
+    async def slow_get(url, **kw):
+        if "/careers/0/" in url:
+            return FakeResponse('{"result": {"jobOpening": {"description": "First"}}}')
+        await asyncio.sleep(5)
+        return FakeResponse('{"result": {"jobOpening": {"description": "Late"}}}')
+
+    monkeypatch.setattr(jc, "_polite_get", slow_get)
+    monkeypatch.setattr(jc, "_BODIES_BUDGET_S", 0.2)
+    rows = [{"id": str(i), "description": ""} for i in range(3)]
+    asyncio.run(jc._fill_bodies_within_budget(jc._fill_bamboohr_bodies("acme", rows)))
+    assert rows[0]["description"] == "First"
+    assert rows[1]["description"] == ""

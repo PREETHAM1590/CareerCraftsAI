@@ -18,6 +18,7 @@ def _use_fonts(monkeypatch, dirs: tuple[Path, ...], roots: tuple[Path, ...]) -> 
     monkeypatch.setattr(pdf_service, "_SYSTEM_FONT_ROOTS", roots)
     pdf_service._system_fonts.cache_clear()
     pdf_service._unicode_family.cache_clear()
+    pdf_service._unicode_families.cache_clear()
 
 
 @pytest.fixture
@@ -26,6 +27,7 @@ def font_lookup(monkeypatch):
     monkeypatch.undo()
     pdf_service._system_fonts.cache_clear()
     pdf_service._unicode_family.cache_clear()
+    pdf_service._unicode_families.cache_clear()
 
 
 @pytest.fixture
@@ -479,3 +481,18 @@ def test_model_text_is_escaped_not_interpreted_as_markup():
     pdf = generate_resume_pdf(text, full_name="Jane", template="modern")
     body = " ".join(t for _, _, t in _lines(pdf))
     assert "<script>alert(1)</script> & bold claims" in body
+
+
+def test_document_fonts_pick_the_family_that_covers_the_script(monkeypatch):
+    """Tamil text must get the Tamil font even when a Devanagari font is
+    earlier in the list (Noto Sans Devanagari has no Tamil glyphs)."""
+    latin = ("CC-DejaVuSans", frozenset(range(0x20, 0x250)))
+    devanagari = ("CC-NotoSansDevanagari", frozenset(range(0x0900, 0x0980)))
+    tamil = ("CC-NotoSansTamil", frozenset(range(0x0B80, 0x0C00)))
+    monkeypatch.setattr(pdf_service, "_unicode_families", lambda serif: (latin, devanagari, tamil))
+    theme, glyphs = pdf_service._document_fonts(THEMES["modern"], "தமிழ் செல்வன்")
+    assert theme.regular == "CC-NotoSansTamil" and glyphs == tamil[1]
+    theme, _ = pdf_service._document_fonts(THEMES["modern"], "प्रिया शर्मा")
+    assert theme.regular == "CC-NotoSansDevanagari"
+    theme, _ = pdf_service._document_fonts(THEMES["modern"], "Łódź")
+    assert theme.regular == "CC-DejaVuSans"

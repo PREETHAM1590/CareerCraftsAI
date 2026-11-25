@@ -951,6 +951,18 @@ def _join(*parts) -> str:
 PAGE_FETCH_TIMEOUT_S = 15
 _RIPPLING_BODIES_TIMEOUT_S = 5
 _BODIES_MAX = 25  # descriptions fetched per refresh; the rest stay empty
+# BambooHR bodies are optional: the whole fill must finish well inside the
+# catalog's PAGE_FETCH_TIMEOUT_S, or the listing itself would be lost.
+_BODIES_BUDGET_S = 6.0
+
+
+async def _fill_bodies_within_budget(fill) -> None:
+    """Run a description fill; rows filled before the budget runs out keep
+    their bodies, the rest stay empty."""
+    try:
+        await asyncio.wait_for(fill, _BODIES_BUDGET_S)
+    except TimeoutError:
+        pass
 
 
 async def _fill_bamboohr_bodies(tenant: str, rows: list[dict]) -> None:
@@ -1098,7 +1110,7 @@ async def _fetch_ats_board(source: Source, tenant: str, page: int) -> Page:
             }
             for j in response.json().get("result", [])
         ]
-        await _fill_bamboohr_bodies(tenant, rows)
+        await _fill_bodies_within_budget(_fill_bamboohr_bodies(tenant, rows))
     elif family == "breezy":
         rows = [
             {

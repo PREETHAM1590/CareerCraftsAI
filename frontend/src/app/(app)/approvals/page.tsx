@@ -76,8 +76,11 @@ export default function ApprovalsPage() {
     try {
       await apiClient.post(`/agents/${run.id}/approve`, { approved });
       setRuns((prev) => (prev ?? []).filter((r) => r.id !== run.id));
-    } catch {
-      setError("Could not record the decision. Try again.");
+    } catch (err) {
+      // e.g. 409 for an application run: it is reviewed in the extension,
+      // so retrying here can never work. Show the server's reason.
+      const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
+      setError(typeof detail === "string" && detail ? detail : "Could not record the decision. Try again.");
     } finally {
       setBusy(null);
     }

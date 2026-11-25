@@ -159,6 +159,7 @@ def test_decision_engine_redacts_form_state_before_the_provider_call():
     member's name, email, phone — none of it may reach Typesafe/Laya raw."""
     import asyncio
 
+    from app.core import config
     from app.services import decision_engine
 
     captured = {}
@@ -186,39 +187,33 @@ def test_decision_engine_redacts_form_state_before_the_provider_call():
             return False
 
     async def scenario():
+        from app.core.pii_vault import KnownPii
+
         async def fake_context(uid):
-            policy = SimpleNamespace(enabled=True, detect_patterns=True)
-            known = SimpleNamespace(
-                values={"name": {"Priya Sharma"}, "email": {"priya@example.com"}}
-            )
-            return policy, known
+            known = KnownPii()
+            known.add("NAME", "Priya Sharma")
+            known.add("EMAIL", "priya@example.com")
+            return SimpleNamespace(enabled=True, detect_patterns=True), known
 
-        def redact(text):
-            return text.replace("Priya Sharma", "[[NAME_1]]").replace(
-                "priya@example.com", "[[EMAIL_1]]"
-            )
-
-        def redact_obj(obj):
-            if isinstance(obj, str):
-                return redact(obj)
-            if isinstance(obj, list):
-                return [redact_obj(i) for i in obj]
-            if isinstance(obj, dict):
-                return {k: redact_obj(v) for k, v in obj.items()}
-            return obj
-
-        vault = SimpleNamespace(redact=redact, redact_obj=redact_obj, summary=lambda: {"name": 1})
+        decision_engine._privacy_cache.clear()
         with (
             patch.object(decision_engine.httpx, "AsyncClient", FakeClient),
+            patch.object(config.settings, "PII_REDACTION_ENABLED", True),
             patch("app.services.pii_profile.load_privacy_context", fake_context),
-            patch("app.core.pii_vault.PiiVault", lambda *a, **kw: vault),
         ):
-            await decision_engine._remote("u-1", "jev", {"value": "Priya Sharma"}, {})
+            await decision_engine._remote(
+                "u-1",
+                "jev",
+                {"value": "Priya Sharma", "fields": [{"label": "Email", "v": "priya@example.com"}]},
+                {"option": {"type": "choice", "options": {"a": "Priya Sharma"}}},
+            )
+        decision_engine._privacy_cache.clear()
 
     asyncio.run(scenario())
     sent = json.dumps(captured["json"])
     assert "Priya Sharma" not in sent
-    assert "[[NAME_1]]" in sent
+    assert "priya@example.com" not in sent
+    assert captured["json"]["state"]["value"] != "Priya Sharma"
 
 
 def test_get_llm_goes_through_the_gateway():

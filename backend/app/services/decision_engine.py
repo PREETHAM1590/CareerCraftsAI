@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from typing import Any
 
 import httpx
@@ -128,6 +129,28 @@ async def _remote(user_id: str | None, chosen: str, state: Any, questions: dict)
     return answers
 
 
+# One form plan matches many select/radio fields in a row; reuse the member's
+# privacy context briefly instead of reloading the profile for each one.
+_PRIVACY_TTL_S = 60.0
+_PRIVACY_MAX = 256
+_privacy_cache: dict[str, tuple[float, Any, Any]] = {}
+
+
+async def _privacy_context(user_id: str | None):
+    from app.services import pii_profile
+
+    key = str(user_id)
+    now = time.monotonic()
+    hit = _privacy_cache.get(key)
+    if hit and hit[0] > now:
+        return hit[1], hit[2]
+    policy, known = await pii_profile.load_privacy_context(user_id)
+    if len(_privacy_cache) >= _PRIVACY_MAX:
+        _privacy_cache.clear()
+    _privacy_cache[key] = (now + _PRIVACY_TTL_S, policy, known)
+    return policy, known
+
+
 async def _redact_payload(user_id: str | None, state: Any, questions: dict) -> tuple[Any, dict]:
     """Swap the member's personal values for placeholders before the form
     state leaves for the decision provider — the same privacy boundary every
@@ -136,12 +159,11 @@ async def _redact_payload(user_id: str | None, state: Any, questions: dict) -> t
     privacy policy turns redaction off."""
     from app.core.config import settings as s
     from app.core.pii_vault import PiiVault
-    from app.services import pii_profile
 
     if not s.PII_REDACTION_ENABLED:
         return state, questions
     try:
-        policy, known = await pii_profile.load_privacy_context(user_id)
+        policy, known = await _privacy_context(user_id)
         if not policy.enabled:
             return state, questions
         vault = PiiVault(known, detect_patterns=policy.detect_patterns)
