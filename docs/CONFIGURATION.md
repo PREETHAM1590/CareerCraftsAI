@@ -220,7 +220,8 @@ robots.txt counts as "not allowed" (RFC 9309).
 
 **Running Obscura** (`deploy/oracle-vm/compose.yml`, service `obscura`, profile `obscura`)
 - Start it with `docker compose --profile obscura up -d obscura` once `obscura.env` exists; plain `docker compose up -d` leaves it off.
-- Runs on its own `obscura` bridge network; no other container joins it.
+- Runs on Docker's default bridge network, which no other container uses (the stack runs with host networking). A dedicated network would break DNS under gVisor.
+- Listens on 19222 inside the container as well: Obscura answers 403 when the request's port differs from its own.
 - Pinned image digest, published on `127.0.0.1:19222` only, bearer token required.
 - Read-only filesystem, no Linux capabilities, non-root, 768 MB.
 - Workers recycle at 400 MB or after an hour.

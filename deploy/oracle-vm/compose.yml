@@ -233,10 +233,14 @@ services:
   # in obscura.env). Report: docs/reports/2026-11-24-obscura-trial.md.
   obscura:
     image: h4ckf0r0day/obscura:0.2.7@sha256:e70c2abc925f2194c9338762075432c69328032cae220d77393f1495e90c601a
-    # Its own "obscura" bridge network, published on loopback only. Obscura refuses
-    # private and internal destinations itself (SSRF protection).
-    ports: ["127.0.0.1:19222:9222"]
-    networks: [obscura]
+    # Published on loopback only. Obscura refuses private and internal
+    # destinations itself (SSRF protection). Same port inside and out:
+    # Obscura answers 403 when the request's Host port differs from its own.
+    ports: ["127.0.0.1:19222:19222"]
+    # Docker's default bridge: no other container uses it (the stack runs with
+    # host networking), and it is the network whose DNS works under gVisor
+    # (a user-defined network's embedded resolver isn't reachable from runsc).
+    network_mode: bridge
     # Optional: started only with `docker compose --profile obscura up -d obscura`,
     # so a VM without obscura.env still runs every other service.
     profiles: [obscura]
@@ -244,7 +248,7 @@ services:
     command:
       - serve
       - --host=0.0.0.0
-      - --port=9222
+      - --port=19222
       - --workers=2
       - --worker-max-rss=400
       - --worker-max-age=3600
@@ -264,9 +268,3 @@ volumes:
   redis_data:
   pgdata:
   docstore:
-
-networks:
-  # Obscura only: nothing else joins it, so a page it renders can't reach
-  # another container by name.
-  obscura:
-    driver: bridge
