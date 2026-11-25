@@ -390,9 +390,20 @@ def _find_font(filename: str) -> Path | None:
     return _system_fonts().get(filename.lower())
 
 
-@functools.lru_cache(maxsize=2)
-def _unicode_family(serif: bool) -> tuple[str, frozenset[int]] | None:
-    """Register (once) the first available Unicode TTF family.
+@functools.lru_cache(maxsize=64)
+def _unicode_faces(
+    names: tuple[str, ...], paths: tuple[Path, ...]
+) -> tuple[tuple[TTFont, ...], frozenset[int]]:
+    faces = tuple(TTFont(name, str(path)) for name, path in zip(names, paths, strict=True))
+    glyphs = frozenset.intersection(*(frozenset(face.face.charToGlyph) for face in faces))
+    return faces, glyphs
+
+
+@functools.lru_cache(maxsize=32)
+def _unicode_family(
+    serif: bool, required: frozenset[int] = frozenset()
+) -> tuple[str, frozenset[int]] | None:
+    """Register the first installed Unicode TTF family that covers the required glyphs.
 
     Returns the family's base font name and the code points it covers, or
     None when no suitable font is installed.
@@ -405,11 +416,15 @@ def _unicode_family(serif: bool) -> tuple[str, frozenset[int]] | None:
         name = "CC-" + files[0].rsplit(".", 1)[0].removesuffix("-Regular")
         names = (name, f"{name}-Bold", f"{name}-Italic", f"{name}-BoldItalic")
         try:
-            for font_name, filename in zip(names, files, strict=True):
-                path = _find_font(filename) or regular
-                pdfmetrics.registerFont(TTFont(font_name, str(path)))
+            faces, glyphs = _unicode_faces(
+                names, tuple(_find_font(filename) or regular for filename in files)
+            )
         except (OSError, TTFError):
             continue
+        if not required <= glyphs:
+            continue
+        for face in faces:
+            pdfmetrics.registerFont(face)
         pdfmetrics.registerFontFamily(
             name,
             normal=names[0],
@@ -417,7 +432,7 @@ def _unicode_family(serif: bool) -> tuple[str, frozenset[int]] | None:
             italic=names[2],
             boldItalic=names[3],
         )
-        return name, frozenset(pdfmetrics.getFont(name).face.charToGlyph)
+        return name, glyphs
     return None
 
 
@@ -425,11 +440,11 @@ def _document_fonts(theme: Theme, text: str) -> tuple[Theme, Glyphs]:
     """Switch to a Unicode TTF whenever the text has characters outside cp1252
     (Łódź, Cyrillic, CJK, ...) that such a font can actually draw; pure
     cp1252 text keeps the core fonts."""
-    extra = {ord(ch) for ch in set(text.translate(_ASCII_PUNCT)) if not _winansi_ok(ch)}
+    extra = frozenset(ord(ch) for ch in set(text.translate(_ASCII_PUNCT)) if not _winansi_ok(ch))
     if not extra:
         return theme, None
-    family = _unicode_family(theme.regular.startswith("Times"))
-    if family is None or not extra & family[1]:
+    family = _unicode_family(theme.regular.startswith("Times"), extra)
+    if family is None:
         return theme, None
     name, glyphs = family
     return replace(theme, regular=name, bold=f"{name}-Bold", italic=f"{name}-Italic"), glyphs

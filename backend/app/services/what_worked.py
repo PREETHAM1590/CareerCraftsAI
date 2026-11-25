@@ -7,6 +7,7 @@ from __future__ import annotations
 import uuid
 from collections import Counter
 from datetime import UTC, datetime, timedelta
+from statistics import median
 
 from sqlalchemy import select
 
@@ -23,30 +24,29 @@ async def what_worked(db, user_id: uuid.UUID, now: datetime | None = None) -> di
     """Group the member's applications from the window by resume variant,
     source and status, and report interview rates per group."""
     since = (now or datetime.now(UTC)) - timedelta(days=WINDOW_DAYS)
-    rows = (
-        await db.execute(
-            select(
-                JobApplication.status,
-                JobApplication.source,
-                JobApplication.resume_id,
-                JobApplication.match_score,
-            ).where(
-                JobApplication.user_id == user_id,
-                JobApplication.deleted_at.is_(None),
-                JobApplication.found_at > since,
-            )
+    result = await db.execute(
+        select(
+            JobApplication.status,
+            JobApplication.source,
+            JobApplication.resume_id,
+            JobApplication.match_score,
+        ).where(
+            JobApplication.user_id == user_id,
+            JobApplication.deleted_at.is_(None),
+            JobApplication.found_at > since,
         )
-        .all()
     )
-    return summarize(rows, now)
+    return summarize(result.all(), now)
 
 
 def summarize(rows, now: datetime | None = None) -> dict:
     """Pure aggregation over (status, source, resume_id, match_score) rows so
     the grouping is testable without a database."""
     resume_counts: Counter = Counter()
+    resume_applied: Counter = Counter()
     resume_wins: Counter = Counter()
     source_counts: Counter = Counter()
+    source_applied: Counter = Counter()
     source_wins: Counter = Counter()
     by_status: Counter = Counter()
     scores: list[int] = []
@@ -59,30 +59,38 @@ def summarize(rows, now: datetime | None = None) -> dict:
         if resume_id:
             key = str(resume_id)
             resume_counts[key] += 1
-            if status.lower() in INTERVIEW_STATUSES:
+            if status != "saved":
+                resume_applied[key] += 1
+            if status in INTERVIEW_STATUSES:
                 resume_wins[key] += 1
         if source:
             src = str(source)
             source_counts[src] += 1
-            if status.lower() in INTERVIEW_STATUSES:
+            if status != "saved":
+                source_applied[src] += 1
+            if status in INTERVIEW_STATUSES:
                 source_wins[src] += 1
 
-    def ranked(counts: Counter, wins: Counter) -> list[dict]:
+    def ranked(counts: Counter, applied_counts: Counter, wins: Counter) -> list[dict]:
         out = []
         for key, total in counts.most_common(10):
-            interviews = wins.get(key, 0)
+            interviews = wins[key]
+            applied = applied_counts[key]
             out.append(
                 {
                     "key": key,
                     "total": total,
                     "interviews": interviews,
-                    "rate": round(interviews / total, 3) if total else 0.0,
+                    "rate": round(interviews / applied, 3) if applied else 0.0,
+                    "small_sample": applied < MIN_GROUP_FOR_RATE,
                 }
             )
         return out
 
     applied = sum(n for s, n in by_status.items() if s not in {"saved"})
     interviews = sum(n for s, n in by_status.items() if s in INTERVIEW_STATUSES)
+    by_resume = ranked(resume_counts, resume_applied, resume_wins)
+    by_source = ranked(source_counts, source_applied, source_wins)
     return {
         "window_days": WINDOW_DAYS,
         "total": len(rows),
@@ -90,13 +98,12 @@ def summarize(rows, now: datetime | None = None) -> dict:
         "interviews": interviews,
         "interview_rate": round(interviews / applied, 3) if applied else None,
         "by_status": dict(by_status),
-        "by_resume": ranked(resume_counts, resume_wins),
-        "by_source": ranked(source_counts, source_wins),
-        "median_match_score": sorted(scores)[len(scores) // 2] if scores else None,
+        "by_resume": by_resume,
+        "by_source": by_source,
+        "median_match_score": median(scores) if scores else None,
         "note": (
-            "Rates are informative only below "
-            f"{MIN_GROUP_FOR_RATE} applications per group."
-            if len(rows) < MIN_GROUP_FOR_RATE
+            f"Rates are unreliable below {MIN_GROUP_FOR_RATE} applications per group."
+            if any(group["small_sample"] for group in by_resume + by_source)
             else None
         ),
     }

@@ -146,3 +146,38 @@ async def test_reject_cancels_the_pending_application_attempt():
             )
         assert result == {"status": "cancelled"}
         assert target.state == expected
+
+
+@pytest.mark.asyncio
+async def test_approval_queue_identifies_extension_runs_without_exposing_input():
+    from app.api.v1 import agents
+    from app.models.db import AgentRun
+
+    user_id = uuid.uuid4()
+    application = AgentRun(
+        id=uuid.uuid4(),
+        user_id=user_id,
+        agent_type="apply_prepare",
+        status="awaiting_approval",
+        input={"workflow_id": "auto-apply/u1/j1"},
+    )
+    draft = AgentRun(
+        id=uuid.uuid4(),
+        user_id=user_id,
+        agent_type="cover_letter",
+        status="awaiting_approval",
+        output={"cover_letter": "A draft to review"},
+    )
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = [application, draft]
+    db = MagicMock(execute=AsyncMock(return_value=result))
+
+    data = await agents.list_runs.__wrapped__(
+        None, status="awaiting_approval", db=db, current_user=MagicMock(id=user_id)
+    )
+
+    app_row, draft_row = data["runs"]
+    assert app_row["requires_extension"] is True
+    assert "input" not in app_row
+    assert draft_row["requires_extension"] is False
+    assert draft_row["output"] == draft.output

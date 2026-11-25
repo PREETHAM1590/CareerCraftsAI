@@ -10,6 +10,7 @@ type RunRow = {
   id: string;
   agent_type: string;
   status: string;
+  requires_extension: boolean;
   started_at?: string | null;
   output?: Record<string, unknown> | null;
 };
@@ -87,7 +88,7 @@ export default function ApprovalsPage() {
       <header className="mb-5">
         <h1 className="text-xl font-semibold tracking-tight md:text-2xl">Approvals</h1>
         <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
-          Nothing sends or submits until you approve it here.
+          Review drafts here and submit applications from the browser extension.
         </p>
       </header>
 
@@ -146,14 +147,20 @@ export default function ApprovalsPage() {
               )}
 
               <div className="mt-3 flex gap-2">
-                <button
-                  type="button"
-                  disabled={busy === run.id}
-                  onClick={() => decide(run, true)}
-                  className="flex-1 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
-                >
-                  {busy === run.id ? "Working…" : "Approve"}
-                </button>
+                {run.requires_extension ? (
+                  <p className="flex-1 py-2.5 text-sm text-neutral-700 dark:text-neutral-300">
+                    Review and submit this application in the browser extension.
+                  </p>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={busy === run.id}
+                    onClick={() => decide(run, true)}
+                    className="flex-1 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+                  >
+                    {busy === run.id ? "Working…" : "Approve"}
+                  </button>
+                )}
                 <button
                   type="button"
                   disabled={busy === run.id}

@@ -297,6 +297,7 @@ async def list_runs(
                 "completed_at": r.completed_at.isoformat() if r.completed_at else None,
                 "tokens_used": r.tokens_used,
                 "output": r.output,
+                "requires_extension": bool((r.input or {}).get("workflow_id")),
                 "duration_ms": r.duration_ms,
             }
             for r in runs

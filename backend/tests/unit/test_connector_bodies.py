@@ -2,6 +2,8 @@
 
 import asyncio
 
+import pytest
+
 from app.services import job_connectors as jc
 
 
@@ -53,7 +55,8 @@ def test_rippling_bodies_bounded_and_extracted(monkeypatch):
         urls.append(url)
         return FakeResponse(
             '<div class="job-description"><div>Build <b>platforms</b></div>'
-            "<div>Own on-call</div></div><div>Footer</div>"
+            "<section><div>Own on-call</div><p>Mentor engineers</p></section>"
+            "<p>Write docs</p></div><div>Footer</div>"
         )
 
     monkeypatch.setattr(jc, "_polite_get", fake_get)
@@ -63,5 +66,44 @@ def test_rippling_bodies_bounded_and_extracted(monkeypatch):
     ]
     asyncio.run(jc._fill_rippling_bodies("acme", rows))
     assert len(urls) == 25
-    assert rows[0]["description"] == "Build platforms Own on-call"
+    assert rows[0]["description"] == "Build platforms Own on-call Mentor engineers Write docs"
     assert rows[30]["description"] == ""
+
+
+async def test_rippling_page_keeps_rows_when_body_budget_expires(monkeypatch):
+    async def fake_get(url, **kw):
+        if url.endswith("/jobs"):
+            return FakeResponse(
+                '[{"uuid":"1","name":"First","url":"https://ats.rippling.com/j/1"},'
+                '{"uuid":"2","name":"Second","url":"https://ats.rippling.com/j/2"}]'
+            )
+        if url.endswith("/1"):
+            return FakeResponse('<div id="description">First body</div>')
+        await asyncio.Future()
+
+    monkeypatch.setattr(jc, "_polite_get", fake_get)
+    monkeypatch.setattr(jc, "_RIPPLING_BODIES_TIMEOUT_S", 0.05)
+    source = jc.Source(id="rippling:acme", family="rippling", tenant="acme")
+    page = await asyncio.wait_for(jc.fetch_page(source), 2)
+
+    assert [(job["title"], job["description"]) for job in page.jobs] == [
+        ("First", "First body"),
+        ("Second", ""),
+    ]
+
+
+async def test_rippling_body_budget_preserves_external_cancellation(monkeypatch):
+    started = asyncio.Event()
+
+    async def fake_get(url, **kw):
+        started.set()
+        await asyncio.Future()
+
+    monkeypatch.setattr(jc, "_polite_get", fake_get)
+    task = asyncio.create_task(
+        jc._fill_rippling_bodies("acme", [{"url": "https://ats.rippling.com/j/1"}])
+    )
+    await asyncio.wait_for(started.wait(), 2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task

@@ -270,6 +270,23 @@ def test_dejavu_fonts_in_linux_layout_are_found(font_lookup, tmp_path):
     assert "Иван Петров" in fitz.open(stream=pdf, filetype="pdf")[0].get_text()
 
 
+@pytest.mark.parametrize(("template", "family"), [("modern", "Sans"), ("classic", "Serif")])
+def test_unicode_selection_falls_through_from_devanagari_to_tamil(template, family):
+    for script in ("Devanagari", "Tamil"):
+        if not pdf_service._find_font(f"Noto{family}{script}-Regular.ttf"):
+            pytest.skip(f"Noto {family} {script} font is not installed")
+
+    theme = THEMES[template]
+    # Resolve two distinct sets with the same theme to exercise the cache key.
+    devanagari, _ = pdf_service._document_fonts(theme, "ह")
+    tamil, glyphs = pdf_service._document_fonts(theme, "த")
+    assert devanagari.regular == f"CC-Noto{family}Devanagari"
+    assert tamil.regular == f"CC-Noto{family}Tamil"
+    assert glyphs is not None and ord("த") in glyphs
+    pdf = generate_resume_pdf("# த\n## SUMMARY\nத", template=template)
+    assert "த" in fitz.open(stream=pdf, filetype="pdf")[0].get_text()
+
+
 def test_latin_extended_text_uses_the_unicode_font(font_lookup):
     _require_windows_fonts()
     font_lookup(dirs=(WIN_FONTS,))

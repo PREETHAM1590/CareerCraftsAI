@@ -1079,7 +1079,7 @@ async def _llm_fallback(
     if not saved:
         return  # nothing the model may use: leave the questions to the member
     try:
-        llm = await get_llm(str(task.user_id), None, task_type="auto_apply")
+        llm = await get_llm(str(task.user_id), db, task_type="auto_apply")
     except Exception as exc:  # noqa: BLE001 — fallback is best effort
         logger.info("LLM fallback unavailable: %s", type(exc).__name__)
         return

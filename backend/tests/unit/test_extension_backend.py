@@ -247,6 +247,46 @@ async def test_saved_custom_answers_are_reused_but_new_questions_get_drafts(monk
     }
 
 
+@pytest.mark.parametrize("error_status", [None, 400, 429])
+async def test_llm_fallback_uses_live_session_and_preserves_plan_on_router_error(
+    monkeypatch, error_status
+):
+    from fastapi import HTTPException
+
+    from app.applications import saved_answers
+    from app.core import model_router
+
+    db = MagicMock()
+    task = SimpleNamespace(user_id=uuid.uuid4())
+    entry = {
+        "field_id": "tools",
+        "label": "Tell us about your programming experience",
+        "value": None,
+        "source": "unresolved",
+    }
+    original = entry.copy()
+    answers = AsyncMock(return_value=[{"question_key": "custom.tools", "value": "Python"}])
+    invoke = MagicMock(return_value=SimpleNamespace(content="I use Python."))
+    router = AsyncMock(return_value=SimpleNamespace(invoke=invoke))
+    if error_status is not None:
+        router.side_effect = HTTPException(status_code=error_status)
+    monkeypatch.setattr(saved_answers, "list_answers", answers)
+    monkeypatch.setattr(model_router, "get_llm", router)
+
+    await extension_service._llm_fallback(db, task, [entry], ["tools"])
+
+    answers.assert_awaited_once_with(db, task.user_id)
+    router.assert_awaited_once_with(str(task.user_id), db, task_type="auto_apply")
+    if error_status is not None:
+        assert entry == original
+        invoke.assert_not_called()
+    else:
+        assert "Python" in invoke.call_args.args[0][-1].content
+        assert entry["value"] == "I use Python."
+        assert entry["source"] == "ai_draft"
+        assert entry["requires_review"] is True
+
+
 def test_answer_keys_prefer_canonical_rules():
     assert (
         extension_service.answer_key("Do you need visa sponsorship?")

@@ -14,6 +14,7 @@ from sqlalchemy import text
 
 from app.services import india_focus
 from app.services.job_connectors import (
+    PAGE_FETCH_TIMEOUT_S,
     SERVER_SIDE_SEARCH,
     SOURCE_KEYS,
     Source,
@@ -169,7 +170,9 @@ async def refresh_source(source: Source, query="") -> tuple[list[dict], str | No
         ):
             for attempt in range(2):
                 try:
-                    result = await asyncio.wait_for(fetch_page(source, query, cursor), 15)
+                    result = await asyncio.wait_for(
+                        fetch_page(source, query, cursor), PAGE_FETCH_TIMEOUT_S
+                    )
                     break
                 except httpx.HTTPStatusError as exc:
                     if exc.response.status_code in {401, 403, 429}:

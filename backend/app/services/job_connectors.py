@@ -948,6 +948,8 @@ def _join(*parts) -> str:
     return ", ".join(str(p) for p in parts if p)
 
 
+PAGE_FETCH_TIMEOUT_S = 15
+_RIPPLING_BODIES_TIMEOUT_S = 5
 _BODIES_MAX = 25  # descriptions fetched per refresh; the rest stay empty
 
 
@@ -991,28 +993,40 @@ def _description_block(page: str) -> str:
     return page[opening.end() :]
 
 
-async def _fill_rippling_bodies(tenant: str, rows: list[dict]) -> None:
-    """Rippling's board API lists without bodies; each job's `url` serves the
-    posting HTML. Best effort, bounded, plain-text extraction only."""
-    todo = [r for r in rows if not r.get("description")][:_BODIES_MAX]
-    for r in todo:
-        url = r.get("url")
-        if not url:
-            continue
-        try:
-            res = await _polite_get(url)
-            res.raise_for_status()
-            block = _description_block(res.text)
-            if block:
-                r["description"] = " ".join(plain(block).split())[:8000]
-        except Exception:  # noqa: BLE001, S112 - the body is optional
-            continue
+async def _fill_rippling_bodies(
+    tenant: str, rows: list[dict], *, page_deadline: float | None = None
+) -> None:
+    """Fill descriptions until the optional request budget or page deadline."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _RIPPLING_BODIES_TIMEOUT_S
+    if page_deadline is not None:
+        deadline = min(deadline, page_deadline)
+    if deadline <= loop.time():
+        return
+
+    try:
+        async with asyncio.timeout_at(deadline):
+            todo = [r for r in rows if not r.get("description")][:_BODIES_MAX]
+            for r in todo:
+                url = r.get("url")
+                if not url:
+                    continue
+                try:
+                    res = await _polite_get(url)
+                    res.raise_for_status()
+                    block = _description_block(res.text)
+                    if block:
+                        r["description"] = " ".join(plain(block).split())[:8000]
+                except Exception:  # noqa: BLE001, S112 - the body is optional
+                    continue
+    except TimeoutError:
+        # Keep listing rows and any descriptions already fetched.
+        return
 
 
 async def _fetch_ats_board(source: Source, tenant: str, page: int) -> Page:
     """Keyless one-request boards. Each returns the whole board (Teamtailor is
-    paged by cursor). BambooHR, Breezy and Rippling list without descriptions:
-    the body costs one more request per posting, which a refresh skips."""
+    paged by cursor). BambooHR and Rippling fetch descriptions separately."""
     family = source.family
     headers: dict = {}
     body = None
@@ -1026,6 +1040,8 @@ async def _fetch_ats_board(source: Source, tenant: str, page: int) -> Page:
     elif family == "pinpoint":
         url = f"https://{tenant}.pinpointhq.com/postings.json"
     elif family == "rippling":
+        # Reserve a little time to normalize the results and return to the caller.
+        page_deadline = asyncio.get_running_loop().time() + PAGE_FETCH_TIMEOUT_S - 1
         url = f"https://ats.rippling.com/api/v1/board/{tenant}/jobs"
     elif family == "teamtailor":
         url = f"https://{tenant}.teamtailor.com/jobs.rss?offset={(page - 1) * 100}&per_page=100"
@@ -1135,7 +1151,7 @@ async def _fetch_ats_board(source: Source, tenant: str, page: int) -> Page:
             }
             for j in (data if isinstance(data, list) else data.get("items", []))
         ]
-        await _fill_rippling_bodies(tenant, rows)
+        await _fill_rippling_bodies(tenant, rows, page_deadline=page_deadline)
     elif family == "jobscore":
         data = response.json()
         rows = [
