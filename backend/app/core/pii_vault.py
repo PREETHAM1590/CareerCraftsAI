@@ -544,7 +544,7 @@ def _scrub_record(record: logging.LogRecord) -> None:
         return
     cleaned = scrub(message)
     if cleaned != message:
-        if record.name == "uvicorn.access" and isinstance(record.args, tuple):
+        if record.name == "uvicorn.access" and record.args and isinstance(record.args, tuple):
             # uvicorn's formatter builds the line from these args, so they
             # must keep their count and order.
             record.args = tuple(scrub(a) if isinstance(a, str) else a for a in record.args)

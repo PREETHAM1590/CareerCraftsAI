@@ -149,3 +149,12 @@ def test_clean_description_fixes_saved_html_and_keeps_text():
     text = "Line one\n\n  - C++ where a < b and c > d, List<String>"
     assert jc.clean_description(text) == text
     assert jc.clean_description(None) == ""
+
+
+def test_literal_angle_brackets_survive_next_to_markup():
+    body = (
+        "<p>Requirements</p>Use List<String> where a < b and c > d<!-- x --><dl><o:p>ok</o:p></dl>"
+    )
+    for text in (jc.plain(body), jc.plain(body, breaks=True), jc.clean_description(body)):
+        assert "Use List<String> where a < b and c > d" in text
+        assert "<p>" not in text and "<dl>" not in text and "o:p" not in text and "x --" not in text

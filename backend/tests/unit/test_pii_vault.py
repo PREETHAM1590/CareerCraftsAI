@@ -336,3 +336,12 @@ def test_access_log_lines_survive_scrubbing():
     PiiLogFilter().filter(record)
     line = AccessFormatter("%(client_addr)s %(request_line)s %(status_code)s").format(record)
     assert "[PHONE]" in line and "9876543210" not in line and "200" in line
+
+
+def test_access_record_without_args_is_scrubbed():
+    for args in ((), None):
+        record = logging.LogRecord(
+            "uvicorn.access", logging.INFO, __file__, 1, "from ananya.rao@acme.in", args, None
+        )
+        PiiLogFilter().filter(record)
+        assert "ananya" not in record.getMessage()

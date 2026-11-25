@@ -175,12 +175,14 @@ def posted(value):
 
 # Real HTML tags only, so "<5 years" or "List<String>" in a posting survive.
 _HTML_TAG = re.compile(
-    r"</?(?:a|article|b|blockquote|br|code|div|em|font|h[1-6]|hr|i|img|li|ol|p|pre|section|small"
-    r"|span|strong|sub|sup|table|tbody|td|th|thead|tr|u|ul)(?=[\s/>])[^>]*>",
-    re.IGNORECASE,
+    r"<!--.*?-->|</?(?:a|abbr|address|article|aside|b|big|blockquote|body|br|button|caption|center"
+    r"|cite|code|col|colgroup|dd|del|details|div|dl|dt|em|figcaption|figure|font|footer|form|h[1-6]"
+    r"|head|header|hr|html|i|iframe|img|input|ins|kbd|label|li|link|main|mark|meta|nav|noscript|ol"
+    r"|p|path|picture|pre|q|s|script|section|small|source|span|strike|strong|style|sub|summary|sup"
+    r"|svg|table|tbody|td|tfoot|th|thead|tr|tt|u|ul|video|wbr|[a-z][a-z0-9]*[:-][a-z0-9:-]+)"
+    r"(?=[\s/>])[^>]*>",
+    re.IGNORECASE | re.DOTALL,
 )
-
-
 _LINE_TAG = re.compile(
     r"\s*</?(?:article|blockquote|br|div|h[1-6]|hr|ol|p|pre|section|table|tr|ul)(?=[\s/>])[^>]*>\s*",
     re.IGNORECASE,
@@ -199,9 +201,9 @@ def plain(value, breaks: bool = False) -> str:
             raw = unescaped
     if breaks and _HTML_TAG.search(raw):
         raw = _LINE_TAG.sub("\n", _LIST_ITEM.sub("\n- ", raw))
-        raw = re.sub(r"[ \t]{2,}", " ", re.sub(r"<[^>]*>", " ", raw))
+        raw = re.sub(r"[ \t]{2,}", " ", _HTML_TAG.sub(" ", raw))
         raw = re.sub(r"\s*\n\s*", "\n", raw)
-    return html.unescape(re.sub(r"<[^>]*>", " ", raw))[:16000].strip()
+    return html.unescape(_HTML_TAG.sub(" ", raw))[:16000].strip()
 
 
 def clean_description(value: str | None) -> str:
