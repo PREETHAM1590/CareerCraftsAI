@@ -1,6 +1,7 @@
 """Nova's private steps: saved-login sign-in and one-time codes."""
 
 import uuid
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -149,8 +150,10 @@ async def test_enter_code_types_it_once_on_the_page_origin(redis):
 
 
 @pytest.mark.asyncio
-async def test_sign_in_resolves_the_login_by_page_origin():
-    row = SimpleNamespace(username_enc="u", password_enc="p")
+@pytest.mark.parametrize("automatic", [False, True])
+async def test_sign_in_resolves_the_login_by_page_origin(redis, automatic):
+    row = auto_login(auto_signin=automatic)
+    user = uuid.uuid4()
     with (
         patch.object(nova_signin, "saved_login", AsyncMock(return_value=row)) as lookup,
         patch.object(nova_signin, "decrypt_api_key", side_effect=lambda v, _: f"plain-{v}"),
@@ -158,8 +161,10 @@ async def test_sign_in_resolves_the_login_by_page_origin():
             nova_signin, "_dispatch", AsyncMock(return_value={"submitted": True})
         ) as dispatch,
     ):
+        claim = await nova_signin.claim_auto_signin(user, "https://portal.example")
+        assert (claim is not None) == automatic
         result = await nova_signin.sign_in(
-            "8f7c2b5e-6a0d-4f7e-9d6c-0b1a2c3d4e5f", sign_in_action(), "https://portal.example/login"
+            user, sign_in_action(), "https://portal.example/login", automatic_claim=claim
         )
     assert lookup.await_args.args[1] == "https://portal.example"
     body = dispatch.await_args.args[1]
@@ -206,14 +211,31 @@ async def test_auto_signin_needs_consent_and_stops_after_daily_limit(redis):
     ):
         assert not await nova_signin.claim_auto_signin(user, "https://portal.example")
     assert redis.data == {}
-    with patch.object(
-        nova_signin, "saved_login", AsyncMock(return_value=SimpleNamespace(auto_signin=True))
-    ):
+    row = auto_login()
+    with patch.object(nova_signin, "saved_login", AsyncMock(return_value=row)):
         claims = [
             await nova_signin.claim_auto_signin(user, "https://portal.example")
             for _ in range(nova_signin.AUTO_SIGNIN_DAILY_LIMIT + 1)
         ]
-    assert claims == [True] * nova_signin.AUTO_SIGNIN_DAILY_LIMIT + [False]
+    assert all(
+        claim is not None and claim.credential_id == row.id
+        for claim in claims[: nova_signin.AUTO_SIGNIN_DAILY_LIMIT]
+    )
+    assert claims[-1] is None
+
+
+def auto_login(**changes):
+    return SimpleNamespace(
+        **{
+            "id": uuid.uuid4(),
+            "auto_signin": True,
+            "consent_at": datetime.now(UTC),
+            "consent_version": nova_signin.CONSENT_VERSION,
+            "username_enc": "u",
+            "password_enc": "p",
+            **changes,
+        }
+    )
 
 
 # ── Planner and continuation ─────────────────────────────────────
@@ -254,28 +276,54 @@ SIGN_IN = {
 
 
 @pytest.mark.asyncio
-async def test_planner_asks_before_signing_in_without_consent():
+@pytest.mark.parametrize(
+    "change",
+    [
+        "no_consent",
+        "removed",
+        "id",
+        "username_enc",
+        "password_enc",
+        "consent_at",
+        "consent_version",
+        "auto_signin",
+    ],
+)
+async def test_planner_asks_without_matching_automatic_claim(redis, change):
     from app.agents import computer_agent as agent
 
     run = SimpleNamespace(
         user_id=uuid.uuid4(), id=uuid.uuid4(), input={"context": {"task": "Apply"}}, tokens_used=0
     )
     llm, db = planner_fixtures(SIGN_IN)
+    row = auto_login(auto_signin=change != "no_consent")
+    replacements = {
+        "id": uuid.uuid4(),
+        "username_enc": "different-encrypted-username",
+        "password_enc": "different-encrypted-password",
+        "consent_at": row.consent_at + timedelta(seconds=1),
+        "consent_version": "different-version",
+        "auto_signin": False,
+    }
+    current = SimpleNamespace(**vars(row))
+    if change in replacements:
+        setattr(current, change, replacements[change])
+    elif change == "removed":
+        current = None
     with (
         patch.object(agent, "act", AsyncMock(return_value=SNAPSHOT)),
         patch.object(agent, "AsyncSessionLocal", return_value=db),
         patch.object(agent, "get_chat_gateway_llm", AsyncMock(return_value=llm)),
         patch.object(agent.nova_signin, "saved_logins", AsyncMock(return_value=[])),
         patch.object(agent.nova_signin, "account_sites", AsyncMock(return_value=[])),
-        patch.object(agent.nova_signin, "saved_login", AsyncMock(return_value=SimpleNamespace())),
-        patch.object(agent.nova_signin, "claim_auto_signin", AsyncMock(return_value=False)),
-        patch.object(agent.nova_signin, "sign_in", AsyncMock()) as sign_in,
+        patch.object(agent.nova_signin, "saved_login", AsyncMock(side_effect=[row, row, current])),
+        patch.object(agent.nova_signin, "_dispatch", AsyncMock()) as dispatch,
     ):
         result = await agent.plan(run)
     assert result["status"] == "awaiting_approval"
     assert result["pending_action"]["action"]["operation"] == "sign_in"
     assert "never shown to the AI" in " ".join(result["pending_action"]["warnings"])
-    sign_in.assert_not_called()
+    dispatch.assert_not_called()
 
 
 @pytest.mark.asyncio

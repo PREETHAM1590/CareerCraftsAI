@@ -1,9 +1,11 @@
 """Nova's code requests over Telegram: linking, asking, answering (no network)."""
 
+import logging
 import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -67,6 +69,29 @@ def test_secret_must_match_exactly(bot):
     assert tg.secret_ok(SECRET)
     assert not tg.secret_ok(SECRET[:-1])
     assert not tg.secret_ok(None)
+
+
+@pytest.mark.asyncio
+async def test_bot_call_keeps_token_on_wire_and_out_of_httpx_logs(bot, caplog, monkeypatch):
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200)
+
+    client = httpx.AsyncClient
+    transport = httpx.MockTransport(respond)
+    monkeypatch.setattr(
+        tg.httpx, "AsyncClient", lambda **kwargs: client(transport=transport, **kwargs)
+    )
+    with caplog.at_level(logging.INFO, logger="httpx"):
+        assert await tg.call("sendMessage", {"chat_id": 555})
+        async with client(transport=transport) as other:
+            await other.get("https://example.com/public")
+
+    assert requests[0].url.path == "/bot123:abc/sendMessage"
+    assert "123:abc" not in caplog.text
+    assert "https://example.com/public" in caplog.text
 
 
 @pytest.mark.asyncio

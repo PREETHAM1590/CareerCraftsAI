@@ -571,13 +571,16 @@ async def test_stored_create_account_payload_is_re_proposed_not_replayed():
 
 
 @pytest.mark.asyncio
-async def test_automatic_sign_in_rechecks_the_login_it_types(monkeypatch):
-    row = SimpleNamespace(auto_signin=False, username_enc="u", password_enc="p")
+async def test_automatic_sign_in_rechecks_the_login_it_types():
+    claim = nova_signin.AutoSigninClaim(uuid.uuid4(), None, None, ("u", "p"))
+    row = SimpleNamespace(
+        id=claim.credential_id, auto_signin=False, username_enc="u", password_enc="p"
+    )
     with (
         patch.object(nova_signin, "saved_login", AsyncMock(return_value=row)),
         patch.object(nova_signin, "_dispatch", AsyncMock()) as dispatch,
     ):
-        with pytest.raises(ValueError, match="Automatic sign-in is off"):
+        with pytest.raises(ValueError, match="no longer valid"):
             await nova_signin.sign_in(
                 USER,
                 ComputerAction(
@@ -587,6 +590,6 @@ async def test_automatic_sign_in_rechecks_the_login_it_types(monkeypatch):
                     approved_snapshot=4,
                 ),
                 PAGE,
-                automatic=True,
+                automatic_claim=claim,
             )
     dispatch.assert_not_called()

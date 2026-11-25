@@ -247,19 +247,16 @@ async def plan(run: AgentRun, note="") -> dict:
                     ),
                 },
             }
-        if await nova_signin.claim_auto_signin(run.user_id, origin):
-            # The member turned on automatic sign-in for this exact origin.
+        claim = await nova_signin.claim_auto_signin(run.user_id, origin)
+        if claim is not None:
             try:
-                await nova_signin.sign_in(run.user_id, action, page_url, automatic=True)
-            except ValueError as exc:  # replaced or switched off since the claim
-                return {
-                    "status": "completed",
-                    "result": {"message": str(exc)},
-                    "tokens_used": tokens,
-                }
-            await _record_step(run, "sign_in", f"Signed in to {origin} with your saved login")
-            run.tokens_used = tokens  # this proposal's tokens carry into the next plan
-            return await plan(run)
+                await nova_signin.sign_in(run.user_id, action, page_url, automatic_claim=claim)
+            except nova_signin.AutoSigninChanged:
+                pass  # Ask for approval using the ordinary path below.
+            else:
+                await _record_step(run, "sign_in", f"Signed in to {origin} with your saved login")
+                run.tokens_used = tokens  # this proposal's tokens carry into the next plan
+                return await plan(run)
     if action.operation == "create_account":
         try:
             origin = nova_signin.page_origin(page_url)

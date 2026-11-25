@@ -94,11 +94,9 @@ source = source.replace(anchor, `
         await field.press("Enter",{timeout:ACTION_TIMEOUT_MS});
         await target.waitForLoadState("domcontentloaded",{timeout:NAVIGATION_TIMEOUT_MS}).catch(()=>{});
         session.snapshotId += 1;
-        // Released only when the typed code is no longer on the page.
-        // Unreadable but still on the page counts as visible: the marker (which
-        // keeps the model from reading the page) stays until the code is gone.
+        // Keep the page private unless the field can be read and is empty.
         const codeVisible = await field.inputValue({timeout:1000}).then(v => v.length > 0)
-          .catch(async () => (await field.count().catch(() => 1)) > 0);
+          .catch(()=>true);
         if (!codeVisible) await rm(privateMarker,{force:true});
         return json({filled:true,submitted:!codeVisible});
         } catch {

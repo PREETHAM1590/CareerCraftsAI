@@ -28,12 +28,6 @@ from app.core import redis_client
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
-# The bot token is part of every Bot API URL, and httpx logs request URLs at
-# INFO: keep its loggers above that so the token never reaches the logs.
-for _name in ("httpx", "httpcore"):
-    if logging.getLogger(_name).getEffectiveLevel() < logging.WARNING:
-        logging.getLogger(_name).setLevel(logging.WARNING)
-
 API = "https://api.telegram.org"
 LINK_TTL = 900
 CODE = re.compile(r"[A-Za-z0-9-]{4,12}")
@@ -41,6 +35,22 @@ HELP = (
     "I only take one-time codes that Nova asks you for. "
     "Open CareerCraft for everything else. Send /stop to disconnect."
 )
+
+
+def _omit_bot_api_urls(record: logging.LogRecord) -> bool:
+    # HTTPX passes the request URL as an argument to its request summary log.
+    return not (
+        isinstance(record.args, tuple)
+        and any(
+            isinstance(arg, httpx.URL)
+            and arg.host == "api.telegram.org"
+            and arg.path.startswith("/bot")
+            for arg in record.args
+        )
+    )
+
+
+logging.getLogger("httpx").addFilter(_omit_bot_api_urls)
 
 
 def configured() -> bool:
@@ -57,7 +67,7 @@ def secret_ok(header: str | None) -> bool:
 
 
 async def call(method: str, payload: dict) -> bool:
-    """Bot API call. The token is in the URL, so the URL is never logged."""
+    """Call the Bot API using the token in the request path it requires."""
     try:
         async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
             response = await client.post(

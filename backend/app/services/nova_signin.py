@@ -19,6 +19,7 @@ import hashlib
 import secrets
 import string
 import uuid
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from urllib.parse import urlsplit
 
@@ -107,20 +108,41 @@ def _signin_counter(user_id, origin: str) -> str:
     return f"nova:signin:{uuid.UUID(str(user_id))}:{site}:{day}"
 
 
-async def claim_auto_signin(user_id, origin: str) -> bool:
-    """True when the member consented and today's automatic sign-ins remain.
+@dataclass(frozen=True)
+class AutoSigninClaim:
+    credential_id: uuid.UUID
+    consent_at: datetime | None
+    consent_version: str | None
+    # Saving a replacement login can update the encrypted values on the same row.
+    encrypted_login: tuple[str, str] = field(repr=False)
+
+
+class AutoSigninChanged(ValueError):
+    """The saved credential or consent changed after the automatic claim."""
+
+
+def _auto_signin_claim(row) -> AutoSigninClaim | None:
+    if row is None or not row.auto_signin:
+        return None
+    return AutoSigninClaim(
+        row.id, row.consent_at, row.consent_version, (row.username_enc, row.password_enc)
+    )
+
+
+async def claim_auto_signin(user_id, origin: str) -> AutoSigninClaim | None:
+    """Return a claim when the member consented and today's automatic sign-ins remain.
 
     Past the limit Nova asks for approval again: a login that keeps failing
     must not be retried until the portal locks the account."""
-    row = await saved_login(user_id, origin)
-    if row is None or not row.auto_signin:
-        return False
+    claim = _auto_signin_claim(await saved_login(user_id, origin))
+    if claim is None:
+        return None
     redis = redis_client.get_redis()
     key = _signin_counter(user_id, origin)
     used = await redis.incr(key)
     if used == 1:
         await redis.expire(key, 2 * 86400)
-    return used <= AUTO_SIGNIN_DAILY_LIMIT
+    return claim if used <= AUTO_SIGNIN_DAILY_LIMIT else None
 
 
 async def _dispatch(user_id, body: dict, audit_name: str) -> dict:
@@ -137,18 +159,16 @@ async def _dispatch(user_id, body: dict, audit_name: str) -> dict:
         await computer_service.finish_audit(audit_id, status, 0)
 
 
-async def sign_in(user_id, action, page_url: str | None, automatic: bool = False) -> dict:
-    """Type the saved login for this exact origin and submit the form.
-
-    automatic: no per-step approval, so the login typed must itself still
-    allow automatic sign-in (it may have been replaced or switched off since
-    claim_auto_signin)."""
+async def sign_in(
+    user_id, action, page_url: str | None, *, automatic_claim: AutoSigninClaim | None = None
+) -> dict:
+    """Type the exact-origin login, verifying any automatic claim before dispatch."""
     origin = page_origin(page_url)
     row = await saved_login(user_id, origin)
+    if automatic_claim is not None and _auto_signin_claim(row) != automatic_claim:
+        raise AutoSigninChanged(f"The automatic sign-in claim for {origin} is no longer valid.")
     if row is None:
         raise ValueError(f"No saved login for {origin}. Save one in the computer panel first.")
-    if automatic and not row.auto_signin:
-        raise ValueError(f"Automatic sign-in is off for {origin}; approve the sign-in instead.")
     params = action.parameters
     body = {
         "operation": "credentials/fill",
