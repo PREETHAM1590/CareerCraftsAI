@@ -5,7 +5,7 @@ system (Greenhouse, Lever, Workday and so on). Applying there is more
 reliable than through the listing page, so before an application is handed to
 the browser this follows the listing to that page when it can.
 
-Boards that need the member's own login (LinkedIn, Naukri, Indeed) are left
+Boards that need the member's own login (LinkedIn, Naukri, Internshala, Indeed) are left
 alone: they are applied through in the member's logged-in browser.
 """
 
@@ -22,7 +22,15 @@ from app.services.public_http import public_get
 logger = logging.getLogger(__name__)
 
 # Applied to in the member's own logged-in browser session, never fetched here.
-_LOGIN_BOARDS = ("linkedin.com", "naukri.com", "indeed.", "foundit.", "instahyre.com", "glassdoor.")
+_LOGIN_BOARDS = (
+    "linkedin.com",
+    "naukri.com",
+    "internshala.com",
+    "indeed.",
+    "foundit.",
+    "instahyre.com",
+    "glassdoor.",
+)
 _APPLY_TEXT = re.compile(r"\bapply\b", re.IGNORECASE)
 
 

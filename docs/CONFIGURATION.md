@@ -196,8 +196,9 @@ provider credentials; CareerCraft does not store provider OAuth tokens.
 
 Many sources only carry a snippet (hiring posts, Internshala, JobSpy). When a
 member opens a saved job whose description is under 800 characters,
-`GET /jobs/applications/{id}/jd` reads the job's own page once and saves the
-full text for tailoring and scoring.
+`GET /jobs/applications/{id}/jd` reads the job's own page once and serves the
+full text for tailoring and scoring. The member's own saved description is
+never overwritten.
 
 1. Plain HTTPS first, after robots.txt allows it. The page's JSON-LD
    `JobPosting` description wins; otherwise its main text.
@@ -206,7 +207,9 @@ full text for tailoring and scoring.
    (`docs/reports/2026-11-24-obscura-trial.md`).
 
 Results, including misses, are cached per URL in Redis: 7 days for a hit, 1
-day for a miss. Login-walled and bot-blocking sites (LinkedIn, X, Indeed,
+day for a miss. A URL with a query string (it may carry a personal token) is
+cached per member; path-only job URLs are shared. Without Redis the page is
+just read. Login-walled and bot-blocking sites (LinkedIn, X, Indeed,
 Naukri, Glassdoor, foundit) are skipped. A rate-limited or unavailable
 robots.txt counts as "not allowed" (RFC 9309).
 
@@ -223,6 +226,37 @@ robots.txt counts as "not allowed" (RFC 9309).
 - Workers recycle at 400 MB or after an hour.
 - Install gVisor and set `OBSCURA_RUNTIME=runsc` to run it under a user-space kernel.
 - It never holds anyone's sign-in.
+
+## Hiring posts on X and LinkedIn
+
+Jobs that people announce in posts ("we're hiring a Backend Engineer...") come
+from two catalog source families. Each is fetched once per role group for
+everyone, not per member search. The 4 role groups are in
+`backend/app/services/job_sources.json` (`x:*`, `linkedin-posts:*`).
+
+| Variable | Description |
+|---|---|
+| `X_BEARER_TOKEN` | X API v2 app bearer token. X bills $0.005 per post read; blank turns X off. |
+| `X_HIRING_POSTS_PER_REFRESH` | Posts per X source refresh, 10 to 100 (default 50). 4 sources daily at 50 is about 200 posts, roughly $1 a day. Also set a spending limit in the X Developer Console. |
+| `SEARXNG_URL` | Our own SearXNG, used to find public `linkedin.com/posts` pages that search engines have indexed. LinkedIn itself is never contacted. |
+
+**SearXNG on the APP VM**
+1. Create `/opt/careercraft-secrets/searxng.env` containing `SEARXNG_SECRET=<openssl rand -hex 32>`.
+2. Start it with `docker compose up -d searxng` in `deploy/oracle-vm`. It listens on `127.0.0.1:18188` only.
+3. Set `SEARXNG_URL=http://127.0.0.1:18188` in `backend.env`.
+4. Check it with `curl 'http://127.0.0.1:18188/search?q=hiring&format=json'`.
+
+The search engines SearXNG queries may rate-limit a server IP, so expect some
+refreshes to come back empty. That is not a failure: hiring-post sources never
+remove jobs on refresh (each search sees only a recent window), so earlier posts
+stay in the catalog until they age out with the catalog's freshness window.
+
+**What gets through**
+- Posts are untrusted text. A post becomes a job only when it reads as an employer hiring and names a role.
+- Job-seeker posts (#OpenToWork, "looking for a job", "I'm looking for a ... role") are dropped. This is checked on the whole post, so an employer post that quotes a seeker's line is dropped too: precision over recall.
+- Scam signals drop a post: fees or deposits, Telegram or WhatsApp-only contact, crypto, "earn per day", "no interview".
+- Links are never opened. A link to a specific posting on a known ATS (Greenhouse, Lever, Workday...) becomes the job URL; any other link, or a generic careers page, leaves the post itself as the link.
+- Every job credits the post: "Posted by @handle on X: <link>".
 
 ## LinkedIn sending (beta, off by default)
 
