@@ -3,8 +3,8 @@
 ## Production (careercraftsai.me)
 
 Host since 2026-11-25: SSH alias `24gb` (129.154.38.17, Oracle A1, 4 OCPU / 24 GB,
-Ubuntu 26.04; shared with other services, so `SANDBOX_MAX_SESSIONS=4` and
-`COMPUTER_CPUS=1`; it replaced `24gb1`), checkout of
+Ubuntu 26.04; shared with other services, so `computers.env` there sets
+`SANDBOX_MAX_SESSIONS=4` and `COMPUTER_CPUS=1`; it replaced `24gb1`), checkout of
 this directory at `~/careercraft-computers/deploy/computers`, secrets in the
 root-only `/opt/careercraft-secrets/computers.env`.
 Root is mounted without online `discard` (weekly `fstrim.timer` instead), as on
@@ -32,6 +32,10 @@ after every rebuild. Launch and capacity report:
   `PermitListen none`, `PermitTTY no`, `ForceCommand /bin/false` (per-key
   `permitopen` alone does not stop `-R`). `backend.env` carries
   `SANDBOX_RELAY_URL=http://127.0.0.1:14312` and the relay token.
+  **Moving hosts:** replace `/opt/careercraft-secrets/sandbox-tunnel/known_hosts`
+  on the APP VM with the new host's key, checked against `ssh-keygen -lf
+  /etc/ssh/ssh_host_ed25519_key.pub` on that host, then recreate the tunnel.
+  A stale or wrong key makes it exit and retry, never connect.
 
 ### Capacity (measured 2026-10-22 on 24gb1, gVisor)
 
