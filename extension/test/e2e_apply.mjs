@@ -40,7 +40,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const extensionDir = buildExtension({ out: path.join(os.tmpdir(), `cc-e2e-ext-${process.pid}`), dev: true });
 process.on("exit", () => fs.rmSync(extensionDir, { recursive: true, force: true }));
 const fixture = (name) => fs.readFileSync(path.join(here, "fixtures", name), "utf8");
-const HOSTS = ["boards.greenhouse.io", "jobs.lever.co", "careers.indeed.com", "acme.wd5.myworkdayjobs.com", "jobs.smartrecruiters.com", "apply.workable.com", "acme.wd3.myworkdaysite.com"];
+const HOSTS = ["boards.greenhouse.io", "jobs.lever.co", "careers.indeed.com", "acme.wd5.myworkdayjobs.com", "jobs.smartrecruiters.com", "apply.workable.com", "acme.wd3.myworkdaysite.com", "internshala.com"];
 
 // ── Fake job sites (HTTPS, self-signed) ─────────────────────────────────
 
@@ -103,6 +103,7 @@ const site = https.createServer(
     if (host === "acme.wd3.myworkdaysite.com") return html(fixture("workday/full.html"));
     if (host === "jobs.smartrecruiters.com") return html(fixture("smartrecruiters/index.html"));
     if (host === "apply.workable.com") return html(fixture("workable/index.html"));
+    if (host === "internshala.com") return html(fixture("internshala/index.html"));
     res.writeHead(404);
     res.end();
   }
@@ -381,6 +382,13 @@ async function answerGreenhouse(page) {
   await panelClick(page, `[data-field-id="consent"] input[type=checkbox]`);
 }
 
+// "Yes" (the first option) in the panel's dropdown for a radio group.
+async function pickYes(page, fieldId) {
+  await panelClick(page, `[data-field-id="${fieldId}"] select`);
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+}
+
 // "No" in the panel's dropdown for a radio group CareerCraft never guesses.
 async function pickNo(page, fieldId) {
   await panelClick(page, `[data-field-id="${fieldId}"] select`);
@@ -581,6 +589,22 @@ const SCENARIOS = [
       check(true, "filled the Workable form and attached the resume");
     },
     verify: profileSubmitted,
+  },
+  {
+    name: "Internshala: Apply now → Proceed → cover letter, availability, questions",
+    url: `https://internshala.com:${sitePort}/internship/detail/python-development-internship-at-acme123`,
+    platform: "internshala",
+    formHost: "internshala.com",
+    async answer(page) {
+      await page.waitForURL(/\/student\/interstitial\/application\//, { timeout: 25000 });
+      await waitUntil(() => log.some((e) => e[3] === "needs_input"), 25000, "needs_input event");
+      check(await page.evaluate(() => document.getElementById("cover_letter").value.length > 0), "followed Apply now and Proceed, then filled the cover letter");
+      await pickYes(page, "availability");
+      await panelClick(page, `[data-role="primary"]`);
+      await waitUntil(() => log.some((e) => e[3] === "review"), 15000, "review event");
+      await new Promise((r) => setTimeout(r, 800));
+    },
+    verify: (s) => s.availability === "yes" && s.cover_letter.length > 0 && s.assessment.length > 0 && s.resume === "ada-resume.pdf",
   },
   {
     name: "Lever description page → Apply link → form (submit navigates)",

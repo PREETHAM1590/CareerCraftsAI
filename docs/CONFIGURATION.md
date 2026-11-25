@@ -196,7 +196,9 @@ provider credentials; CareerCraft does not store provider OAuth tokens.
 
 Each member gets an address such as `priya.k7f2m@apply.careercraftsai.me`. Job
 portals send sign-up codes and confirmations there. Nova fills an emailed code
-in by itself when it is waiting on a code step for the same site.
+in by itself when it is waiting on a code step for the same site and the
+sender passed DKIM or DMARC (Resend's receiving server reports this; a forged
+From can't). Any other code stays in the member's inbox for them to use.
 
 | Variable | Description |
 |---|---|
@@ -241,6 +243,37 @@ curl -s "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
 
 Members connect from the computer panel ("Code requests on Telegram"). They
 can send /stop, or disconnect in the app, at any time.
+
+## Hiring posts on X and LinkedIn
+
+Jobs that people announce in posts ("we're hiring a Backend Engineer...") come
+from two catalog source families. Each is fetched once per role group for
+everyone, not per member search. The 4 role groups are in
+`backend/app/services/job_sources.json` (`x:*`, `linkedin-posts:*`).
+
+| Variable | Description |
+|---|---|
+| `X_BEARER_TOKEN` | X API v2 app bearer token. X bills $0.005 per post read; blank turns X off. |
+| `X_HIRING_POSTS_PER_REFRESH` | Posts per X source refresh, 10 to 100 (default 50). 4 sources daily at 50 is about 200 posts, roughly $1 a day. Also set a spending limit in the X Developer Console. |
+| `SEARXNG_URL` | Our own SearXNG, used to find public `linkedin.com/posts` pages that search engines have indexed. LinkedIn itself is never contacted. |
+
+**SearXNG on the APP VM**
+1. Create `/opt/careercraft-secrets/searxng.env` containing `SEARXNG_SECRET=<openssl rand -hex 32>`.
+2. Start it with `docker compose up -d searxng` in `deploy/oracle-vm`. It listens on `127.0.0.1:18188` only.
+3. Set `SEARXNG_URL=http://127.0.0.1:18188` in `backend.env`.
+4. Check it with `curl 'http://127.0.0.1:18188/search?q=hiring&format=json'`.
+
+The search engines SearXNG queries may rate-limit a server IP, so expect some
+refreshes to come back empty. That is not a failure: hiring-post sources never
+remove jobs on refresh (each search sees only a recent window), so earlier posts
+stay in the catalog until they age out with the catalog's freshness window.
+
+**What gets through**
+- Posts are untrusted text. A post becomes a job only when it reads as an employer hiring and names a role.
+- Job-seeker posts (#OpenToWork, "looking for a job", "I'm looking for a ... role") are dropped. This is checked on the whole post, so an employer post that quotes a seeker's line is dropped too: precision over recall.
+- Scam signals drop a post: fees or deposits, Telegram or WhatsApp-only contact, crypto, "earn per day", "no interview".
+- Links are never opened. A link to a specific posting on a known ATS (Greenhouse, Lever, Workday...) becomes the job URL; any other link, or a generic careers page, leaves the post itself as the link.
+- Every job credits the post: "Posted by @handle on X: <link>".
 
 ## LinkedIn sending (beta, off by default)
 

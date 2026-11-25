@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { appOrigin, jobUrl, taskSenderAllowed, snapshotKey, autoSubmitBlockedHost } from "../src/common.js";
 
-// LinkedIn and Naukri are never auto-submitted, whatever the account setting.
-for (const url of ["https://www.linkedin.com/jobs/view/1", "https://in.linkedin.com/x", "https://www.naukri.com/job", "https://naukri.com./x", "not a url"]) {
+// LinkedIn, Naukri and Internshala are never auto-submitted, whatever the account setting.
+for (const url of ["https://www.linkedin.com/jobs/view/1", "https://in.linkedin.com/x", "https://www.naukri.com/job", "https://naukri.com./x", "https://internshala.com/internship/detail/x", "not a url"]) {
   assert(autoSubmitBlockedHost(url), url);
 }
 for (const url of ["https://jobs.lever.co/acme/1", "https://notlinkedin.com/x", "https://acme.wd5.myworkdayjobs.com/x"]) {

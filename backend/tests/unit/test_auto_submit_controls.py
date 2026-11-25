@@ -148,6 +148,7 @@ async def test_auto_approval_refused_falls_back_to_the_member(gate, change, deta
 
 def test_no_auto_submit_hosts_cover_subdomains_only():
     assert apply_limits.auto_submit_host_blocked("www.naukri.com", None)
+    assert apply_limits.auto_submit_host_blocked("internshala.com")
     assert apply_limits.auto_submit_host_blocked("in.linkedin.com.")
     assert not apply_limits.auto_submit_host_blocked("notlinkedin.com", "acme.myworkdayjobs.com")
     assert apply_limits.auto_submit_cap_error(2, 3) is None

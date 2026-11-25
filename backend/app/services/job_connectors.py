@@ -55,6 +55,8 @@ FAMILIES = {
     "gem",
     "reed",
     "usajobs",
+    "x_hiring",
+    "linkedin_posts",
     "oracle",
     "icims",
     "jobvite",
@@ -1760,6 +1762,17 @@ async def fetch_page(source: Source, query: str = "", cursor: str | None = None)
         raise ValueError("Source is not permitted")
     if source.family == "workday":
         return await _fetch_workday(source, query, cursor)
+    if source.family in {"x_hiring", "linkedin_posts"}:
+        # Hiring posts: one page per refresh (X bills every post read).
+        from app.services import hiring_posts
+
+        fetch = (
+            hiring_posts.fetch_x
+            if source.family == "x_hiring"
+            else hiring_posts.fetch_linkedin_posts
+        )
+        rows = await fetch(source.url)
+        return Page([job for raw in rows if (job := normalize(raw, source))])
     if source.family == "oracle":
         return await _fetch_oracle(source, query, cursor)
     if source.family == "taleo":
