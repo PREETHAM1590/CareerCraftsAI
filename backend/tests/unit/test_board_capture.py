@@ -53,9 +53,7 @@ def test_normalize_instahyre_listing():
 
 def test_normalize_rejects_unknown_host():
     with pytest.raises(ValueError, match="Unsupported job board"):
-        extension_service.normalize_collected_job(
-            {"url": "https://example.com/job", "title": "X"}
-        )
+        extension_service.normalize_collected_job({"url": "https://example.com/job", "title": "X"})
 
 
 def test_normalize_rejects_missing_title():
@@ -134,7 +132,9 @@ def test_normalize_rejects_non_https_urls(url):
         extension_service.normalize_collected_job({"url": url, "title": "X"})
 
 
-@pytest.mark.parametrize("raw", ["30+ Days Ago", "a day ago", "Posted 2 weeks ago", "Few Hours Ago"])
+@pytest.mark.parametrize(
+    "raw", ["30+ Days Ago", "a day ago", "Posted 2 weeks ago", "Few Hours Ago"]
+)
 def test_parse_board_date_common_forms(raw):
     assert extension_service._parse_board_date(raw)
 

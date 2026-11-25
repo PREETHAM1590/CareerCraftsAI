@@ -953,9 +953,7 @@ def _strip_tracking(url: str) -> str:
     from urllib.parse import parse_qsl, urlencode
 
     kept = [
-        (k, v)
-        for k, v in parse_qsl(parts.query)
-        if not re.match(r"^(utm_|ref$|src$)", k, re.I)
+        (k, v) for k, v in parse_qsl(parts.query) if not re.match(r"^(utm_|ref$|src$)", k, re.I)
     ]
     return urlunsplit(parts._replace(query=urlencode(kept)))
 

@@ -217,7 +217,11 @@ def _heuristic(state: Any, question: dict) -> dict:
 
 
 async def match_option(
-    value: Any, options: list[str], label: str = "", *, local_only: bool = False,
+    value: Any,
+    options: list[str],
+    label: str = "",
+    *,
+    local_only: bool = False,
     user_id: str | None = None,
 ) -> tuple[str | None, float]:
     """Pick the option of a select/radio group that means `value`.

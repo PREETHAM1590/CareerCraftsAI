@@ -151,9 +151,7 @@ def test_external_model_endpoints_redact_before_sending():
                 for c in ast.walk(poster)
                 if isinstance(c, ast.Call)
             }
-            assert func in called, (
-                f"{rel}: {poster.name} posts externally but never calls {func}()"
-            )
+            assert func in called, f"{rel}: {poster.name} posts externally but never calls {func}()"
 
 
 def test_decision_engine_redacts_form_state_before_the_provider_call():
