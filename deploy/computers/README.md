@@ -3,8 +3,8 @@
 ## Production (careercraftsai.me)
 
 Host since 2026-11-25: SSH alias `24gb` (129.154.38.17, Oracle A1, 4 OCPU / 24 GB,
-Ubuntu 26.04; shared with other services, so `SANDBOX_MAX_SESSIONS=4` and
-`COMPUTER_CPUS=1`; it replaced `24gb1`), checkout of
+Ubuntu 26.04; shared with other services, so `computers.env` there sets
+`SANDBOX_MAX_SESSIONS=4` and `COMPUTER_CPUS=1`; it replaced `24gb1`), checkout of
 this directory at `~/careercraft-computers/deploy/computers`, secrets in the
 root-only `/opt/careercraft-secrets/computers.env`.
 Root is mounted without online `discard` (weekly `fstrim.timer` instead), as on
@@ -32,6 +32,12 @@ after every rebuild. Launch and capacity report:
   `PermitListen none`, `PermitTTY no`, `ForceCommand /bin/false` (per-key
   `permitopen` alone does not stop `-R`). `backend.env` carries
   `SANDBOX_RELAY_URL=http://127.0.0.1:14312` and the relay token.
+  **Moving hosts:** replace `/opt/careercraft-secrets/sandbox-tunnel/known_hosts`
+  on the APP VM with the new host's key, checked against `ssh-keygen -lf
+  /etc/ssh/ssh_host_ed25519_key.pub` on that host, set
+  `SANDBOX_SSH_TARGET` in `deploy/oracle-vm/compose.yml`, put the new relay token in
+  `backend.env`, then recreate the tunnel, backend and workers.
+  A stale or wrong key makes it exit and retry, never connect.
 
 ### Capacity (measured 2026-10-22 on 24gb1, gVisor)
 
@@ -46,7 +52,8 @@ job boards, polling a screenshot every 4 s and reading agent snapshots.
 | 24 | 29 s | 7.0 s / 18 s | 34 s | 10 |
 
 CPU is the limit (4 cores at 100% from 12 browsers); memory is ~400 MB per
-browser. Production: `SANDBOX_MAX_SESSIONS=16`, `COMPUTER_MEMORY_BYTES=1073741824`.
+browser. `24gb1` ran `SANDBOX_MAX_SESSIONS=16`; the shared `24gb` runs 4. Both use
+`COMPUTER_MEMORY_BYTES=1073741824`.
 For comparison, runc at 12 users: navigate p50 2.7 s, screenshot p50 0.09 s;
 gVisor's syscall interception costs roughly 4-6x in latency (no KVM on A1).
 
